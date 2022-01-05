@@ -22,3 +22,8 @@ Notes:
 Meta data detection with: [ffmpeg](https://www.ffmpeg.org/) and [ffmpeg python](https://pypi.org/project/ffmpeg-python/)
 
 Black bar detection with: [ffmpeg](https://www.ffmpeg.org/)
+
+Open Movie APIS:
+Usage: Get missing meta data (publication etc.)
+[OMDB API](http://www.omdbapi.com/)
+[List](https://the-api-collective.com/category/media)
