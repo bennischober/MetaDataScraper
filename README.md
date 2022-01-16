@@ -18,7 +18,7 @@ A short python script to get video meta data.\
 Notes:
 >This project uses Python 3.10
 
->By now I´m only looking for *.mkv files recursively (common video datatypes will follow)
+>This is an very early state of the tool. Many Null/None checks are missing and by now I´m only looking for .mkv files. These problems will be fixed in the future, but I don't have the time to address them currently.
 
 ## Quickstart
 Usage: Run the main python script (main.py) with the root of you movies folder (e.g. 'D:\Movies') as parameter.\
