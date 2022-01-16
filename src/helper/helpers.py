@@ -1,5 +1,6 @@
 import enum
 import subprocess
+import sys
 
 class DEBUG_TYPE(enum.Enum):
     WARNING = 0
@@ -166,3 +167,15 @@ def check_black_bars(file, dimensions):
     if int(h) + MIN_HEIGHT < dimensions['height']:
         return 1
     return 0
+
+# by: https://gist.github.com/vladignatyev/06860ec2040cb497f0f3
+def progress(count, total, status='', bar_len=60):
+    filled_len = int(round(bar_len * count / float(total)))
+
+    percents = round(100.0 * count / float(total), 1)
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+
+    fmt = '%s [%s] %s%s' % (status, bar, percents, '%')
+    print('\b' * len(fmt), end='')  # clears the line
+    sys.stdout.write(fmt)
+    sys.stdout.flush()

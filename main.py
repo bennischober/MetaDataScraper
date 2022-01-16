@@ -23,13 +23,33 @@ def main():
     t_time = None
     t_size = 0
 
+    # fix: need a way more efficient way to do this!
+    movie_counter = 0
+    for index, filename in enumerate(dir.glob('**/*.mkv')):
+        movie_counter += 1
+
     # search for files with .mkv files recursive
     for index, filename in enumerate(dir.glob('**/*.mkv')):
+        # update progress bar
+        progress(index + 1, movie_counter, status="Progress: File " + str(index+1) + " of " + str(movie_counter))
+
         name = filename.parent.name
         category = filename.parent.parent.name
-        ret = get_data(filename)
+        try:
+            ret = get_data(filename) # try catch with error => movie name and path
+        except TypeError as e:
+            debug("An reading error occured in " + "'" + name + "'" + " at " + "'" + str(filename) + "'" + ". Exception: " + str(e), DEBUG_TYPE.ERROR)
+            #print(e)
+            #debug(e, DEBUG_TYPE.ERROR)
+            # ask if the user wants to continue or if he wants to quit the application => might normally be not the case, because this error SHOULD not occure!
+            # so we might either return or continue the program
+            return
+
         size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
-        compression_rate = round(size / (ret['raw']['duration_raw'] / 3600), 2)
+
+        compression_rate = 0
+        if ret['raw']['duration_raw'] != None:
+            compression_rate = round(size / (ret['raw']['duration_raw'] / 3600), 2)
 
         # check for cropping
         ret['crop'] = check_black_bars(filename, ret['dimensions'])
@@ -53,9 +73,9 @@ def main():
             dict[category] = [ret]
 
     # write data to file
-    with open('movies.txt', 'w+') as text:
+    with open('movies.txt', 'w+', encoding="UTF8") as text:
         # write csv / file header
-        text.write('Kategorie;Name;Dauer;Größe;Codec;Aspect Ratio;Auflösung;Kompressionsrate;Bars\n')
+        text.write('Kategorie;Name;Dauer;Größe;Codec;Aspect Ratio;Auflösung;GB/h;Bars\n')
 
         # iterate through parent dictionary
         for key in dict:
