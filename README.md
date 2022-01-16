@@ -1,29 +1,78 @@
 # MetaDataScraper
-A short python script to get video metadata.
+Table of content
+- [Overview](#overview)
+- [Quickstart](#quickstart)
+- [How to install](#how-to-install)
+    - [Basic setup](#basic-setup)
+    - [Install external dependencies](#install-external-dependencies)
+    - [Install MetaDataScraper](#install-metadatascraper)
+- [How it works](#how-it-works)
+- [External dependencies](#external-dependencies)
+- [Useful commands](#useful-commands)
+- [Features for the future](#features-for-the-future)
+- [FAQ](#faq)
+- [Additional ressources](#additional-ressources)
 
-Usage: Run the main python script (main.py) with the root of you movies folder (e.g. 'D:\Movies')
-
-Run
-```
-git clone https://github.com/bennischober/MetaDataScraper.git
-```
-
-```
-python main.py 'path:\to\root'
-```
-
+## Overview
+A short python script to get video meta data.\
 Notes:
 >This project uses Python 3.10
 
 >By now I´m only looking for *.mkv files recursively (common video datatypes will follow)
 
+## Quickstart
+Usage: Run the main python script (main.py) with the root of you movies folder (e.g. 'D:\Movies') as parameter.\
+Execute this command in the ``Windows Terminal`` or ``CMD``.
+```
+python main.py 'path:\to\root'
+```
 
+## How to install
+### Basic setup
+The first steps are to install [Python](https://www.python.org/downloads/) (preffered the latest stable, currently 3.10), [FFmpeg](https://www.ffmpeg.org/download.html) ([short tutorial for windows](https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/)) and [pip](https://pypi.org/project/pip/).
 
-Meta data detection with: [ffmpeg](https://www.ffmpeg.org/) and [ffmpeg python](https://pypi.org/project/ffmpeg-python/)
+### Install external dependencies
+This tool uses some external packages:
 
-Black bar detection with: [ffmpeg](https://www.ffmpeg.org/)
+#### [tqdm](https://github.com/tqdm/tqdm)
+```
+pip install tqdm
+```
 
-Open Movie APIS:
-Usage: Get missing meta data (publication etc.)
-[OMDB API](http://www.omdbapi.com/)
-[List](https://the-api-collective.com/category/media)
+#### [ffmpeg-python](https://github.com/kkroening/ffmpeg-python)
+```
+pip install ffmpeg-python
+```
+
+### Install MetaDataScraper
+Run
+```
+git clone https://github.com/bennischober/MetaDataScraper.git
+```
+
+## How it works
+The scripts will search recursively for (by now .mkv) movie files. If the script found a movie file, it uses ``ffmpeg.probe()`` and looks specificly for its streams. If the return value is not ``None``, it proceeds to get all the meta data. Some of the data has to be calculated/created/converted, e.g the raw duration of the movie, the aspect ratio, the size of the movie file (convertion only) and the duration (convertion only).\
+To detect black bars in the movie, we need to check some frames of the video by using a ``subprocess`` and using the ffmpeg ``cropdetect`` command. The output will checked against the codec data (using a threshold to be 100% sure, its not just some pixels that can be cut).\
+This is why we you need to install the ``ffmpeg-python`` package and the FFmpeg standalone tool.
+
+## External dependencies
+
+Meta data detection: [ffmpeg](https://www.ffmpeg.org/) and [ffmpeg python](https://pypi.org/project/ffmpeg-python/)([GitHub](https://github.com/kkroening/ffmpeg-python))\
+Black bar detection: [ffmpeg](https://www.ffmpeg.org/)\
+Loading bar: [tqdm](https://github.com/tqdm/tqdm)\
+Python package installer: [pip](https://pypi.org/project/pip/)
+
+## Useful commands
+
+## Features for the future
+- config.json to change the settings (e.g. movie format, language, output, etc.)
+- support (almost) all common movie file formats
+- get missing meta data from external movie APIs, e.g. [OMDB API](http://www.omdbapi.com/) or [List](https://the-api-collective.com/category/media)
+
+## FAQ
+- The command ``python`` does not work in the command prompt. [Have a look at this.](https://stackoverflow.com/a/13596981)
+
+## Additional ressources
+[FFmpeg Documentation](https://ffmpeg.org/ffmpeg.html)\
+[How the black bar detection works](https://ffmpeg.org/ffmpeg-filters.html#cropdetect)\
+[tqdm Documentation](https://tqdm.github.io/)
