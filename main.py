@@ -1,6 +1,7 @@
 import os
 import sys
-import pathlib
+from datetime import datetime 
+from tqdm import tqdm
 from pathlib import Path
 from src.media.read_media import *
 from src.helper.helpers import *
@@ -29,21 +30,15 @@ def main():
         movie_counter += 1
 
     # search for files with .mkv files recursive
-    for index, filename in enumerate(dir.glob('**/*.mkv')):
-        # update progress bar
-        progress(index + 1, movie_counter, status="Progress: File " + str(index+1) + " of " + str(movie_counter))
-
+    for index, filename in tqdm(enumerate(dir.glob('**/*.mkv')), total=movie_counter):
         name = filename.parent.name
         category = filename.parent.parent.name
         try:
             ret = get_data(filename) # try catch with error => movie name and path
         except TypeError as e:
-            debug("An reading error occured in " + "'" + name + "'" + " at " + "'" + str(filename) + "'" + ". Exception: " + str(e), DEBUG_TYPE.ERROR)
-            #print(e)
-            #debug(e, DEBUG_TYPE.ERROR)
-            # ask if the user wants to continue or if he wants to quit the application => might normally be not the case, because this error SHOULD not occure!
-            # so we might either return or continue the program
-            return
+            # move errors to stack/array and show at the end => "Some errors occured during the execution. Check 'errors.log' for more information."
+            debug("\nA reading error occured in " + "'" + name + "'" + " at " + "'" + str(filename) + "'" + ". Exception: " + str(e) + "\n", DEBUG_TYPE.ERROR)
+            continue
 
         size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
 
@@ -104,5 +99,8 @@ if __name__ == "__main__":
     # args for black border check and recoding => always to hvec
     # border = bool(sys.argv[2])
     # recode = bool(sys.argv[3])
+    start_time = datetime.now() 
     main()
+    time_elapsed = datetime.now() - start_time 
+    print('Time elapsed (hh:mm:ss.ms) {}'.format(time_elapsed))
     #sys.exit(main())

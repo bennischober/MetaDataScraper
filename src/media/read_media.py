@@ -1,6 +1,5 @@
 import ffmpeg
 import math
-from pprint import pprint
 
 def get_aspect_ratio(width, height):
     gcd = math.gcd(width, height)
@@ -21,6 +20,8 @@ def get_data(path) :
     other_codecs = []
     for cd in streams:
         # creates object with name, type, language, title
+        # also need safe access of ['tags']!
+        # split the one liner to more lines for safe access and fallback value
         other_codecs.append({"name": cd.get('codec_name'), "type": cd.get('codec_type'), "language": cd['tags'].get('language', ''), "title": cd['tags'].get("title", '')})
 
     duration = None
@@ -34,9 +35,14 @@ def get_data(path) :
         raise TypeError('Cant find duration in tags!')
     
     # check framerate at index 0 and 1, because its given like '25/1'
+    # ToDo: add other sources for NUMBER_OF_FRAMES => check some files
     duration_raw = None
     if 'NUMBER_OF_FRAMES-eng' in video['tags'] and 'avg_frame_rate' in video:
-        duration_raw =  int(video['tags']['NUMBER_OF_FRAMES-eng']) / int((video['avg_frame_rate'][0] + video['avg_frame_rate'][1]))
+        duration_raw = 0
+        try:
+            duration_raw = int(video['tags']['NUMBER_OF_FRAMES-eng']) / int((video['avg_frame_rate'][0] + video['avg_frame_rate'][1]))
+        except:
+            raise TypeError('Some error happened during the calculation of the raw duration!')
 
     height = video['height']
     width = video['width']
