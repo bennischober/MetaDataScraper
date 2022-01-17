@@ -1,6 +1,7 @@
 import enum
 import subprocess
 
+
 class DEBUG_TYPE(enum.Enum):
     WARNING = 0
     ERROR = 1
@@ -76,18 +77,26 @@ def sanitize_number(number):
 
 
 SEPERATOR = ';'
-# function that generates a string with the given dictionary data
-
 
 def generate_string(item, useCat=False):
-    # print(item)
-    # ret = ''
-    # for value in item:
-    #    ret += str(item[value]) + SEPERATOR
+    # function that generates a string with the given dictionary data
+
+    cat = str(item['category']) + SEPERATOR
+    name = str(item['name']) + SEPERATOR
+    duration = str(item['duration']) + SEPERATOR
+    size = sanitize_number(item['size']) + SEPERATOR
+    codec = str(item['codec']) + SEPERATOR
+    bitrate = sanitize_number(item['bitrate']) + SEPERATOR
+    aspect_ratio = item['aspect_ratio'] + SEPERATOR
+    dimensions = str(item['dimensions']['width']) + 'x' + \
+        str(item['dimensions']['height']) + SEPERATOR
+    comp_rate = sanitize_number(item['compression_rate']) + SEPERATOR
+    crop = str(item['crop'])
+
     if(useCat):
-        return str(item['category']) + SEPERATOR + str(item['name']) + SEPERATOR + str(item['duration']) + SEPERATOR + sanitize_number(item['size']) + SEPERATOR + str(item['codec']) + SEPERATOR + str(item['aspect_ratio']) + SEPERATOR + str(item['dimensions']['width']) + 'x' + str(item['dimensions']['height']) + SEPERATOR + sanitize_number(item['compression_rate']) + SEPERATOR + str(item['crop']) + "\n"
+        return cat + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + "\n"
     else:
-        return SEPERATOR + str(item['name']) + SEPERATOR + str(item['duration']) + SEPERATOR + sanitize_number(item['size']) + SEPERATOR + str(item['codec']) + SEPERATOR + str(item['aspect_ratio']) + SEPERATOR + str(item['dimensions']['width']) + 'x' + str(item['dimensions']['height']) + SEPERATOR + sanitize_number(item['compression_rate']) + SEPERATOR + str(item['crop']) + "\n"
+        return SEPERATOR + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + "\n"
 
 
 def timestr_to_int(time):
@@ -152,10 +161,17 @@ def get_len(dict):
             length = calc_time(length, value['duration'])
     return length
 
+
 MIN_WIDTH = 100
 MIN_HEIGHT = 100
+
+
 def check_black_bars(file, dimensions):
-    pres = subprocess.Popen('ffmpeg -ss 90 -i ' '"' + str(file) + '"' ' -vframes 10 -vf cropdetect -f null -', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if dimensions['width'] == None or dimensions['height'] == None:
+        return 0
+
+    pres = subprocess.Popen('ffmpeg -ss 90 -i ' '"' + str(file) +
+                            '"' ' -vframes 10 -vf cropdetect -f null -', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     cdetect = str(pres.stderr.read())
     cres = cdetect.split("crop=")
     dres = cres[1].split(":")
