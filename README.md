@@ -24,7 +24,7 @@ Notes:
 Usage: Run the main python script (main.py) with the root of you movies folder (e.g. 'D:\Movies') as parameter.\
 Execute this command in the ``Windows Terminal`` or ``CMD``.
 ```
-python main.py 'path:\to\root'
+python main.py 'path:\to\movie-root'
 ```
 
 ## How to install
@@ -63,6 +63,10 @@ Loading bar: [tqdm](https://github.com/tqdm/tqdm)\
 Python package installer: [pip](https://pypi.org/project/pip/)
 
 ## Useful commands
+``-csv`` generates a csv file of the processed data.
+```
+python main.py 'path:\to\movie-root' -csv
+```
 
 ## Features for the future
 - config.json to change the settings (e.g. movie format, language, output, etc.)
