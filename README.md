@@ -11,6 +11,7 @@ Table of content
 - [Useful commands](#useful-commands)
 - [Features for the future](#features-for-the-future)
 - [FAQ](#faq)
+    - [Install the external dependencies manually](#install-the-external-dependencies-manually)
 - [Additional ressources](#additional-ressources)
 
 ## Overview
@@ -32,16 +33,9 @@ python main.py 'path:\to\movie-root'
 The first steps are to install [Python](https://www.python.org/downloads/) (preffered the latest stable, currently 3.10), [FFmpeg](https://www.ffmpeg.org/download.html) ([short tutorial for windows](https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/)) and [pip](https://pypi.org/project/pip/).
 
 ### Install external dependencies
-This tool uses some external packages:
-
-#### [tqdm](https://github.com/tqdm/tqdm)
+#### Automatically using the pip requirements file (requires pip!)
 ```
-pip install tqdm
-```
-
-#### [ffmpeg-python](https://github.com/kkroening/ffmpeg-python)
-```
-pip install ffmpeg-python
+pip install -r requirements.txt
 ```
 
 ### Install MetaDataScraper
@@ -75,6 +69,15 @@ python main.py 'path:\to\movie-root' -csv
 
 ## FAQ
 - The command ``python`` does not work in the command prompt. [Have a look at this.](https://stackoverflow.com/a/13596981)
+#### Install the external dependencies manually:
+#### [tqdm](https://github.com/tqdm/tqdm)
+```
+pip install tqdm
+```
+#### [ffmpeg-python](https://github.com/kkroening/ffmpeg-python)
+```
+pip install ffmpeg-python
+```
 
 ## Additional ressources
 [FFmpeg Documentation](https://ffmpeg.org/ffmpeg.html)\
