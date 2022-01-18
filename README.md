@@ -5,6 +5,7 @@ Table of content
 - [How to install](#how-to-install)
     - [Basic setup](#basic-setup)
     - [Install external dependencies](#install-external-dependencies)
+        - [Automatically using the pip requirements file (requires pip!)](#automatically-using-the-pip-requirements-file-requires-pip)
     - [Install MetaDataScraper](#install-metadatascraper)
 - [How it works](#how-it-works)
 - [External dependencies](#external-dependencies)
