@@ -1,0 +1,40 @@
+{
+  "codec": {
+    "hdr": {
+      "color_space": ["bt2020nc"],
+      "color_transfer": ["smpte2084"]
+    }
+  },
+  "file": {
+    "extensions": [
+      ".3gp",
+      ".amv",
+      ".avi",
+      ".m2v",
+      ".m4p",
+      ".m4v",
+      ".mkv",
+      ".mov",
+      ".mp4",
+      ".mpg",
+      ".mp2",
+      ".mpeg",
+      ".mpe",
+      ".mpv",
+      ".mpg",
+      ".mpeg",
+      ".svi",
+      ".wmv"
+    ],
+    "output": {
+      "seperator": ";"
+    }
+  },
+  "ffmpeg": {
+    "black_bars": {
+      "MIN_HEIGHT": 100,
+      "MIN_WIDTH": 100
+    }
+  },
+  "language": "de"
+}

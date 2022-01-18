@@ -5,6 +5,10 @@
 #ignore helper output
 *.json
 
+# don't ignore config files
+!requirements.txt
+!config.json
+
 ## Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
