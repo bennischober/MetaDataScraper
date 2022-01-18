@@ -1,5 +1,5 @@
 # MetaDataScraper
-Table of content
+### Table of contents
 - [Overview](#overview)
 - [Quickstart](#quickstart)
 - [How to install](#how-to-install)
