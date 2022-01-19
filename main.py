@@ -7,6 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 from src.media.read_media import get_data
 from src.helper.helpers import *
+from src.helper.logger import log_error
 
 
 def main():
@@ -21,7 +22,7 @@ def main():
     # get path as argument
         root_dir = args.path
     except Exception as e:
-        debug("Root path missing!", DEBUG_TYPE.ERROR)
+        log_error("Root path missing!")
         raise
 
     dir = Path(root_dir)
@@ -71,7 +72,8 @@ def main():
         ret['name'] = name
         ret['category'] = category
         ret['size'] = size
-        ret['compression_rate'] = compression_rate
+        ret['compression_rate'] = compression_rate # is SIZE/TIME
+        ret['other_codecs'] = get_other_codecs(ret['other_codecs'])
 
         # set global values for time and size
         if ret['duration'] != None:
@@ -86,7 +88,7 @@ def main():
     # write data to file => move out of loop
     with open('movies.txt', 'w+', encoding="UTF8") as text:
         # write csv / file header
-        text.write('Kategorie;Name;Dauer;Größe;Codec;Bitrate;Aspect Ratio;Auflösung;GB/h;Bars\n')
+        text.write('CATEGORY;NAME;DURATION;SIZE (GB);CODEC;BITRATE (mbit/s);ASPECT RATIO;RESOLUTION;GB/h;Bars;OTHER CODECS\n')
 
         # iterate through parent dictionary
         for key in dict:
@@ -108,7 +110,7 @@ def main():
                 dic_wrt += generate_string(value, use)
 
             text.write(dic_wrt)
-        max_stuff = ";Gesamt;" + t_time + ";" + sanitize_number(t_size) + ";;;;;;"
+        max_stuff = ";Total;" + t_time + ";" + sanitize_number(t_size) + ";;;;;;;"
         text.write(max_stuff)
 
     # create csv file
@@ -125,7 +127,7 @@ def main():
     
     # show errors
     for er in error_messages:
-        debug(er, DEBUG_TYPE.ERROR)
+        log_error(er)
 
 if __name__ == "__main__":
     main()

@@ -1,56 +1,12 @@
 import enum
 import subprocess
 
-
-class DEBUG_TYPE(enum.Enum):
-    WARNING = 0
-    ERROR = 1
-    OK = 2
-    NORMAL = 3
-    BOLD = 4
-    UNDERLINE = 5
-    END = 6
-
-
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
 # Enum for size units
-
-
 class SIZE_UNIT(enum.Enum):
     BYTES = 1
     KB = 2
     MB = 3
     GB = 4
-
-
-def debug(message, type):
-    col = None
-    match type:
-        case DEBUG_TYPE.WARNING:
-            col = bcolors.WARNING
-        case DEBUG_TYPE.ERROR:
-            col = bcolors.FAIL
-        case DEBUG_TYPE.OK:
-            col = bcolors.OKGREEN
-        case DEBUG_TYPE.NORMAL:
-            col = bcolors.HEADER
-        case DEBUG_TYPE.BOLD:
-            col = bcolors.BOLD
-        case DEBUG_TYPE.UNDERLINE:
-            col = bcolors.UNDERLINE
-        case DEBUG_TYPE.END:
-            col = bcolors.ENDC
-    print(col + message + bcolors.ENDC)
 
 
 def convert_unit(size_in_bytes, unit):
@@ -91,12 +47,13 @@ def generate_string(item, useCat=False):
     dimensions = str(item['dimensions']['width']) + 'x' + \
         str(item['dimensions']['height']) + SEPERATOR
     comp_rate = sanitize_number(item['compression_rate']) + SEPERATOR
-    crop = str(item['crop'])
+    crop = str(item['crop']) + SEPERATOR
+    other_codecs = str(item.get('other_codecs', ''))
 
     if(useCat):
-        return cat + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + "\n"
+        return cat + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + other_codecs + "\n"
     else:
-        return SEPERATOR + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + "\n"
+        return SEPERATOR + name + duration + size + codec + bitrate + aspect_ratio + dimensions + comp_rate + crop + other_codecs + "\n"
 
 
 def timestr_to_int(time):
@@ -161,6 +118,19 @@ def get_len(dict):
             length = calc_time(length, value['duration'])
     return length
 
+
+def get_other_codecs(other_codecs):
+    l = len(other_codecs)
+    it = 0
+    out = ""
+    for codec in other_codecs:
+        if it == l - 1:
+            # last item
+            out += codec['name']
+        else:
+            out += (codec['name'] + ", ")
+        it += 1
+    return out
 
 MIN_WIDTH = 100
 MIN_HEIGHT = 100

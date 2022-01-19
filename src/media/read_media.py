@@ -76,16 +76,20 @@ def get_data(path):
 
     # for other codecs => needs to be included in the output file!
     other_codecs = []
+    first_cd = True
     for cd in streams:
+        if first_cd:
+            first_cd = False
+            continue
         # creates object with name, type, language, title
-        codec_name = cd.get('codec_name')
-        codec_type = cd.get('codec_type')
+        codec_name = cd.get('codec_name', '')
+        codec_type = cd.get('codec_type', '')
         codec_language = str
         codec_title = str
         if 'tags' in cd:
             codec_language = cd['tags'].get('language', '')
             codec_title = cd['tags'].get("title", '')
-        other_codecs.append({"name": codec_name, "type": codec_type,
+        other_codecs.append({"name": str(codec_name), "type": codec_type,
                             "language": codec_language, "title": codec_title})
 
     # ToDo: add FPS, and think of a good output for other codecs (e.g. ac3, eac3, aac) => so just comma seperated names
