@@ -70,6 +70,7 @@ python main.py 'path:\to\movie-root' -csv
 
 ## FAQ
 - The command ``python`` does not work in the command prompt. [Have a look at this.](https://stackoverflow.com/a/13596981)
+- "No such filter: 'cropdetect'...". On Windows: Make sure you installed the gpl version of [ffmpeg](https://github.com/BtbN/FFmpeg-Builds/releases). On Linux/UNIX [this might help](http://ffmpeg.org/pipermail/ffmpeg-user/2015-October/028753.html)
 #### Install the external dependencies manually:
 #### [tqdm](https://github.com/tqdm/tqdm)
 ```
