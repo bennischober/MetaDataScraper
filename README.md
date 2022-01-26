@@ -34,15 +34,14 @@ python main.py 'path:\to\movie-root'
 The first steps are to install [Python](https://www.python.org/downloads/) (preffered the latest stable, currently 3.10), [FFmpeg](https://www.ffmpeg.org/download.html) ([short tutorial for windows](https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/)) and [pip](https://pypi.org/project/pip/).
 
 ### Install external dependencies
-#### Automatically using the pip requirements file (requires pip!)
-```
-pip install -r requirements.txt
-```
-
-### Install MetaDataScraper
+### Clone this repository
 Run
 ```
 git clone https://github.com/bennischober/MetaDataScraper.git
+```
+#### Automatically using the pip requirements file (requires pip!)
+```
+pip install -r requirements.txt
 ```
 
 ## How it works
