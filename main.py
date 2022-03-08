@@ -43,7 +43,12 @@ def main():
     # search for files with .mkv files recursive
     for index, filename in tqdm(enumerate(dir.glob('**/*.mkv')), total=movie_counter, dynamic_ncols=True):
         # check if there are multiple movies in one folder; if so => take movie names as name and not parent folder!
-        name = filename.parent.name
+
+        if "title" in filename.name or "_t0" in filename.name:
+            name = filename.parent.name.replace(".mkv", "")
+        else:
+            name = filename.name.replace(".mkv", "")
+
         category = filename.parent.parent.name
         try:
             ret = get_data(filename) # try catch with error => movie name and path
@@ -88,7 +93,7 @@ def main():
     # write data to file => move out of loop
     with open('movies.txt', 'w+', encoding="UTF8") as text:
         # write csv / file header
-        text.write('CATEGORY;NAME;DURATION;SIZE (GB);CODEC;BITRATE (mbit/s);ASPECT RATIO;RESOLUTION;GB/h;Bars;OTHER CODECS\n')
+        text.write('CATEGORY;NAME;DURATION;SIZE;CODEC;BITRATE;ASPECT RATIO;RESOLUTION;GB/h;Bars;OTHER CODECS\n')
 
         # iterate through parent dictionary
         for key in dict:
