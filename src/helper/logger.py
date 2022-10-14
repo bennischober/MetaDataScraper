@@ -45,7 +45,7 @@ def testlog(testtype, message):
             else:
                 _log_("[CONFIG]", "(failed) " + msg, logcolors.FAIL)
 
-def _log_(type, message, color):
+def _log_(type = None, message = None, color = None):
     if message == None or color == None:
         return
     if type is None:
@@ -70,7 +70,7 @@ def log_call(message, type):
             col = logcolors.UNDERLINE
         case PRINT_TYPE.END:
             col = logcolors.ENDC
-    _log_(message, col)
+    _log_(message=message, color=col)
 
 def log(message):
     log_call(message, PRINT_TYPE.NORMAL)

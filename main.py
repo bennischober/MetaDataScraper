@@ -115,7 +115,7 @@ def main():
                 dic_wrt += generate_string(value, use)
 
             text.write(dic_wrt)
-        max_stuff = ";Total;" + t_time + ";" + sanitize_number(t_size) + ";;;;;;;"
+        max_stuff = ";Total;" + str(t_time) + ";" + sanitize_number(t_size) + ";;;;;;;"
         text.write(max_stuff)
 
     # create csv file

@@ -142,7 +142,9 @@ def check_black_bars(file, dimensions):
 
     pres = subprocess.Popen('ffmpeg -ss 90 -i ' '"' + str(file) +
                             '"' ' -vframes 10 -vf cropdetect -f null -', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    cdetect = str(pres.stderr.read())
+    cdetect = str(pres.stderr.read()) if pres.stderr else None
+    if cdetect == None:
+        return 0
     cres = cdetect.split("crop=")
     dres = cres[1].split(":")
     w = dres[0]

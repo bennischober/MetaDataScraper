@@ -5,7 +5,7 @@ Config = None
 
 def read_config(root):
     # get root path of project
-    with open(str(root) + '\config.json', 'r', encoding="utf-8") as config:
+    with open(str(root) + '\\config.json', 'r', encoding="utf-8") as config:
        test = json.load(config)
 
     global Config
