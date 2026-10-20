@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -56,6 +57,59 @@ def find_handbrake() -> str | None:
         if Path(path).is_file():
             return path
     return None
+
+
+def probe_duration_seconds(path: Path) -> float | None:
+    """Reads the duration of a media file via ffprobe.
+
+    Args:
+        path (Path): The media file.
+
+    Returns:
+        float | None: The duration in seconds, or None if it could not be
+            determined (e.g. truncated/unfinalized file).
+    """
+    proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            str(path),
+        ],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        return float(json.loads(proc.stdout.decode())["format"]["duration"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def durations_match(input_file: Path, output_file: Path) -> bool:
+    """Checks that the encoded output has (almost) the input duration.
+
+    HandBrake may exit with 0 even for an interrupted encode that only wrote
+    part of the file. A truncated output is shorter or has no readable
+    duration at all.
+
+    Args:
+        input_file (Path): The source file.
+        output_file (Path): The encoded file.
+
+    Returns:
+        bool: True if the durations match within a small tolerance.
+    """
+    source = probe_duration_seconds(input_file)
+    encoded = probe_duration_seconds(output_file)
+    if source is None or encoded is None:
+        return False
+    # tolerate frame rounding; 1% or 2s, whichever is larger
+    tolerance = max(2.0, source * 0.01)
+    return abs(source - encoded) <= tolerance
 
 
 def build_command(
@@ -133,7 +187,8 @@ def encode_file(
         stderr = proc.stderr.decode(errors="replace").strip()
         return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
 
-    # HandBrake may exit with 0 even if the encode failed => the output file must exist
+    # HandBrake may exit with 0 even if the encode failed => the output file
+    # must exist, be non-empty and have the full duration
     if not output_file.is_file() or output_file.stat().st_size == 0:
         stderr = proc.stderr.decode(errors="replace").strip()
         return EncodeResult(
@@ -141,6 +196,13 @@ def encode_file(
             output=output_file,
             success=False,
             error=stderr or "no output file was written",
+        )
+    if not durations_match(input_file, output_file):
+        return EncodeResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            error="output is truncated (duration mismatch)",
         )
 
     # encode succeeded => collect sizes
