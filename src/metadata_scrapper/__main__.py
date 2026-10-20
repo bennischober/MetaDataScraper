@@ -1,5 +1,6 @@
 import csv
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import typer
@@ -98,21 +99,72 @@ def find_movies(root: Path, extensions: list[str]) -> list[Path]:
     return list(dict.fromkeys(movies))
 
 
-def scan_movies(root: Path, config) -> tuple[dict, list[Path], list[str]]:
+def process_movie(filename: Path, root: Path, config) -> tuple[dict | None, str | None]:
+    """Collects the metadata of a single movie file.
+
+    Args:
+        filename (Path): Path to the movie file.
+        root (Path): The scan root directory (for the category).
+        config (Conf): The config settings.
+
+    Returns:
+        tuple: The movie data dictionary (or None on error) and an error
+            message (or None on success).
+    """
+    name = get_name(filename)
+    category = get_category(filename, root)
+    try:
+        ret = get_data(filename, config)
+    except Exception as e:
+        # move errors to the caller and show them at the end
+        return None, f"A reading error occured in '{name}' at '{filename}'. Exception: {e}"
+
+    size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
+
+    # it's not really the compression rate, it's rather size/time
+    compression_rate = 0
+    if ret["duration_raw"] is not None:
+        compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
+    elif ret["duration"] is not None:
+        compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
+
+    # check for cropping
+    ret["crop"] = check_black_bars(
+        filename,
+        ret["dimensions"],
+        min_width=config.black_bar_min_width,
+        min_height=config.black_bar_min_height,
+    )
+
+    # add additional data to dictionary
+    ret["name"] = name
+    ret["category"] = category
+    ret["size"] = size
+    ret["compression_rate"] = compression_rate  # is SIZE/TIME
+    ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
+
+    return ret, None
+
+
+def scan_movies(
+    root: Path, config, workers: int | None = None
+) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
+
+    The movies are processed in parallel (thread pool) since the per-movie
+    work consists of ffprobe/cropdetect subprocess calls. Results are
+    collected by index => the output order stays deterministic.
 
     Args:
         root (Path): Root directory to search in.
         config (Conf): The config settings.
+        workers (int | None): Number of parallel workers. Defaults to
+            min(8, cpu count).
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
     """
     movies_by_category: dict[str, list[dict]] = {}
-
-    # total time and size => collected while iterating
-    total_time = None
-    total_size = 0
 
     # search for movie files with the configured extensions, recursive
     movies = find_movies(root, config.extensions)
@@ -120,56 +172,36 @@ def scan_movies(root: Path, config) -> tuple[dict, list[Path], list[str]]:
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
 
-    error_messages = []
+    error_messages = [None] * len(movies)
+    results: list[dict | None] = [None] * len(movies)
 
     with create_movie_progress() as progress:
         task = progress.add_task("Scanning movies", total=len(movies))
-        for filename in movies:
-            name = get_name(filename)
-            category = get_category(filename, root)
-            try:
-                ret = get_data(filename, config)
-            except Exception as e:
-                # move errors to stack/array and show at the end
-                error_messages.append(
-                    f"A reading error occured in '{name}' at '{filename}'. Exception: {e}"
-                )
+
+        if workers == 1:
+            # sequential fallback => no thread pool overhead
+            for index, filename in enumerate(movies):
+                results[index], error_messages[index] = process_movie(filename, root, config)
                 progress.advance(task)
-                continue
+        else:
+            if workers is None:
+                workers = min(8, (os.cpu_count() or 2))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(process_movie, filename, root, config) for filename in movies
+                ]
+                for index, future in enumerate(futures):
+                    results[index], error_messages[index] = future.result()
+                    progress.advance(task)
 
-            size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
+    # collect in file order => deterministic output
+    error_list = [error for error in error_messages if error is not None]
+    for result in results:
+        if result is None:
+            continue
+        movies_by_category.setdefault(result["category"], []).append(result)
 
-            # it's not really the compression rate, it's rather size/time
-            compression_rate = 0
-            if ret["duration_raw"] is not None:
-                compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
-            elif ret["duration"] is not None:
-                compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
-
-            # check for cropping
-            ret["crop"] = check_black_bars(
-                filename,
-                ret["dimensions"],
-                min_width=config.black_bar_min_width,
-                min_height=config.black_bar_min_height,
-            )
-
-            # add additional data to dictionary
-            ret["name"] = name
-            ret["category"] = category
-            ret["size"] = size
-            ret["compression_rate"] = compression_rate  # is SIZE/TIME
-            ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
-
-            # set total values for time and size
-            if ret["duration"] is not None:
-                total_time = calc_time(total_time, ret["duration"])
-            total_size += ret["size"]
-
-            movies_by_category.setdefault(category, []).append(ret)
-            progress.advance(task)
-
-    return movies_by_category, movies, error_messages
+    return movies_by_category, movies, error_list
 
 
 def write_output(
@@ -274,11 +306,20 @@ def scan(
     output_file: Path = typer.Option(
         OUTPUT_FILE, "--output", "-o", help="Path of the output file."
     ),
+    workers: int = typer.Option(
+        0,
+        "--workers",
+        "-w",
+        min=0,
+        help="Number of parallel workers (0 = automatic, 1 = sequential).",
+    ),
 ):
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
 
-    movies_by_category, movies, error_messages = scan_movies(path, config)
+    movies_by_category, movies, error_messages = scan_movies(
+        path, config, workers=workers if workers > 0 else None
+    )
     if movies:
         total_time, total_size = _totals(movies_by_category)
         write_output(movies_by_category, total_time, total_size, config.separator, output_file)

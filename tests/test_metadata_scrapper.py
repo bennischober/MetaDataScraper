@@ -215,7 +215,6 @@ class TestEncode(unittest.TestCase):
 
 
 class TestMain(unittest.TestCase):
-
     def test_get_category(self):
         from metadata_scrapper.__main__ import get_category
 
@@ -227,9 +226,7 @@ class TestMain(unittest.TestCase):
         # movie directly in the root
         self.assertEqual(get_category(Path("D:/Movies/movie.mkv"), root), "Uncategorized")
         # deeper nesting => still the first folder level
-        self.assertEqual(
-            get_category(Path("D:/Movies/Action/Sub/movie.mkv"), root), "Action"
-        )
+        self.assertEqual(get_category(Path("D:/Movies/Action/Sub/movie.mkv"), root), "Action")
 
     def test_get_name(self):
         from metadata_scrapper.__main__ import get_name
@@ -237,6 +234,30 @@ class TestMain(unittest.TestCase):
         self.assertEqual(get_name(Path("D:/Movies/Action/Movie.mkv")), "Movie")
         # multi-file folder => folder name
         self.assertEqual(get_name(Path("D:/Movies/Action/movie_t0.mkv")), "Action")
+
+    def test_scan_movies_parallel_deterministic(self):
+        import tempfile
+
+        from metadata_scrapper.__main__ import scan_movies
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # create test files (no valid media => all error, but order is checked)
+            (root / "Cat1").mkdir()
+            (root / "Cat1" / "a1.mkv").write_bytes(b"x")
+            (root / "Cat1" / "a2.mkv").write_bytes(b"x")
+            (root / "Cat2").mkdir()
+            (root / "Cat2" / "b1.mkv").write_bytes(b"x")
+
+            config = config_helper.Conf()
+
+            for workers in (1, 2, 8):
+                _, _movies, errors = scan_movies(root, config, workers=workers)
+                # all files error => error messages in deterministic file order
+                self.assertEqual(len(errors), 3)
+                self.assertIn("a1.mkv", errors[0])
+                self.assertIn("a2.mkv", errors[1])
+                self.assertIn("b1.mkv", errors[2])
 
 
 if __name__ == "__main__":
