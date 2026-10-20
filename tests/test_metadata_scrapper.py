@@ -1,8 +1,9 @@
+import json
 import unittest
 from pathlib import Path
 
 from metadata_scrapper import config as config_helper
-from metadata_scrapper import encode, helpers
+from metadata_scrapper import encode, helpers, quality
 from metadata_scrapper import media as read_media
 
 
@@ -258,6 +259,54 @@ class TestMain(unittest.TestCase):
                 self.assertIn("a1.mkv", errors[0])
                 self.assertIn("a2.mkv", errors[1])
                 self.assertIn("b1.mkv", errors[2])
+
+
+class TestQuality(unittest.TestCase):
+    def test_sample_offsets(self):
+        # 3 samples spread over 10%-90% of a 100s movie
+        offsets = quality.sample_offsets(100.0, 3)
+        self.assertEqual(offsets, [10.0, 50.0, 90.0])
+        # single sample => middle-ish position
+        self.assertEqual(quality.sample_offsets(100.0, 1), [10.0])
+        # degenerate inputs
+        self.assertEqual(quality.sample_offsets(0.0, 3), [])
+        self.assertEqual(quality.sample_offsets(100.0, 0), [])
+
+    def test_bisect_crf(self):
+        # monotonic: low crf passes, high crf fails => largest passing crf wins
+        passing = {14, 15, 16, 17, 18, 19, 20, 21}
+        chosen = quality.bisect_crf(lambda c: c in passing, 14, 32)
+        self.assertEqual(chosen, 21)
+        # even the lowest crf fails => fall back to the lowest
+        self.assertEqual(quality.bisect_crf(lambda c: False, 14, 32), 14)
+        # everything passes => hi - 1... no, the largest measured pass
+        self.assertEqual(quality.bisect_crf(lambda c: True, 14, 32), 31)
+
+    def test_build_vmaf_command(self):
+        command = quality.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"))
+        # distorted stream must be the first input (libvmaf main)
+        self.assertEqual(command[command.index("-i") + 1], "enc.mkv")
+        self.assertEqual(command[command.index("-i", command.index("-i") + 1) + 1], "ref.mkv")
+        # model by bare filename => no windows drive colon in the filtergraph
+        self.assertIn("model_path=vmaf_v0.6.1.json", " ".join(command))
+        self.assertNotIn("\\", " ".join(command))
+
+    def test_parse_vmaf_log(self):
+        log_text = json.dumps({"pooled_metrics": {"vmaf": {"mean": 94.002412, "min": 46.9}}})
+        self.assertAlmostEqual(quality.parse_vmaf_log(log_text), 94.002412, places=5)
+        with self.assertRaises(ValueError):
+            quality.parse_vmaf_log(json.dumps({"pooled_metrics": {}}))
+        with self.assertRaises(ValueError):
+            quality.parse_vmaf_log("{}")
+
+    def test_build_encode_command(self):
+        command = quality.build_encode_command(
+            "hb.exe", Path("in.mkv"), Path("out.mkv"), 23, "x265", "medium"
+        )
+        self.assertIn("--quality", command)
+        self.assertEqual(command[command.index("--quality") + 1], "23")
+        self.assertIn("--encoder-preset", command)
+        self.assertEqual(command[command.index("--encoder-preset") + 1], "medium")
 
 
 if __name__ == "__main__":

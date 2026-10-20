@@ -418,12 +418,53 @@ def encode(
     overwrite: bool = typer.Option(
         False, "--overwrite", help="Re-encode files even if the output already exists."
     ),
+    quality: bool = typer.Option(
+        False,
+        "--quality",
+        help=(
+            "Probe VMAF quality per movie and pick the largest CRF that keeps "
+            "perceptual quality (slower, smaller files)."
+        ),
+    ),
+    target_vmaf: float = typer.Option(
+        95.0,
+        "--target-vmaf",
+        min=1.0,
+        max=100.0,
+        help="VMAF quality floor for --quality mode.",
+    ),
 ):
     """Re-encodes the found movies with HandBrake to reduce their file size."""
     from metadata_scrapper.encode import encode_movies
+    from metadata_scrapper.quality import encode_with_quality
 
     config = load_config()
     _, movies, _ = scan_movies(path, config)
+
+    if not dry_run and quality:
+        try:
+            for movie in movies:
+                result = encode_with_quality(
+                    movie,
+                    output_dir / movie.name,
+                    target_vmaf=target_vmaf,
+                    encoder=config.handbrake_encoder,
+                )
+                if result.success:
+                    saved = result.saved_percent
+                    change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
+                    console.print(
+                        f"[green]Encoded '{movie.name}': "
+                        f"{result.input_size / (1024**3):.2f} GB -> "
+                        f"{result.output_size / (1024**3):.2f} GB ({change}) "
+                        f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
+                    )
+                else:
+                    log_error(f"Encoding '{movie.name}' failed: {result.error}")
+        except (RuntimeError, FileNotFoundError) as e:
+            log_error(str(e))
+            raise typer.Exit(1) from e
+        return
 
     try:
         encode_movies(
