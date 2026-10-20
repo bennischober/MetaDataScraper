@@ -100,6 +100,64 @@ def find_movies(root: Path, extensions: list[str]) -> list[Path]:
     return list(dict.fromkeys(movies))
 
 
+def movie_record_from_data(filename: Path, data: dict) -> db.MovieRecord:
+    """Converts the get_data output into a database record.
+
+    Args:
+        filename (Path): Path to the movie file.
+        data (dict): The metadata dictionary from get_data.
+
+    Returns:
+        db.MovieRecord: The record for the database.
+    """
+    stat = filename.stat()
+    return db.MovieRecord(
+        path=filename,
+        mtime=stat.st_mtime,
+        size=stat.st_size,
+        name=data["name"],
+        category=data["category"],
+        duration=data["duration"],
+        duration_raw=data["duration_raw"],
+        fps=data["fps"],
+        codec=data["codec"],
+        bitrate=data["bitrate"],
+        aspect_ratio=data["aspect_ratio"],
+        width=data["dimensions"]["width"],
+        height=data["dimensions"]["height"],
+        crop=data["crop"],
+        hdr=int(data["hdr"]),
+        other_codecs=data["other_codecs"],
+        audio_languages=data["audio_languages"],
+    )
+
+
+def record_from_cache(row) -> dict:
+    """Converts a cached database row into the movie data dictionary used by the output.
+
+    Args:
+        row (sqlite3.Row): The cached file row.
+
+    Returns:
+        dict: The movie data dictionary.
+    """
+    return {
+        "name": row["name"],
+        "category": row["category"],
+        "duration": row["duration"],
+        "duration_raw": row["duration_raw"],
+        "fps": row["fps"],
+        "codec": row["codec"],
+        "bitrate": row["bitrate"],
+        "aspect_ratio": row["aspect_ratio"],
+        "dimensions": {"width": row["width"], "height": row["height"]},
+        "crop": row["crop"],
+        "hdr": bool(row["hdr"]),
+        "other_codecs": row["other_codecs"],
+        "audio_languages": row["audio_languages"],
+    }
+
+
 def process_movie(filename: Path, root: Path, config) -> tuple[dict | None, str | None]:
     """Collects the metadata of a single movie file.
 
