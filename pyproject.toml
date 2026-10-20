@@ -9,11 +9,13 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "tqdm>=4.66",
+    "loguru>=0.7.3",
+    "rich>=15.0.0",
+    "typer>=0.27.3",
 ]
 
 [project.scripts]
-metadata-scrapper = "metadata_scrapper.__main__:main"
+metadata-scrapper = "metadata_scrapper.__main__:app"
 
 [dependency-groups]
 dev = [
@@ -58,6 +60,10 @@ ignore = [
     "E501", # line length handled by formatter
     "E741", # ambiguous variable names (dict, l, ...)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# typer.Argument/typer.Option in defaults is the framework's intended usage
+"src/metadata_scrapper/__main__.py" = ["B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["metadata_scrapper"]

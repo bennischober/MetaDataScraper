@@ -15,9 +15,7 @@
     - [Tests and linting](#tests-and-linting)
 - [Features for the future](#features-for-the-future)
 - [FAQ](#faq)
-- [Additional ressources](#additional-ressources)
-
-## Overview
+- [Additional ressources](#additional-ressources)## Overview
 A short python script to get video meta data.\
 Notes:
 >This project uses Python 3.15 (managed with [uv](https://docs.astral.sh/uv/), older versions >= 3.10 work too)
@@ -25,14 +23,14 @@ Notes:
 >Movie files are found by the extensions configured in [config.json](config.json) (by default `.mkv` and other common formats).
 
 ## Quickstart
-Usage: Run the tool with the root of your movies folder (e.g. 'D:\Movies') as parameter.\
+Usage: run the ``scan`` command with the root of your movies folder (e.g. 'D:\Movies') as parameter.\
 Execute this command in the ``Windows Terminal``, ``CMD`` or any shell:
 ```
-uvx metadata-scrapper 'path:\to\movie-root'
+uvx metadata-scrapper scan 'path:\to\movie-root'
 ```
 or, from a cloned repository:
 ```
-uv run metadata-scrapper 'path:\to\movie-root'
+uv run metadata-scrapper scan 'path:\to\movie-root'
 ```
 
 ## How to install
@@ -47,11 +45,11 @@ git clone https://github.com/bennischober/MetaDataScraper.git
 Install and run:
 ```
 uv sync
-uv run metadata-scrapper 'path:\to\movie-root'
+uv run metadata-scrapper scan 'path:\to\movie-root'
 ```
 Or run it directly from GitHub without cloning:
 ```
-uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper 'path:\to\movie-root'
+uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper scan 'path:\to\movie-root'
 ```
 
 ## How it works
@@ -64,20 +62,24 @@ This is why we you need to install the FFmpeg standalone tools (``ffmpeg`` and `
 Meta data detection: [ffmpeg](https://www.ffmpeg.org/) (``ffmpeg``/``ffprobe`` binaries)\
 Black bar detection: [ffmpeg](https://www.ffmpeg.org/)\
 Re-encoding (optional): [HandBrake CLI](https://handbrake.fr/)\
-Loading bar: [tqdm](https://github.com/tqdm/tqdm)\
+Loading bar and CLI output: [rich](https://github.com/Textualize/rich)\
+CLI framework: [typer](https://typer.tiangolo.com/)\
+Logging: [loguru](https://github.com/Delgan/loguru)\
 Python and package management: [uv](https://docs.astral.sh/uv/)
 
 ## Useful commands
-``-csv`` generates a csv file of the processed data.
+The CLI has two commands: ``scan`` (collect metadata) and ``encode`` (re-encode with HandBrake). Use ``--help`` on each for all options.
+
+``--csv`` generates a csv file of the processed data.
 ```
-uv run metadata-scrapper 'path:\to\movie-root' -csv
+uv run metadata-scrapper scan 'path:\to\movie-root' --csv
 ```
 
 ## Re-encoding with HandBrake
-With ``-e/--encode DIR`` the found movies are re-encoded with HandBrake into ``DIR`` (smaller file size at almost the same quality). Audio and subtitle tracks are kept as-is, the video is encoded with the configured preset/encoder (see [Configuration](#configuration)).\
+With the ``encode`` command the found movies are re-encoded with HandBrake into an output directory (smaller file size at almost the same quality). Audio and subtitle tracks are kept as-is, the video is encoded with the configured preset/encoder (see [Configuration](#configuration)).\
 Preview what would be encoded with ``--dry-run``:
 ```
-uv run metadata-scrapper 'path:\to\movie-root' -e 'D:\encoded' --dry-run
+uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --dry-run
 ```
 
 ## Configuration
@@ -101,6 +103,7 @@ uv run ruff check .    # lint
 uv run ruff format .   # format
 ```
 
+
 ## Features for the future
 - get missing meta data from external movie APIs, e.g. [OMDB API](http://www.omdbapi.com/) or [List](https://the-api-collective.com/category/media)
 
@@ -113,5 +116,7 @@ uv run ruff format .   # format
 [FFmpeg Documentation](https://ffmpeg.org/ffmpeg.html)\
 [How the black bar detection works](https://ffmpeg.org/ffmpeg-filters.html#cropdetect)\
 [HandBrake CLI options](https://handbrake.fr/docs/en/latest/cli/cli-options.html)\
-[tqdm Documentation](https://tqdm.github.io/)\
+[rich Documentation](https://rich.readthedocs.io/)\
+[typer Documentation](https://typer.tiangolo.com/)\
+[loguru Documentation](https://loguru.readthedocs.io/)\
 [uv Documentation](https://docs.astral.sh/uv/)

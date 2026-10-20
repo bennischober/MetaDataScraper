@@ -1,9 +1,17 @@
-import enum
 import subprocess
+from enum import Enum
+
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 
-# Enum for size units
-class SIZE_UNIT(enum.Enum):
+class SIZE_UNIT(Enum):
     BYTES = 1
     KB = 2
     MB = 3
@@ -241,3 +249,18 @@ def check_black_bars(file, dimensions, min_width=100, min_height=100) -> int:
     if h + min_height < dimensions["height"]:
         return 1
     return 0
+
+
+def create_movie_progress() -> Progress:
+    """Creates the rich progress bar used while scanning movies.
+
+    Returns:
+        Progress: The progress bar.
+    """
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )

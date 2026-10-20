@@ -1,9 +1,9 @@
-import argparse
 import csv
 import os
 from pathlib import Path
 
-from tqdm import tqdm
+import typer
+from rich.console import Console
 
 from metadata_scrapper.config import load_config
 from metadata_scrapper.helpers import (
@@ -11,6 +11,7 @@ from metadata_scrapper.helpers import (
     calc_time,
     check_black_bars,
     convert_unit,
+    create_movie_progress,
     generate_string,
     get_other_codecs,
     sanitize_number,
@@ -19,44 +20,15 @@ from metadata_scrapper.helpers import (
 from metadata_scrapper.logger import log_error, log_warning
 from metadata_scrapper.media import get_data
 
+app = typer.Typer(
+    help="A short python script to get video meta data.",
+    no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+console = Console()
+
 OUTPUT_FILE = "movies.txt"
 CSV_FILE = "output.csv"
-
-
-def parse_arguments() -> argparse.Namespace:
-    """Parses the command line arguments.
-
-    Returns:
-        argparse.Namespace: The parsed arguments.
-    """
-    parser = argparse.ArgumentParser(
-        prog="metadata-scrapper", description="A short python script to get video meta data."
-    )
-    parser.add_argument("path", type=str, help="Root path of the movie folder, e.g. D:\\Movies")
-    parser.add_argument(
-        "-csv",
-        "--csv",
-        dest="csv",
-        default=False,
-        action="store_true",
-        help="Also write the data as csv file.",
-    )
-    parser.add_argument(
-        "-e",
-        "--encode",
-        dest="encode",
-        metavar="DIR",
-        default=None,
-        help="Re-encode the found movies with HandBrake into DIR (needs HandBrakeCLI).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        default=False,
-        action="store_true",
-        help="Show what would be encoded without encoding.",
-    )
-    return parser.parse_args()
 
 
 def get_name(filename: Path) -> str:
@@ -94,6 +66,80 @@ def find_movies(root: Path, extensions: list[str]) -> list[Path]:
         movies.extend(root.glob(f"**/*.{extension.upper()}"))
     # on windows glob is case insensitive => the same file is found twice
     return list(dict.fromkeys(movies))
+
+
+def scan_movies(root: Path, config) -> tuple[dict, list[Path], list[str]]:
+    """Scans the root directory for movies and collects their metadata.
+
+    Args:
+        root (Path): Root directory to search in.
+        config (Conf): The config settings.
+
+    Returns:
+        tuple: Movies by category, all found movies and error messages.
+    """
+    movies_by_category: dict[str, list[dict]] = {}
+
+    # total time and size => collected while iterating
+    total_time = None
+    total_size = 0
+
+    # search for movie files with the configured extensions, recursive
+    movies = find_movies(root, config.extensions)
+    if not movies:
+        log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
+        return movies_by_category, movies, []
+
+    error_messages = []
+
+    with create_movie_progress() as progress:
+        task = progress.add_task("Scanning movies", total=len(movies))
+        for filename in movies:
+            name = get_name(filename)
+            category = filename.parent.parent.name
+            try:
+                ret = get_data(filename, config)
+            except Exception as e:
+                # move errors to stack/array and show at the end
+                error_messages.append(
+                    f"A reading error occured in '{name}' at '{filename}'. Exception: {e}"
+                )
+                progress.advance(task)
+                continue
+
+            size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
+
+            # it's not really the compression rate, it's rather size/time
+            compression_rate = 0
+            if ret["duration_raw"] is not None:
+                compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
+            elif ret["duration"] is not None:
+                compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
+
+            # check for cropping
+            ret["crop"] = check_black_bars(
+                filename,
+                ret["dimensions"],
+                min_width=config.black_bar_min_width,
+                min_height=config.black_bar_min_height,
+            )
+
+            # add additional data to dictionary
+            ret["name"] = name
+            ret["category"] = category
+            ret["size"] = size
+            ret["compression_rate"] = compression_rate  # is SIZE/TIME
+            ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
+
+            # set total values for time and size
+            if ret["duration"] is not None:
+                total_time = calc_time(total_time, ret["duration"])
+            total_size += ret["size"]
+
+            movies_by_category.setdefault(category, []).append(ret)
+            progress.advance(task)
+
+    return movies_by_category, movies, error_messages
 
 
 def write_output(movies_by_category: dict, total_time, total_size, separator: str):
@@ -156,100 +202,106 @@ def write_csv(separator: str):
             writer.writerows(lines)
 
 
-def main():
-    # handle arguments
-    args = parse_arguments()
+def print_summary(movies_by_category: dict, total_time, total_size: float):
+    """Prints a summary of the scanned movies to the console.
+
+    Args:
+        movies_by_category (dict): Categories as keys and movie lists as values.
+        total_time (str | None): Total duration as 'HH:MM:SS' string.
+        total_size (float): Total size in GB.
+    """
+    movie_count = sum(len(movies) for movies in movies_by_category.values())
+    console.print(
+        f"[green]Scanned [bold]{movie_count}[/bold] movies "
+        f"in [bold]{len(movies_by_category)}[/bold] categories."
+    )
+    console.print(
+        f"Total duration: [bold]{total_time}[/bold], total size: [bold]{total_size:.2f} GB[/bold]"
+    )
+
+
+@app.command()
+def scan(
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Root path of the movie folder, e.g. D:\\Movies",
+    ),
+    csv_output: bool = typer.Option(
+        False, "--csv", "-csv", help="Also write the data as csv file."
+    ),
+):
+    """Scans the movie folder and writes the metadata to movies.txt."""
     config = load_config()
 
-    root = Path(args.path)
-    if not root.is_dir():
-        log_error(f"Root path '{root}' is not a directory!")
-        raise SystemExit(1)
+    movies_by_category, movies, error_messages = scan_movies(path, config)
+    if movies:
+        total_time, total_size = _totals(movies_by_category)
+        write_output(movies_by_category, total_time, total_size, config.separator)
+        print_summary(movies_by_category, total_time, total_size)
 
-    # stores the data => category as key, movies as value
-    movies_by_category: dict[str, list[dict]] = {}
-
-    # total time and size => collected while iterating
-    total_time = None
-    total_size = 0
-
-    # search for movie files with the configured extensions, recursive
-    movies = find_movies(root, config.extensions)
-    if not movies:
-        log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
-        return
-
-    error_messages = []
-
-    for filename in tqdm(movies, dynamic_ncols=True):
-        name = get_name(filename)
-        category = filename.parent.parent.name
-        try:
-            ret = get_data(filename, config)
-        except Exception as e:
-            # move errors to stack/array and show at the end
-            error_messages.append(
-                f"\nA reading error occured in '{name}' at '{filename}'. Exception: {e}\n"
-            )
-            continue
-
-        size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
-
-        # it's not really the compression rate, it's rather size/time
-        compression_rate = 0
-        if ret["duration_raw"] is not None:
-            compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
-        elif ret["duration"] is not None:
-            compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
-
-        # check for cropping
-        ret["crop"] = check_black_bars(
-            filename,
-            ret["dimensions"],
-            min_width=config.black_bar_min_width,
-            min_height=config.black_bar_min_height,
-        )
-
-        # add additional data to dictionary
-        ret["name"] = name
-        ret["category"] = category
-        ret["size"] = size
-        ret["compression_rate"] = compression_rate  # is SIZE/TIME
-        ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
-
-        # set total values for time and size
-        if ret["duration"] is not None:
-            total_time = calc_time(total_time, ret["duration"])
-        total_size += ret["size"]
-
-        movies_by_category.setdefault(category, []).append(ret)
-
-    # write data to file => move out of loop
-    write_output(movies_by_category, total_time, total_size, config.separator)
-
-    # create csv file
-    if args.csv:
-        write_csv(config.separator)
-
-    # re-encode movies with handbrake
-    if args.encode:
-        from metadata_scrapper.encode import encode_movies
-
-        try:
-            encode_movies(
-                movies,
-                Path(args.encode),
-                preset=config.handbrake_preset,
-                encoder=config.handbrake_encoder,
-                dry_run=args.dry_run,
-            )
-        except (RuntimeError, FileNotFoundError) as e:
-            log_error(str(e))
+        if csv_output:
+            write_csv(config.separator)
+            console.print(f"Written '{CSV_FILE}'.")
 
     # show errors
     for er in error_messages:
         log_error(er)
 
 
+@app.command()
+def encode(
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Root path of the movie folder, e.g. D:\\Movies",
+    ),
+    output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be encoded without encoding."
+    ),
+):
+    """Re-encodes the found movies with HandBrake to reduce their file size."""
+    from metadata_scrapper.encode import encode_movies
+
+    config = load_config()
+    _, movies, _ = scan_movies(path, config)
+
+    try:
+        encode_movies(
+            movies,
+            output_dir,
+            preset=config.handbrake_preset,
+            encoder=config.handbrake_encoder,
+            dry_run=dry_run,
+        )
+    except (RuntimeError, FileNotFoundError) as e:
+        log_error(str(e))
+        raise typer.Exit(1) from e
+
+
+def _totals(movies_by_category: dict) -> tuple:
+    """Calculates the total duration and size of the scanned movies.
+
+    Args:
+        movies_by_category (dict): Categories as keys and movie lists as values.
+
+    Returns:
+        tuple: Total duration as 'HH:MM:SS' string and total size in GB.
+    """
+    total_time = None
+    total_size = 0
+    for movies in movies_by_category.values():
+        for value in movies:
+            if value["duration"] is not None:
+                total_time = calc_time(total_time, value["duration"])
+            total_size += value["size"]
+    return total_time, total_size
+
+
 if __name__ == "__main__":
-    main()
+    app()

@@ -1,8 +1,11 @@
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from metadata_scrapper.logger import log_error
+from rich.progress import Progress
+
+from metadata_scrapper.logger import log, log_error
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
 
@@ -41,8 +44,6 @@ def find_handbrake() -> str | None:
     Returns:
         str | None: The path to the binary, or None if it was not found.
     """
-    import shutil
-
     binary = shutil.which(HANDBRAKE_BINARY)
     if binary:
         return binary
@@ -167,25 +168,25 @@ def encode_movies(
     if not dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    for movie in movies:
-        output_file = output_dir / movie.name
-        if dry_run:
-            from metadata_scrapper.logger import log
-
+    if dry_run:
+        for movie in movies:
+            output_file = output_dir / movie.name
             log(f"[dry-run] Would encode '{movie}' -> '{output_file}'")
-            continue
+        return results
 
-        result = encode_file(movie, output_file)
-        if result.success:
-            from metadata_scrapper.logger import log
-
-            log(
-                f"Encoded '{movie.name}': {result.input_size / (1024**3):.2f} GB -> "
-                f"{result.output_size / (1024**3):.2f} GB "
-                f"({result.saved_percent}% saved)"
-            )
-        else:
-            log_error(f"Encoding '{movie.name}' failed: {result.error}")
-        results.append(result)
+    with Progress() as progress:
+        task = progress.add_task("Encoding movies", total=len(movies))
+        for movie in movies:
+            output_file = output_dir / movie.name
+            result = encode_file(movie, output_file)
+            if result.success:
+                progress.console.print(
+                    f"Encoded '{movie.name}': {result.input_size / (1024**3):.2f} GB -> "
+                    f"{result.output_size / (1024**3):.2f} GB ({result.saved_percent}% saved)"
+                )
+            else:
+                log_error(f"Encoding '{movie.name}' failed: {result.error}")
+            results.append(result)
+            progress.advance(task)
 
     return results
