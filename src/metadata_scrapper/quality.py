@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from metadata_scrapper.encode import HANDBRAKE_BINARY, find_handbrake
+from metadata_scrapper.encode import HANDBRAKE_BINARY, durations_match, find_handbrake
 from metadata_scrapper.logger import log
 
 FFMPEG_BINARY = "ffmpeg"
@@ -208,6 +208,11 @@ def build_encode_command(
         encoder_preset,
         "--quality",
         str(crf),
+        # keep the source resolution: HandBrake's auto-crop would letterbox
+        # crops break the VMAF comparison (dimension mismatch) and change
+        # the output resolution of the library
+        "--crop",
+        "0:0:0:0",
         # keep all audio and subtitle tracks, copy audio => no quality loss
         "--all-audio",
         "--all-subtitles",
@@ -270,7 +275,8 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
     """Measures the mean VMAF of an encode against its source.
 
     The main/reference input order matters: the distorted stream must be the
-    first input, otherwise scores are inflated.
+    first input, otherwise scores are inflated. Both input paths are resolved
+    to absolute form because ffmpeg runs with cwd=workdir.
 
     Args:
         distorted (Path): The encoded file.
@@ -283,6 +289,8 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
     Raises:
         RuntimeError: If ffmpeg/libvmaf failed or produced no score.
     """
+    distorted = distorted.resolve()
+    reference = reference.resolve()
     model = workdir / VMAF_MODEL.name
     shutil.copyfile(VMAF_MODEL, model)
 
@@ -391,7 +399,7 @@ def find_optimal_crf(
     Raises:
         RuntimeError: If sampling or probing failed.
     """
-    samples = extract_samples(movie, workdir, sample_count, sample_seconds)
+    samples = [s.resolve() for s in extract_samples(movie, workdir, sample_count, sample_seconds)]
 
     probes: list[SampleProbe] = []
 
@@ -481,7 +489,7 @@ def encode_with_quality(
             )
 
         # HandBrake may exit with 0 even if the encode failed => the output
-        # file must exist and be non-empty
+        # file must exist, be non-empty and have the full duration
         if not output_file.is_file() or output_file.stat().st_size == 0:
             return QualityResult(
                 input=input_file,
@@ -492,6 +500,17 @@ def encode_with_quality(
                 achieved_vmaf=achieved,
                 probes=probes,
                 error=err or "no output file was written",
+            )
+        if not durations_match(input_file, output_file):
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                error="output is truncated (duration mismatch)",
             )
 
         return QualityResult(
