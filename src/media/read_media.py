@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import Path
 import ffmpeg
 import math
 import gc
@@ -61,7 +62,7 @@ def try_get_height(video):
     return height
 
 
-def get_data(path):
+def get_data(path: Path):
     # read the audio/video file from the command line arguments
     media_file = str(path)
     # uses ffprobe command to extract all possible metadata from the media file
@@ -84,8 +85,8 @@ def get_data(path):
         # creates object with name, type, language, title
         codec_name = cd.get('codec_name', '')
         codec_type = cd.get('codec_type', '')
-        codec_language = str
-        codec_title = str
+        codec_language: str = ''
+        codec_title: str = ''
         if 'tags' in cd:
             codec_language = cd['tags'].get('language', '')
             codec_title = cd['tags'].get("title", '')
@@ -101,7 +102,8 @@ def get_data(path):
     height = try_get_height(video)
     width = try_get_width(video)
 
-    aspect_ratio = '0x0' # might look for a better option => 16:9 - excel will convert this to datetime
+    # might look for a better option => 16:9 - excel will convert this to datetime
+    aspect_ratio = '0x0'
     if width != None and height != None:
         aspect_ratio = get_aspect_ratio(width, height)
 
