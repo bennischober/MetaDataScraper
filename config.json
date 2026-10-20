@@ -36,5 +36,9 @@
       "MIN_WIDTH": 100
     }
   },
+  "handbrake": {
+    "preset": "Fast 1080p30",
+    "encoder": "x265"
+  },
   "language": "en"
 }
