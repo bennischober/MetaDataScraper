@@ -163,22 +163,6 @@ def calc_time(lhs, rhs) -> str | None:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def get_len(dict) -> str | None:
-    """Calculates the total duration of all movies in the dictionary.
-
-    Args:
-        dict (dict): Dictionary with the categories as keys and movie lists as values.
-
-    Returns:
-        str | None: The total duration as 'HH:MM:SS' string.
-    """
-    length = None
-    for key in dict:
-        for value in dict[key]:
-            length = calc_time(length, value["duration"])
-    return length
-
-
 def get_other_codecs(other_codecs) -> str:
     """Converts the other codecs list into a comma separated string of codec names.
 

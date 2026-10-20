@@ -51,17 +51,6 @@ class Conf:
         self.handbrake_preset: str = handbrake.get("preset", "Fast 1080p30")
         self.handbrake_encoder: str = handbrake.get("encoder", "x265")
 
-    def print(self):
-        print(self.hdr_color_spaces)
-        print(self.hdr_color_transfers)
-        print(self.extensions)
-        print(self.separator)
-        print(self.black_bar_min_width)
-        print(self.black_bar_min_height)
-        print(self.language)
-        print(self.handbrake_preset)
-        print(self.handbrake_encoder)
-
 
 _config: Conf | None = None
 
@@ -94,24 +83,3 @@ def load_config(root: str | Path | None = None) -> Conf:
 
     _config = Conf(data)
     return _config
-
-
-def test_config(root: str | Path):
-    """Checks if the config file exists and loads it.
-
-    Args:
-        root (str | Path): Root path of the project.
-
-    Returns:
-        dict: Dictionary with the 'status', 'message' and 'config' keys.
-    """
-    msg = "Does not exist"
-    status = "ERROR"
-    path = Path(root) / "config.json"
-    if path.is_file():
-        msg = "Does exist"
-        status = "OK"
-
-    conf = load_config(root)
-
-    return {"status": status, "message": msg, "config": conf}

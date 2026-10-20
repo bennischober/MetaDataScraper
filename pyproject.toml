@@ -28,6 +28,15 @@ Repository = "https://github.com/bennischober/MetaDataScraper"
 Issues = "https://github.com/bennischober/MetaDataScraper/issues"
 Changelog = "https://github.com/bennischober/MetaDataScraper/releases"
 
+[tool.uv]
+# Supply-chain hardening: skip packages published in the last 7 days so freshly
+# poisoned releases don't enter resolution before they are detected and yanked.
+exclude-newer = "7 days"
+
+[tool.uv.audit]
+# Refuse to sync packages with a published malware advisory (OSV MAL database).
+malware-check = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

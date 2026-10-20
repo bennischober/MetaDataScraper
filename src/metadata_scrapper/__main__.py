@@ -48,6 +48,36 @@ def get_name(filename: Path) -> str:
     return filename.stem
 
 
+def get_category(filename: Path, root: Path) -> str:
+    """Determines the movie category from the folder structure.
+
+    The category is the folder above the movie folder (relative to the root),
+    e.g. 'Movies/Matrix/movie.mkv' => 'Movies'. If the file is not nested
+    deep enough, 'Uncategorized' is used.
+
+    Args:
+        filename (Path): Path to the movie file.
+        root (Path): The scan root directory.
+
+    Returns:
+        str: The category name.
+    """
+    try:
+        relative = filename.parent.relative_to(root)
+    except ValueError:
+        # file is not inside the root (should not happen) => no category
+        return "Uncategorized"
+
+    parts = relative.parts
+    if len(parts) == 0:
+        # movie file directly in the root
+        return "Uncategorized"
+    if len(parts) == 1:
+        # movie file in a folder directly under the root => use that folder
+        return parts[0]
+    return parts[0]
+
+
 def find_movies(root: Path, extensions: list[str]) -> list[Path]:
     """Finds all movie files with the given extensions recursively.
 
@@ -96,7 +126,7 @@ def scan_movies(root: Path, config) -> tuple[dict, list[Path], list[str]]:
         task = progress.add_task("Scanning movies", total=len(movies))
         for filename in movies:
             name = get_name(filename)
-            category = filename.parent.parent.name
+            category = get_category(filename, root)
             try:
                 ret = get_data(filename, config)
             except Exception as e:
@@ -142,7 +172,13 @@ def scan_movies(root: Path, config) -> tuple[dict, list[Path], list[str]]:
     return movies_by_category, movies, error_messages
 
 
-def write_output(movies_by_category: dict, total_time, total_size, separator: str):
+def write_output(
+    movies_by_category: dict,
+    total_time,
+    total_size,
+    separator: str,
+    output_file: Path = OUTPUT_FILE,
+):
     """Writes the processed data to the output file.
 
     Args:
@@ -150,8 +186,9 @@ def write_output(movies_by_category: dict, total_time, total_size, separator: st
         total_time (str | None): Total duration as 'HH:MM:SS' string.
         total_size (float): Total size in GB.
         separator (str): The separator between the columns.
+        output_file (Path): Path of the output file.
     """
-    with open(OUTPUT_FILE, "w+", encoding="UTF8") as text:
+    with open(output_file, "w+", encoding="UTF8") as text:
         # write csv / file header
         header = [
             "CATEGORY",
@@ -189,15 +226,17 @@ def write_output(movies_by_category: dict, total_time, total_size, separator: st
         text.write(separator.join(total) + "\n")
 
 
-def write_csv(separator: str):
+def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = CSV_FILE):
     """Converts the output file into a real csv file.
 
     Args:
         separator (str): The separator between the columns.
+        output_file (Path): Path of the txt input file.
+        csv_file (Path): Path of the csv output file.
     """
-    with open(OUTPUT_FILE, encoding="utf-8") as in_file:
+    with open(output_file, encoding="utf-8") as in_file:
         lines = [line.rstrip("\n").split(separator) for line in in_file if line.strip()]
-        with open(CSV_FILE, "w+", newline="", encoding="iso-8859-1") as out_file:
+        with open(csv_file, "w+", newline="", encoding="iso-8859-1") as out_file:
             writer = csv.writer(out_file, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL)
             writer.writerows(lines)
 
@@ -232,19 +271,23 @@ def scan(
     csv_output: bool = typer.Option(
         False, "--csv", "-csv", help="Also write the data as csv file."
     ),
+    output_file: Path = typer.Option(
+        OUTPUT_FILE, "--output", "-o", help="Path of the output file."
+    ),
 ):
-    """Scans the movie folder and writes the metadata to movies.txt."""
+    """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
 
     movies_by_category, movies, error_messages = scan_movies(path, config)
     if movies:
         total_time, total_size = _totals(movies_by_category)
-        write_output(movies_by_category, total_time, total_size, config.separator)
+        write_output(movies_by_category, total_time, total_size, config.separator, output_file)
         print_summary(movies_by_category, total_time, total_size)
 
         if csv_output:
-            write_csv(config.separator)
-            console.print(f"Written '{CSV_FILE}'.")
+            csv_file = output_file.with_suffix(".csv")
+            write_csv(config.separator, output_file, csv_file)
+            console.print(f"Written '{csv_file}'.")
 
     # show errors
     for er in error_messages:
@@ -264,6 +307,9 @@ def encode(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be encoded without encoding."
     ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Re-encode files even if the output already exists."
+    ),
 ):
     """Re-encodes the found movies with HandBrake to reduce their file size."""
     from metadata_scrapper.encode import encode_movies
@@ -278,6 +324,7 @@ def encode(
             preset=config.handbrake_preset,
             encoder=config.handbrake_encoder,
             dry_run=dry_run,
+            overwrite=overwrite,
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))

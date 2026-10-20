@@ -116,9 +116,6 @@ def encode_file(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
-    if output_file.exists() and not overwrite:
-        raise FileExistsError(f"Output file '{output_file}' already exists (use overwrite=True)!")
-
     handbrake = find_handbrake()
     if handbrake is None:
         raise RuntimeError(
@@ -164,6 +161,7 @@ def encode_movies(
     preset: str = "Fast 1080p30",
     encoder: str = "x265",
     dry_run: bool = False,
+    overwrite: bool = False,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
 
@@ -173,6 +171,7 @@ def encode_movies(
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
         encoder (str): The video encoder, e.g. 'x265'.
         dry_run (bool): If True, only show what would be encoded.
+        overwrite (bool): Whether existing output files may be replaced.
 
     Returns:
         list[EncodeResult]: The results of the encodes.
@@ -192,7 +191,7 @@ def encode_movies(
         task = progress.add_task("Encoding movies", total=len(movies))
         for movie in movies:
             output_file = output_dir / movie.name
-            if output_file.exists():
+            if output_file.exists() and not overwrite:
                 log(f"Skipping '{movie.name}': output file already exists.")
                 progress.advance(task)
                 continue

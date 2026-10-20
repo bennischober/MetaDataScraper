@@ -33,3 +33,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -q
+
+      - name: Audit dependencies
+        run: uv audit --locked

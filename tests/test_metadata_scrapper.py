@@ -1,7 +1,8 @@
 import unittest
+from pathlib import Path
 
 from metadata_scrapper import config as config_helper
-from metadata_scrapper import helpers
+from metadata_scrapper import encode, helpers
 from metadata_scrapper import media as read_media
 
 
@@ -143,6 +144,99 @@ class TestReadMedia(unittest.TestCase):
         self.assertTrue(read_media.is_hdr(hdr_stream, config))
         self.assertFalse(read_media.is_hdr(sdr_stream, config))
         self.assertFalse(read_media.is_hdr({}, config))
+
+
+class TestEncode(unittest.TestCase):
+    def test_build_command(self):
+        command = encode.build_command(
+            "C:/HandBrake/HandBrakeCLI.exe",
+            Path("in.mkv"),
+            Path("out.mkv"),
+            "Fast 1080p30",
+            "x265",
+        )
+        self.assertEqual(command[0], "C:/HandBrake/HandBrakeCLI.exe")
+        self.assertIn("--input", command)
+        self.assertIn("in.mkv", command)
+        self.assertIn("--output", command)
+        self.assertIn("out.mkv", command)
+        self.assertIn("Fast 1080p30", command)
+        self.assertIn("x265", command)
+        # audio passthrough without conflicting options
+        self.assertIn("--aencoder", command)
+        self.assertNotIn("--audio", command)
+        self.assertIn("--optimize", command)
+
+    def test_saved_percent(self):
+        result = encode.EncodeResult(
+            input=Path("in.mkv"),
+            output=Path("out.mkv"),
+            success=True,
+            input_size=1000,
+            output_size=400,
+        )
+        self.assertEqual(result.saved_percent, 60.0)
+        # larger output => negative
+        result = encode.EncodeResult(
+            input=Path("in.mkv"),
+            output=Path("out.mkv"),
+            success=True,
+            input_size=1000,
+            output_size=1500,
+        )
+        self.assertEqual(result.saved_percent, -50.0)
+        # zero sizes => 0
+        result = encode.EncodeResult(input=Path("in.mkv"), output=Path("out.mkv"), success=True)
+        self.assertEqual(result.saved_percent, 0.0)
+
+    def test_encode_file_missing_input(self):
+        with self.assertRaises(FileNotFoundError):
+            encode.encode_file(Path("does-not-exist.mkv"), Path("out.mkv"))
+
+    def test_encode_movies_dry_run(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "encoded"
+            results = encode.encode_movies([Path("a.mkv"), Path("b.mkv")], out_dir, dry_run=True)
+            self.assertEqual(len(results), 0)
+            # dry run => no output directory created
+            self.assertFalse(out_dir.exists())
+
+    def test_encode_movies_skip_existing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            (out_dir / "a.mkv").write_bytes(b"x")
+            results = encode.encode_movies([Path("a.mkv")], out_dir)
+            # skipped => no result recorded
+            self.assertEqual(len(results), 0)
+
+
+class TestMain(unittest.TestCase):
+
+    def test_get_category(self):
+        from metadata_scrapper.__main__ import get_category
+
+        root = Path("D:/Movies")
+        # normal: root/Category/MovieFolder/file.mkv
+        self.assertEqual(
+            get_category(Path("D:/Movies/Action/Movie 2020/movie.mkv"), root), "Action"
+        )
+        # movie directly in the root
+        self.assertEqual(get_category(Path("D:/Movies/movie.mkv"), root), "Uncategorized")
+        # deeper nesting => still the first folder level
+        self.assertEqual(
+            get_category(Path("D:/Movies/Action/Sub/movie.mkv"), root), "Action"
+        )
+
+    def test_get_name(self):
+        from metadata_scrapper.__main__ import get_name
+
+        self.assertEqual(get_name(Path("D:/Movies/Action/Movie.mkv")), "Movie")
+        # multi-file folder => folder name
+        self.assertEqual(get_name(Path("D:/Movies/Action/movie_t0.mkv")), "Action")
 
 
 if __name__ == "__main__":
