@@ -1,6 +1,7 @@
 import enum
 import subprocess
 
+
 # Enum for size units
 class SIZE_UNIT(enum.Enum):
     BYTES = 1
@@ -10,13 +11,13 @@ class SIZE_UNIT(enum.Enum):
 
 
 def convert_unit(size_in_bytes, unit):
-    """ Convert the size from bytes to other units like KB, MB or GB"""
+    """Convert the size from bytes to other units like KB, MB or GB"""
     if unit == SIZE_UNIT.KB:
-        return round(size_in_bytes/1024, 2)
+        return round(size_in_bytes / 1024, 2)
     elif unit == SIZE_UNIT.MB:
-        return round(size_in_bytes/(1024*1024), 2)
+        return round(size_in_bytes / (1024 * 1024), 2)
     elif unit == SIZE_UNIT.GB:
-        return round(size_in_bytes/(1024*1024*1024), 2)
+        return round(size_in_bytes / (1024 * 1024 * 1024), 2)
     else:
         return size_in_bytes
 
@@ -34,13 +35,13 @@ def sanitize_number(number) -> str:
         str: The sanitized number as string.
     """
     number = str(number)
-    parts = number.split('.')
+    parts = number.split(".")
     if len(parts) == 1:
         return parts[0]
     return parts[0] + "," + parts[1]
 
 
-def generate_string(item, separator=';', useCat=False) -> str:
+def generate_string(item, separator=";", useCat=False) -> str:
     """Function that generates an output string (row) with the given dictionary data.
 
     Args:
@@ -51,25 +52,37 @@ def generate_string(item, separator=';', useCat=False) -> str:
     Returns:
         str: The output string.
     """
-    cat = str(item['category'])
-    name = str(item['name'])
-    duration = str(item['duration'])
-    size = sanitize_number(item['size'])
-    codec = str(item['codec'])
-    bitrate = sanitize_number(item['bitrate'])
-    aspect_ratio = str(item['aspect_ratio'])
-    dimensions = str(item['dimensions']['width']) + 'x' + \
-        str(item['dimensions']['height'])
-    comp_rate = sanitize_number(item['compression_rate'])
-    fps = str(item['fps'])
-    crop = str(item['crop'])
-    hdr = str(item.get('hdr', ''))
-    other_codecs = str(item.get('other_codecs', ''))
-    audio_languages = str(item.get('audio_languages', ''))
+    cat = str(item["category"])
+    name = str(item["name"])
+    duration = str(item["duration"])
+    size = sanitize_number(item["size"])
+    codec = str(item["codec"])
+    bitrate = sanitize_number(item["bitrate"])
+    aspect_ratio = str(item["aspect_ratio"])
+    dimensions = str(item["dimensions"]["width"]) + "x" + str(item["dimensions"]["height"])
+    comp_rate = sanitize_number(item["compression_rate"])
+    fps = str(item["fps"])
+    crop = str(item["crop"])
+    hdr = str(item.get("hdr", ""))
+    other_codecs = str(item.get("other_codecs", ""))
+    audio_languages = str(item.get("audio_languages", ""))
 
-    row = [cat if useCat else '', name, duration, size, codec, bitrate,
-           aspect_ratio, dimensions, comp_rate, fps, crop, hdr, other_codecs,
-           audio_languages]
+    row = [
+        cat if useCat else "",
+        name,
+        duration,
+        size,
+        codec,
+        bitrate,
+        aspect_ratio,
+        dimensions,
+        comp_rate,
+        fps,
+        crop,
+        hdr,
+        other_codecs,
+        audio_languages,
+    ]
     return separator.join(row) + "\n"
 
 
@@ -84,7 +97,7 @@ def timestr_to_int(time) -> int:
     """
     if not time:
         return 0
-    parts = time.split(':')
+    parts = time.split(":")
     if len(parts) < 2:
         return 0
 
@@ -112,11 +125,11 @@ def calc_time(lhs, rhs) -> str | None:
     if rhs is None:
         return lhs
 
-    lhs_parts = lhs.split(':')
+    lhs_parts = lhs.split(":")
     if len(lhs_parts) < 2:
         return rhs
 
-    rhs_parts = rhs.split(':')
+    rhs_parts = rhs.split(":")
     if len(rhs_parts) < 2:
         return lhs
 
@@ -130,7 +143,7 @@ def calc_time(lhs, rhs) -> str | None:
 
         # add existing minutes
         minutes += int(lhs_parts[1]) + int(rhs_parts[1])
-        hours = int(minutes/60)
+        hours = int(minutes / 60)
         minutes = minutes % 60
 
         # add existing hours
@@ -154,7 +167,7 @@ def get_len(dict) -> str | None:
     length = None
     for key in dict:
         for value in dict[key]:
-            length = calc_time(length, value['duration'])
+            length = calc_time(length, value["duration"])
     return length
 
 
@@ -167,7 +180,7 @@ def get_other_codecs(other_codecs) -> str:
     Returns:
         str: Comma separated codec names, e.g. 'aac, subrip'.
     """
-    return ", ".join(codec['name'] for codec in other_codecs)
+    return ", ".join(codec["name"] for codec in other_codecs)
 
 
 def check_black_bars(file, dimensions, min_width=100, min_height=100) -> int:
@@ -185,20 +198,34 @@ def check_black_bars(file, dimensions, min_width=100, min_height=100) -> int:
     Returns:
         int: 1 if black bars were detected, 0 if not (or it could not be checked).
     """
-    if dimensions['width'] is None or dimensions['height'] is None:
+    if dimensions["width"] is None or dimensions["height"] is None:
         return 0
 
     try:
         pres = subprocess.run(
-            ['ffmpeg', '-ss', '90', '-i', str(file), '-vframes', '10',
-             '-vf', 'cropdetect', '-f', 'null', '-'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            [
+                "ffmpeg",
+                "-ss",
+                "90",
+                "-i",
+                str(file),
+                "-vframes",
+                "10",
+                "-vf",
+                "cropdetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
         cdetect = str(pres.stderr)
     except (OSError, subprocess.SubprocessError):
         return 0
 
     # cropdetect may not find any crop => no black bars
-    if 'crop=' not in cdetect:
+    if "crop=" not in cdetect:
         return 0
 
     cres = cdetect.split("crop=")
@@ -209,8 +236,8 @@ def check_black_bars(file, dimensions, min_width=100, min_height=100) -> int:
     except (IndexError, ValueError):
         return 0
 
-    if w + min_width < dimensions['width']:
+    if w + min_width < dimensions["width"]:
         return 1
-    if h + min_height < dimensions['height']:
+    if h + min_height < dimensions["height"]:
         return 1
     return 0

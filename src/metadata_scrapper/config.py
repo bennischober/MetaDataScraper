@@ -3,17 +3,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-try:
-    from src.helper.logger import log_warning
-except ImportError:
-    from helper.logger import log_warning
+from metadata_scrapper.logger import log_warning
 
 # fallback values if the config file is missing or a value is not set
-DEFAULT_EXTENSIONS = ['.mkv']
-DEFAULT_SEPARATOR = ';'
+DEFAULT_EXTENSIONS = [".mkv"]
+DEFAULT_SEPARATOR = ";"
 DEFAULT_BLACK_BAR_MIN_WIDTH = 100
 DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
-DEFAULT_LANGUAGE = 'en'
+DEFAULT_LANGUAGE = "en"
 
 
 class Conf:
@@ -26,26 +23,33 @@ class Conf:
         data = data or {}
 
         # codec => hdr detection
-        codec: dict[str, Any] = data.get('codec') or {}
-        hdr: dict[str, Any] = codec.get('hdr') or {}
-        self.hdr_color_spaces: list[str] = hdr.get('color_space') or []
-        self.hdr_color_transfers: list[str] = hdr.get('color_transfer') or []
+        codec: dict[str, Any] = data.get("codec") or {}
+        hdr: dict[str, Any] = codec.get("hdr") or {}
+        self.hdr_color_spaces: list[str] = hdr.get("color_space") or []
+        self.hdr_color_transfers: list[str] = hdr.get("color_transfer") or []
 
         # file => extensions and output settings
-        file: dict[str, Any] = data.get('file') or {}
-        self.extensions: list[str] = file.get('extensions') or DEFAULT_EXTENSIONS
-        output: dict[str, Any] = file.get('output') or {}
-        self.separator: str = output.get('seperator', DEFAULT_SEPARATOR)
+        file: dict[str, Any] = data.get("file") or {}
+        self.extensions: list[str] = file.get("extensions") or DEFAULT_EXTENSIONS
+        output: dict[str, Any] = file.get("output") or {}
+        self.separator: str = output.get("seperator", DEFAULT_SEPARATOR)
 
         # ffmpeg => black bar detection
-        ffmpeg: dict[str, Any] = data.get('ffmpeg') or {}
-        black_bars: dict[str, Any] = ffmpeg.get('black_bars') or {}
+        ffmpeg: dict[str, Any] = data.get("ffmpeg") or {}
+        black_bars: dict[str, Any] = ffmpeg.get("black_bars") or {}
         self.black_bar_min_width: int = int(
-            black_bars.get('MIN_WIDTH', DEFAULT_BLACK_BAR_MIN_WIDTH))
+            black_bars.get("MIN_WIDTH", DEFAULT_BLACK_BAR_MIN_WIDTH)
+        )
         self.black_bar_min_height: int = int(
-            black_bars.get('MIN_HEIGHT', DEFAULT_BLACK_BAR_MIN_HEIGHT))
+            black_bars.get("MIN_HEIGHT", DEFAULT_BLACK_BAR_MIN_HEIGHT)
+        )
 
-        self.language: str = data.get('language', DEFAULT_LANGUAGE)
+        self.language: str = data.get("language", DEFAULT_LANGUAGE)
+
+        # handbrake => re-encoding settings
+        handbrake: dict[str, Any] = data.get("handbrake") or {}
+        self.handbrake_preset: str = handbrake.get("preset", "Fast 1080p30")
+        self.handbrake_encoder: str = handbrake.get("encoder", "x265")
 
     def print(self):
         print(self.hdr_color_spaces)
@@ -55,6 +59,8 @@ class Conf:
         print(self.black_bar_min_width)
         print(self.black_bar_min_height)
         print(self.language)
+        print(self.handbrake_preset)
+        print(self.handbrake_encoder)
 
 
 _config: Conf | None = None
@@ -77,11 +83,11 @@ def load_config(root: str | Path | None = None) -> Conf:
         return _config
 
     path = Path(root) if root else Path(__file__).parent.parent.parent
-    path = path / 'config.json'
+    path = path / "config.json"
 
     data: dict[str, Any] = {}
     if path.is_file():
-        with open(path, 'r', encoding='utf-8') as config:
+        with open(path, encoding="utf-8") as config:
             data = json.load(config)
     else:
         log_warning(f"Config file not found at '{path}', using default values!")
@@ -101,11 +107,11 @@ def test_config(root: str | Path):
     """
     msg = "Does not exist"
     status = "ERROR"
-    path = Path(root) / 'config.json'
+    path = Path(root) / "config.json"
     if path.is_file():
         msg = "Does exist"
         status = "OK"
 
     conf = load_config(root)
 
-    return {'status': status, 'message': msg, 'config': conf}
+    return {"status": status, "message": msg, "config": conf}

@@ -19,16 +19,16 @@ class PRINT_TYPE(enum.Enum):
 
 
 class logcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ERROR = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ERROR = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
 
 
 def testlog(testtype: TEST_TYPE, message: dict[str, Any]):
@@ -40,16 +40,16 @@ def testlog(testtype: TEST_TYPE, message: dict[str, Any]):
     """
     match testtype:
         case TEST_TYPE.TEST:
-            msg = message.get('message', None)
+            msg = message.get("message")
             if msg is None:
                 return
             _log_("[TESTS]", str(msg), logcolors.BOLD)
         case TEST_TYPE.CONFIG:
-            status = message.get('status', None)
-            msg = message.get('message', None)
+            status = message.get("status")
+            msg = message.get("message")
             if status is None or msg is None:
                 return None
-            if status == 'OK':
+            if status == "OK":
                 _log_("[CONFIG]", "(success) " + str(msg), logcolors.OKGREEN)
             else:
                 _log_("[CONFIG]", "(failed) " + str(msg), logcolors.FAIL)
@@ -103,4 +103,4 @@ def log_multiline(messages: list[dict[str, Any]]):
         messages (list): Messages of type {'msg': str, 'type': PRINT_TYPE}.
     """
     for msg in messages:
-        log_call(msg['msg'], msg['type'])
+        log_call(msg["msg"], msg["type"])
