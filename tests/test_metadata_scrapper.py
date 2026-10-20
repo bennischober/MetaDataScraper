@@ -376,25 +376,23 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(quality.bisect_crf(lambda c: True, 14, 32), 31)
 
     def test_build_vmaf_command(self):
-        command = quality.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"))
-        # distorted stream must be the first input (libvmaf main)
-        self.assertEqual(command[command.index("-i") + 1], "enc.mkv")
-        self.assertEqual(command[command.index("-i", command.index("-i") + 1) + 1], "ref.mkv")
-        joined = " ".join(command)
-        # model by bare filename => no windows drive colon in the filtergraph
-        self.assertNotIn("\\", joined)
-        # exactly one of the two API styles, depending on the local ffmpeg
-        style = quality.detect_vmaf_style()
-        if style == quality.VMAF_STYLE_MODERN:
-            self.assertIn("model=path=vmaf_v0.6.1.json", joined)
-        else:
-            self.assertIn("model_path=vmaf_v0.6.1.json", joined)
+        for style in (quality.VMAF_STYLE_LEGACY, quality.VMAF_STYLE_MODERN):
+            command = quality.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"), style=style)
+            joined = " ".join(command)
+            # distorted stream must be the first input (libvmaf main)
+            self.assertEqual(command[command.index("-i") + 1], "enc.mkv")
+            self.assertEqual(command[command.index("-i", command.index("-i") + 1) + 1], "ref.mkv")
+            # model by bare filename => no windows drive colon in the filtergraph
+            self.assertNotIn("\\", joined)
+            if style == quality.VMAF_STYLE_MODERN:
+                self.assertIn("model=path=vmaf_v0.6.1.json", joined)
+            else:
+                self.assertIn("model_path=vmaf_v0.6.1.json", joined)
 
-    def test_detect_vmaf_style(self):
-        style = quality.detect_vmaf_style()
-        self.assertIn(style, (quality.VMAF_STYLE_LEGACY, quality.VMAF_STYLE_MODERN))
-        # cached on second call
-        self.assertEqual(quality.detect_vmaf_style(), style)
+    def test_detect_vmaf_style_without_ffmpeg(self):
+        # a missing ffmpeg must raise a clear error (CI has no ffmpeg)
+        with self.assertRaises(RuntimeError):
+            quality.detect_vmaf_style(binary="definitely-not-installed-ffmpeg")
 
     def test_parse_vmaf_log(self):
         log_text = json.dumps({"pooled_metrics": {"vmaf": {"mean": 94.002412, "min": 46.9}}})

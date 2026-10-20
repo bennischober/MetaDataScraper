@@ -41,23 +41,31 @@ VMAF_STYLE_LEGACY = "legacy"  # model_path=...
 VMAF_STYLE_MODERN = "modern"  # model=path=...
 
 
-def detect_vmaf_style() -> str:
+def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
     """Detects which libvmaf filter API the local ffmpeg supports.
+
+    Args:
+        binary (str): The ffmpeg binary to probe.
 
     Returns:
         str: VMAF_STYLE_LEGACY or VMAF_STYLE_MODERN.
 
     Raises:
-        RuntimeError: If ffmpeg has no libvmaf filter at all.
+        RuntimeError: If ffmpeg is not installed or has no libvmaf filter.
     """
     global _vmaf_style
-    if _vmaf_style is not None:
+    if _vmaf_style is not None and binary == FFMPEG_BINARY:
         return _vmaf_style
 
-    proc = subprocess.run(
-        [FFMPEG_BINARY, "-hide_banner", "-h", "filter=libvmaf"],
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            [binary, "-hide_banner", "-h", "filter=libvmaf"],
+            capture_output=True,
+        )
+    except OSError as e:
+        raise RuntimeError(
+            f"ffmpeg ('{binary}') not found! Install a build with libvmaf support."
+        ) from e
     options = proc.stdout.decode(errors="replace")
     if "libvmaf" not in options and "libvmaf" not in proc.stderr.decode(errors="replace"):
         raise RuntimeError("ffmpeg has no libvmaf filter! Install a build with libvmaf support.")
@@ -261,7 +269,9 @@ def build_encode_command(
     ]
 
 
-def build_vmaf_command(distorted: Path, reference: Path, threads: int = 0) -> list[str]:
+def build_vmaf_command(
+    distorted: Path, reference: Path, threads: int = 0, style: str | None = None
+) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
     The model file is copied to the working directory by measure_vmaf and
@@ -274,11 +284,14 @@ def build_vmaf_command(distorted: Path, reference: Path, threads: int = 0) -> li
         reference (Path): The pristine source file (libvmaf 'reference').
         threads (int): libvmaf worker threads (0 = automatic). Meaningful
             only on modern libvmaf (v3+); legacy builds score single-threaded.
+        style (str | None): Force a filter API style (legacy/modern); used by
+            tests. None detects the local ffmpeg.
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
     """
-    style = detect_vmaf_style()
+    if style is None:
+        style = detect_vmaf_style()
     if style == VMAF_STYLE_MODERN:
         model_option = "model=path=vmaf_v0.6.1.json"
     else:
