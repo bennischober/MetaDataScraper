@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from metadata_scrapper import db
 from metadata_scrapper.config import load_config
 from metadata_scrapper.helpers import (
     SIZE_UNIT,
@@ -19,7 +20,7 @@ from metadata_scrapper.helpers import (
     sanitize_number,
     timestr_to_int,
 )
-from metadata_scrapper.logger import log_error, log_warning
+from metadata_scrapper.logger import log, log_error, log_warning
 from metadata_scrapper.media import get_data
 
 app = typer.Typer(
@@ -31,6 +32,7 @@ console = Console()
 
 OUTPUT_FILE = Path("movies.txt")
 CSV_FILE = Path("output.csv")
+DB_FILE = Path("metadata.db")
 
 
 def get_name(filename: Path) -> str:
@@ -115,6 +117,7 @@ def movie_record_from_data(filename: Path, data: dict) -> db.MovieRecord:
         path=filename,
         mtime=stat.st_mtime,
         size=stat.st_size,
+        hash=data.get("hash"),
         name=data["name"],
         category=data["category"],
         duration=data["duration"],
@@ -135,18 +138,35 @@ def movie_record_from_data(filename: Path, data: dict) -> db.MovieRecord:
 def record_from_cache(row) -> dict:
     """Converts a cached database row into the movie data dictionary used by the output.
 
+    Size and compression rate are recomputed from the row data since they
+    are derived values that are not stored in the database.
+
     Args:
         row (sqlite3.Row): The cached file row.
 
     Returns:
         dict: The movie data dictionary.
     """
+    size = convert_unit(row["size"], SIZE_UNIT.GB)
+
+    # it's not really the compression rate, it's rather size/time
+    compression_rate = 0
+    if row["duration_raw"] is not None:
+        compression_rate = round(size / (row["duration_raw"] / 3600), 2)
+    elif row["duration"] is not None:
+        compression_rate = round(size / (timestr_to_int(row["duration"]) / 3600), 2)
+
+    # fps comes back as float from the database => '25' instead of '25.0'
+    fps = row["fps"]
+    if fps is not None and float(fps).is_integer():
+        fps = int(fps)
+
     return {
         "name": row["name"],
         "category": row["category"],
         "duration": row["duration"],
         "duration_raw": row["duration_raw"],
-        "fps": row["fps"],
+        "fps": fps,
         "codec": row["codec"],
         "bitrate": row["bitrate"],
         "aspect_ratio": row["aspect_ratio"],
@@ -155,16 +175,21 @@ def record_from_cache(row) -> dict:
         "hdr": bool(row["hdr"]),
         "other_codecs": row["other_codecs"],
         "audio_languages": row["audio_languages"],
+        "size": size,
+        "compression_rate": compression_rate,
     }
 
 
-def process_movie(filename: Path, root: Path, config) -> tuple[dict | None, str | None]:
+def process_movie(
+    filename: Path, root: Path, config, compute_hash: bool = False
+) -> tuple[dict | None, str | None]:
     """Collects the metadata of a single movie file.
 
     Args:
         filename (Path): Path to the movie file.
         root (Path): The scan root directory (for the category).
         config (Conf): The config settings.
+        compute_hash (bool): Compute a fast content hash of the file.
 
     Returns:
         tuple: The movie data dictionary (or None on error) and an error
@@ -177,6 +202,8 @@ def process_movie(filename: Path, root: Path, config) -> tuple[dict | None, str 
     except Exception as e:
         # move errors to the caller and show them at the end
         return None, f"A reading error occured in '{name}' at '{filename}'. Exception: {e}"
+
+    file_hash = db.compute_hash(filename) if compute_hash else None
 
     size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
 
@@ -201,12 +228,18 @@ def process_movie(filename: Path, root: Path, config) -> tuple[dict | None, str 
     ret["size"] = size
     ret["compression_rate"] = compression_rate  # is SIZE/TIME
     ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
+    ret["hash"] = file_hash
 
     return ret, None
 
 
 def scan_movies(
-    root: Path, config, workers: int | None = None
+    root: Path,
+    config,
+    workers: int | None = None,
+    connection=None,
+    rescan: bool = False,
+    compute_hash: bool = False,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 
@@ -214,11 +247,19 @@ def scan_movies(
     work consists of ffprobe/cropdetect subprocess calls. Results are
     collected by index => the output order stays deterministic.
 
+    If a database connection is given, unchanged files (mtime + size) are
+    taken from the cache instead of being probed again, and all results are
+    written back to the database.
+
     Args:
         root (Path): Root directory to search in.
         config (Conf): The config settings.
         workers (int | None): Number of parallel workers. Defaults to
             min(8, cpu count).
+        connection (sqlite3.Connection | None): Database connection for the
+            scan cache.
+        rescan (bool): Re-probe all files even if they are cached.
+        compute_hash (bool): Compute a fast content hash for new/changed files.
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
@@ -234,22 +275,47 @@ def scan_movies(
     error_messages: list[str | None] = [None] * len(movies)
     results: list[dict | None] = [None] * len(movies)
 
+    # cache lookup => which files can be taken from the database?
+    cached: dict[str, object] = {}
+    if connection is not None and not rescan:
+        cache = db.get_cached_records(connection)
+        for index, filename in enumerate(movies):
+            row = cache.get(str(filename))
+            if row is not None and db.is_unchanged(row, filename):
+                results[index] = record_from_cache(row)
+                cached[str(filename)] = row
+
+    to_scan = [filename for index, filename in enumerate(movies) if results[index] is None]
+
     with create_movie_progress() as progress:
         task = progress.add_task("Scanning movies", total=len(movies))
+        progress.advance(task, advance=len(cached))
+        if cached:
+            log(f"{len(cached)} movies taken from the cache.")
 
-        if workers == 1:
+        if not to_scan:
+            pass  # everything cached
+        elif workers == 1:
             # sequential fallback => no thread pool overhead
             for index, filename in enumerate(movies):
-                results[index], error_messages[index] = process_movie(filename, root, config)
+                if results[index] is not None:
+                    continue
+                results[index], error_messages[index] = process_movie(
+                    filename, root, config, compute_hash=compute_hash
+                )
                 progress.advance(task)
         else:
             if workers is None:
                 workers = min(8, (os.cpu_count() or 2))
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(process_movie, filename, root, config) for filename in movies
-                ]
-                for index, future in enumerate(futures):
+                futures = {
+                    executor.submit(
+                        process_movie, filename, root, config, compute_hash=compute_hash
+                    ): index
+                    for index, filename in enumerate(movies)
+                    if results[index] is None
+                }
+                for future, index in futures.items():
                     results[index], error_messages[index] = future.result()
                     progress.advance(task)
 
@@ -259,6 +325,18 @@ def scan_movies(
         if result is None:
             continue
         movies_by_category.setdefault(result["category"], []).append(result)
+
+    # write back to the database
+    if connection is not None:
+        for index, result in enumerate(results):
+            if result is None:
+                continue
+            record = movie_record_from_data(movies[index], result)
+            db.upsert_file(connection, record)
+        # remove files that are no longer on disk
+        pruned = db.prune_missing(connection, {str(m) for m in movies})
+        if pruned:
+            log(f"Removed {pruned} missing movies from the database.")
 
     return movies_by_category, movies, error_list
 
@@ -436,13 +514,31 @@ def scan(
     no_table: bool = typer.Option(
         False, "--no-table", help="Do not print the results as table to the console."
     ),
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    ),
+    rescan: bool = typer.Option(
+        False, "--rescan", help="Re-probe all files even if they are cached."
+    ),
+    hash_files: bool = typer.Option(
+        False, "--hash", help="Compute a fast content hash for new/changed files."
+    ),
 ):
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
 
-    movies_by_category, movies, error_messages = scan_movies(
-        path, config, workers=workers if workers > 0 else None
-    )
+    connection = db.connect(db_file)
+    try:
+        movies_by_category, movies, error_messages = scan_movies(
+            path,
+            config,
+            workers=workers if workers > 0 else None,
+            connection=connection,
+            rescan=rescan,
+            compute_hash=hash_files,
+        )
+    finally:
+        connection.close()
     if movies:
         total_time, total_size = _totals(movies_by_category)
         write_output(movies_by_category, total_time, total_size, config.separator, output_file)
@@ -491,17 +587,55 @@ def encode(
         max=100.0,
         help="VMAF quality floor for --quality mode.",
     ),
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    ),
 ):
     """Re-encodes the found movies with HandBrake to reduce their file size."""
+
+    config = load_config()
+    connection = db.connect(db_file)
+    try:
+        _, movies, _ = scan_movies(path, config, connection=connection)
+        _record_encodes(
+            connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf
+        )
+    finally:
+        connection.close()
+
+
+def _record_encodes(
+    connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf
+):
+    """Runs the encoding and records the results in the database.
+
+    Args:
+        connection: The database connection.
+        movies (list[Path]): The movie files to encode.
+        output_dir (Path): Directory for the encoded files.
+        config (Conf): The config settings.
+        dry_run (bool): Only show what would be encoded.
+        overwrite (bool): Whether existing output files may be replaced.
+        quality (bool): Use VMAF-driven quality mode.
+        target_vmaf (float): VMAF quality floor for quality mode.
+    """
     from metadata_scrapper.encode import encode_movies
     from metadata_scrapper.quality import encode_with_quality
 
-    config = load_config()
-    _, movies, _ = scan_movies(path, config)
+    # already encoded? (unless --overwrite)
+    encoded_paths: set[str] = set()
+    if not overwrite and not dry_run:
+        for movie in movies:
+            file_row = db.get_file_by_path(connection, movie)
+            if file_row is not None and db.get_encodes_for_file(connection, file_row["id"]):
+                encoded_paths.add(str(movie))
 
     if not dry_run and quality:
         try:
             for movie in movies:
+                if str(movie) in encoded_paths:
+                    log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
+                    continue
                 result = encode_with_quality(
                     movie,
                     output_dir / movie.name,
@@ -517,6 +651,14 @@ def encode(
                         f"{result.output_size / (1024**3):.2f} GB ({change}) "
                         f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                     )
+                    _save_encode(
+                        connection,
+                        movie,
+                        f"VMAF>{target_vmaf}",
+                        config.handbrake_encoder,
+                        result.input_size,
+                        result.output_size,
+                    )
                 else:
                     log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except (RuntimeError, FileNotFoundError) as e:
@@ -524,8 +666,9 @@ def encode(
             raise typer.Exit(1) from e
         return
 
+    results: list = []
     try:
-        encode_movies(
+        results = encode_movies(
             movies,
             output_dir,
             preset=config.handbrake_preset,
@@ -536,6 +679,50 @@ def encode(
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
         raise typer.Exit(1) from e
+
+    # record the encodes of this run in the database
+    for encode_result in results:
+        if not encode_result.success:
+            continue
+        _save_encode(
+            connection,
+            encode_result.input,
+            config.handbrake_preset,
+            config.handbrake_encoder,
+            encode_result.input_size,
+            encode_result.output_size,
+        )
+
+
+def _save_encode(
+    connection, movie: Path, preset: str, encoder: str, input_size: int, output_size: int
+):
+    """Stores an encode record for the given movie in the database.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The input movie file.
+        preset (str): The preset (or quality target) used.
+        encoder (str): The encoder used.
+        input_size (int): Input size in bytes.
+        output_size (int): Output size in bytes.
+    """
+    file_row = db.get_file_by_path(connection, movie)
+    if file_row is None:
+        # file not in the scan cache => store it first
+        record = db.MovieRecord(
+            path=movie,
+            mtime=movie.stat().st_mtime,
+            size=movie.stat().st_size,
+            name=movie.stem,
+            category=movie.parent.name,
+        )
+        file_id = db.upsert_file(connection, record)
+    else:
+        file_id = file_row["id"]
+
+    saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
+    db.add_encode(connection, file_id, preset, encoder, input_size, output_size, saved_percent)
 
 
 def _totals(movies_by_category: dict) -> tuple:

@@ -1,6 +1,5 @@
 import hashlib
 import sqlite3
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -214,7 +213,7 @@ def upsert_file(connection: sqlite3.Connection, record: MovieRecord) -> int:
         ),
     )
     connection.commit()
-    return int(cursor.lastrowid)
+    return int(cursor.lastrowid or 0)
 
 
 def get_file_by_path(connection: sqlite3.Connection, path: Path) -> sqlite3.Row | None:
@@ -227,9 +226,7 @@ def get_file_by_path(connection: sqlite3.Connection, path: Path) -> sqlite3.Row 
     Returns:
         sqlite3.Row | None: The row, or None if not stored.
     """
-    return connection.execute(
-        "SELECT * FROM files WHERE path = ?", (str(path),)
-    ).fetchone()
+    return connection.execute("SELECT * FROM files WHERE path = ?", (str(path),)).fetchone()
 
 
 def get_cached_records(connection: sqlite3.Connection) -> dict[str, sqlite3.Row]:
@@ -245,8 +242,15 @@ def get_cached_records(connection: sqlite3.Connection) -> dict[str, sqlite3.Row]
     return {row["path"]: row for row in rows}
 
 
-def add_encode(connection: sqlite3.Connection, file_id: int, preset: str, encoder: str,
-               input_size: int, output_size: int, saved_percent: float) -> int:
+def add_encode(
+    connection: sqlite3.Connection,
+    file_id: int,
+    preset: str,
+    encoder: str,
+    input_size: int,
+    output_size: int,
+    saved_percent: float,
+) -> int:
     """Records an encode in the history table.
 
     Args:
@@ -269,7 +273,7 @@ def add_encode(connection: sqlite3.Connection, file_id: int, preset: str, encode
         (file_id, preset, encoder, input_size, output_size, saved_percent),
     )
     connection.commit()
-    return int(cursor.lastrowid)
+    return int(cursor.lastrowid or 0)
 
 
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
