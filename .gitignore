@@ -9,6 +9,7 @@
 !config.json
 !.devcontainer/devcontainer.json
 !.vscode/settings.json
+!src/metadata_scrapper/models/*.json
 
 ## uv / python
 .venv/
