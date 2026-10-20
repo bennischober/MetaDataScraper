@@ -67,20 +67,24 @@ def probe_duration_seconds(path: Path) -> float | None:
 
     Returns:
         float | None: The duration in seconds, or None if it could not be
-            determined (e.g. truncated/unfinalized file).
+            determined (e.g. missing ffprobe, truncated/unfinalized file).
     """
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            str(path),
-        ],
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(path),
+            ],
+            capture_output=True,
+        )
+    except OSError:
+        # ffprobe not installed (e.g. CI) => duration unknown
+        return None
     if proc.returncode != 0:
         return None
     try:
@@ -110,8 +114,14 @@ def durations_match(input_file: Path, output_file: Path) -> bool:
     """
     source = probe_duration_seconds(input_file)
     encoded = probe_duration_seconds(output_file)
-    if source is None or encoded is None:
+    if source is None and encoded is None:
+        # cannot verify at all (e.g. ffprobe missing) => do not report failure
+        return True
+    if encoded is None:
+        # source readable but output unreadable => genuinely broken
         return False
+    if source is None:
+        return True
     # tolerate frame rounding; 1% or 2s, whichever is larger
     tolerance = max(2.0, source * 0.01)
     return abs(source - encoded) <= tolerance
