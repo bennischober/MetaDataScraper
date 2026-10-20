@@ -19,7 +19,9 @@ metadata-scrapper = "metadata_scrapper.__main__:app"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.4.0",
     "pytest>=8.4",
+    "pytest-cov>=7.1.0",
     "ruff>=0.14",
 ]
 
@@ -46,7 +48,19 @@ packages = ["src/metadata_scrapper"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --cov=metadata_scrapper --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
 
 [tool.ruff]
 line-length = 100

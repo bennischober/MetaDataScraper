@@ -98,9 +98,17 @@ A [devcontainer](.devcontainer/devcontainer.json) is included (Ubuntu with uv, f
 
 ### Tests and linting
 ```
-uv run pytest          # run the tests
+uv run pytest          # run the tests (with coverage report)
 uv run ruff check .    # lint
 uv run ruff format .   # format
+uv run mypy            # static type checking
+```
+
+### Releasing
+Releases are automated: push a tag and the release workflow builds the package and publishes a GitHub release (after running ruff, mypy and the tests):
+```
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 

@@ -31,7 +31,10 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
 
-      - name: Run tests
+      - name: Run mypy
+        run: uv run mypy
+
+      - name: Run tests with coverage
         run: uv run pytest -q
 
       - name: Audit dependencies

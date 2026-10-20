@@ -69,9 +69,9 @@ def parse_frame_rate(rate: str | None) -> float | None:
         return None
     try:
         if "/" in rate:
-            numerator, denominator = rate.split("/", 1)
-            numerator = float(numerator)
-            denominator = float(denominator)
+            numerator_str, denominator_str = rate.split("/", 1)
+            numerator = float(numerator_str)
+            denominator = float(denominator_str)
             if denominator == 0:
                 return None
             return numerator / denominator
@@ -256,7 +256,7 @@ def get_bitrate(probe: dict) -> float:
     if not bit_rate:
         return 0.00
     try:
-        return round(Decimal(bit_rate) / (1024 * 1024), 2)
+        return float(round(Decimal(bit_rate) / (1024 * 1024), 2))
     except (InvalidOperation, ValueError):
         return 0.00
 

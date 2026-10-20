@@ -28,8 +28,8 @@ app = typer.Typer(
 )
 console = Console()
 
-OUTPUT_FILE = "movies.txt"
-CSV_FILE = "output.csv"
+OUTPUT_FILE = Path("movies.txt")
+CSV_FILE = Path("output.csv")
 
 
 def get_name(filename: Path) -> str:
@@ -172,7 +172,7 @@ def scan_movies(
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
 
-    error_messages = [None] * len(movies)
+    error_messages: list[str | None] = [None] * len(movies)
     results: list[dict | None] = [None] * len(movies)
 
     with create_movie_progress() as progress:
