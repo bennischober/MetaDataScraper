@@ -8,9 +8,16 @@ target quality is chosen => lowest file size without visible quality loss.
 
 The CRF search is a binary search ('bisect'): VMAF falls monotonically as
 CRF rises, so ~5 probe encodes are enough to find the quality knee.
+
+Note on score comparability: libvmaf versions measure slightly differently
+(the same encode scored 95.76 on ffmpeg 5/libvmaf v2 and 94.40 on
+ffmpeg 9/libvmaf v3). Decisions stay internally consistent because the
+bisect measures and decides with the same local toolchain, but absolute
+scores and chosen CRFs are only comparable between similar libvmaf builds.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -25,6 +32,38 @@ FFMPEG_BINARY = "ffmpeg"
 # Netflix's reference model (https://github.com/Netflix/vmaf), shipped with the
 # package because old ffmpeg/libvmaf builds cannot load embedded models.
 VMAF_MODEL = Path(__file__).parent / "models" / "vmaf_v0.6.1.json"
+
+# libvmaf filter API changed with modern ffmpeg: old builds (ffmpeg < 6) take
+# an explicit 'model_path', new builds take 'model=path=...' and ship embedded
+# models. Detected once via the filter's option list.
+_vmaf_style: str | None = None
+VMAF_STYLE_LEGACY = "legacy"  # model_path=...
+VMAF_STYLE_MODERN = "modern"  # model=path=...
+
+
+def detect_vmaf_style() -> str:
+    """Detects which libvmaf filter API the local ffmpeg supports.
+
+    Returns:
+        str: VMAF_STYLE_LEGACY or VMAF_STYLE_MODERN.
+
+    Raises:
+        RuntimeError: If ffmpeg has no libvmaf filter at all.
+    """
+    global _vmaf_style
+    if _vmaf_style is not None:
+        return _vmaf_style
+
+    proc = subprocess.run(
+        [FFMPEG_BINARY, "-hide_banner", "-h", "filter=libvmaf"],
+        capture_output=True,
+    )
+    options = proc.stdout.decode(errors="replace")
+    if "libvmaf" not in options and "libvmaf" not in proc.stderr.decode(errors="replace"):
+        raise RuntimeError("ffmpeg has no libvmaf filter! Install a build with libvmaf support.")
+    _vmaf_style = VMAF_STYLE_MODERN if "model_path" not in options else VMAF_STYLE_LEGACY
+    return _vmaf_style
+
 
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
 # top-tier floor); VMAF falls monotonically with rising CRF.
@@ -222,20 +261,28 @@ def build_encode_command(
     ]
 
 
-def build_vmaf_command(distorted: Path, reference: Path) -> list[str]:
+def build_vmaf_command(distorted: Path, reference: Path, threads: int = 0) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
     The model file is copied to the working directory by measure_vmaf and
     referenced by bare filename => no Windows path escaping in the
-    filtergraph (colons in drive letters break filter parsing).
+    filtergraph (colons in drive letters break filter parsing). Works with
+    both the legacy (<6) and modern libvmaf filter API.
 
     Args:
         distorted (Path): The encoded file (libvmaf 'main' input).
         reference (Path): The pristine source file (libvmaf 'reference').
+        threads (int): libvmaf worker threads (0 = automatic). Meaningful
+            only on modern libvmaf (v3+); legacy builds score single-threaded.
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
     """
+    style = detect_vmaf_style()
+    if style == VMAF_STYLE_MODERN:
+        model_option = "model=path=vmaf_v0.6.1.json"
+    else:
+        model_option = "model_path=vmaf_v0.6.1.json"
     return [
         FFMPEG_BINARY,
         "-y",
@@ -246,7 +293,7 @@ def build_vmaf_command(distorted: Path, reference: Path) -> list[str]:
         "-i",
         str(reference),
         "-lavfi",
-        "[0:v][1:v]libvmaf=log_path=vmaf.json:log_fmt=json:model_path=vmaf_v0.6.1.json:n_threads=0",
+        f"[0:v][1:v]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}",
         "-f",
         "null",
         "-",
@@ -294,7 +341,11 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
     model = workdir / VMAF_MODEL.name
     shutil.copyfile(VMAF_MODEL, model)
 
-    code, err = _run(build_vmaf_command(distorted, reference), cwd=workdir)
+    threads = os.cpu_count() or 0
+    if detect_vmaf_style() != VMAF_STYLE_MODERN:
+        # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
+        threads = 0
+    code, err = _run(build_vmaf_command(distorted, reference, threads), cwd=workdir)
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")

@@ -380,9 +380,21 @@ class TestQuality(unittest.TestCase):
         # distorted stream must be the first input (libvmaf main)
         self.assertEqual(command[command.index("-i") + 1], "enc.mkv")
         self.assertEqual(command[command.index("-i", command.index("-i") + 1) + 1], "ref.mkv")
+        joined = " ".join(command)
         # model by bare filename => no windows drive colon in the filtergraph
-        self.assertIn("model_path=vmaf_v0.6.1.json", " ".join(command))
-        self.assertNotIn("\\", " ".join(command))
+        self.assertNotIn("\\", joined)
+        # exactly one of the two API styles, depending on the local ffmpeg
+        style = quality.detect_vmaf_style()
+        if style == quality.VMAF_STYLE_MODERN:
+            self.assertIn("model=path=vmaf_v0.6.1.json", joined)
+        else:
+            self.assertIn("model_path=vmaf_v0.6.1.json", joined)
+
+    def test_detect_vmaf_style(self):
+        style = quality.detect_vmaf_style()
+        self.assertIn(style, (quality.VMAF_STYLE_LEGACY, quality.VMAF_STYLE_MODERN))
+        # cached on second call
+        self.assertEqual(quality.detect_vmaf_style(), style)
 
     def test_parse_vmaf_log(self):
         log_text = json.dumps({"pooled_metrics": {"vmaf": {"mean": 94.002412, "min": 46.9}}})
