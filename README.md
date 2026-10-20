@@ -15,7 +15,9 @@
     - [Tests and linting](#tests-and-linting)
 - [Features for the future](#features-for-the-future)
 - [FAQ](#faq)
-- [Additional ressources](#additional-ressources)## Overview
+- [Additional ressources](#additional-ressources)
+
+## Overview
 A short python script to get video meta data.\
 Notes:
 >This project uses Python 3.15 (managed with [uv](https://docs.astral.sh/uv/), older versions >= 3.10 work too)
