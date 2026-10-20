@@ -58,10 +58,13 @@ def find_handbrake() -> str | None:
     return None
 
 
-def build_command(input_file: Path, output_file: Path, preset: str, encoder: str) -> list[str]:
+def build_command(
+    binary: str, input_file: Path, output_file: Path, preset: str, encoder: str
+) -> list[str]:
     """Builds the HandBrakeCLI command for re-encoding a file.
 
     Args:
+        binary (str): Path to the HandBrakeCLI binary.
         input_file (Path): The file to re-encode.
         output_file (Path): The target file.
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
@@ -71,7 +74,7 @@ def build_command(input_file: Path, output_file: Path, preset: str, encoder: str
         list[str]: The command as argument list.
     """
     return [
-        HANDBRAKE_BINARY,
+        binary,
         "--input",
         str(input_file),
         "--output",
@@ -80,10 +83,10 @@ def build_command(input_file: Path, output_file: Path, preset: str, encoder: str
         preset,
         "--encoder",
         encoder,
-        # keep all audio and subtitle tracks, passthrough audio => no quality loss
+        # keep all audio and subtitle tracks, copy audio => no quality loss
         "--all-audio",
         "--all-subtitles",
-        "--audio",
+        "--aencoder",
         "copy",
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
@@ -116,13 +119,14 @@ def encode_file(
     if output_file.exists() and not overwrite:
         raise FileExistsError(f"Output file '{output_file}' already exists (use overwrite=True)!")
 
-    if find_handbrake() is None:
+    handbrake = find_handbrake()
+    if handbrake is None:
         raise RuntimeError(
             f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
             "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
         )
 
-    command = build_command(input_file, output_file, preset, encoder)
+    command = build_command(handbrake, input_file, output_file, preset, encoder)
     try:
         proc = subprocess.run(command, capture_output=True)
     except (OSError, subprocess.SubprocessError) as e:
@@ -131,6 +135,16 @@ def encode_file(
     if proc.returncode != 0:
         stderr = proc.stderr.decode(errors="replace").strip()
         return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
+
+    # HandBrake may exit with 0 even if the encode failed => the output file must exist
+    if not output_file.is_file() or output_file.stat().st_size == 0:
+        stderr = proc.stderr.decode(errors="replace").strip()
+        return EncodeResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            error=stderr or "no output file was written",
+        )
 
     # encode succeeded => collect sizes
     input_size = input_file.stat().st_size
@@ -178,11 +192,17 @@ def encode_movies(
         task = progress.add_task("Encoding movies", total=len(movies))
         for movie in movies:
             output_file = output_dir / movie.name
+            if output_file.exists():
+                log(f"Skipping '{movie.name}': output file already exists.")
+                progress.advance(task)
+                continue
             result = encode_file(movie, output_file)
             if result.success:
+                saved = result.saved_percent
+                change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
                 progress.console.print(
                     f"Encoded '{movie.name}': {result.input_size / (1024**3):.2f} GB -> "
-                    f"{result.output_size / (1024**3):.2f} GB ({result.saved_percent}% saved)"
+                    f"{result.output_size / (1024**3):.2f} GB ({change})"
                 )
             else:
                 log_error(f"Encoding '{movie.name}' failed: {result.error}")
