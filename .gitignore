@@ -41,3 +41,6 @@ venv/
 
 # Editors
 .idea/
+
+# test media (copyright, too large for git)
+testdata/
