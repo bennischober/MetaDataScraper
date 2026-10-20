@@ -369,6 +369,47 @@ def probe_crf(
     return min(scores)
 
 
+def estimate_size_factor(
+    samples: list[Path],
+    workdir: Path,
+    handbrake: str,
+    crf: int,
+    encoder: str,
+    encoder_preset: str,
+) -> float:
+    """Estimates the full-encode size relative to the source from one sample.
+
+    Encodes the first sample at the given CRF and returns the size ratio
+    (encoded / source). Values >= 1 mean the re-encode would not shrink the
+    file => the movie is a skip candidate.
+
+    Args:
+        samples (list[Path]): The sample files.
+        workdir (Path): Working directory for probe files.
+        handbrake (str): Path to the HandBrakeCLI binary.
+        crf (int): The CRF quality value to probe.
+        encoder (str): The video encoder, e.g. 'x265'.
+        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+
+    Returns:
+        float: The size ratio of the probe encode (encoded / sample source).
+
+    Raises:
+        RuntimeError: If the probe encode failed.
+    """
+    sample = samples[0]
+    encoded = workdir / f"size_probe_crf{crf}.mkv"
+    command = build_encode_command(handbrake, sample, encoded, crf, encoder, encoder_preset)
+    code, err = _run(command)
+    if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
+        raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
+    try:
+        factor = encoded.stat().st_size / sample.stat().st_size
+    finally:
+        encoded.unlink()
+    return factor
+
+
 def find_optimal_crf(
     movie: Path,
     workdir: Path,
@@ -412,6 +453,65 @@ def find_optimal_crf(
     chosen = bisect_crf(check, lo, hi)
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
     return chosen, achieved, probes
+
+
+def find_optimal_crf_and_skip(
+    movie: Path,
+    workdir: Path,
+    handbrake: str,
+    target_vmaf: float = DEFAULT_TARGET_VMAF,
+    crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
+    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    encoder: str = "x265",
+    encoder_preset: str = "medium",
+) -> tuple[int, float, list[SampleProbe], bool]:
+    """Finds the optimal CRF and predicts whether the encode is worthwhile.
+
+    Before the quality bisect, a single size probe estimates whether the
+    re-encode can shrink the file at all (e.g. an already-efficient HEVC
+    source may grow). For such titles the expensive search is skipped.
+
+    Args:
+        movie (Path): The source movie file.
+        workdir (Path): Working directory for samples and probes.
+        handbrake (str): Path to the HandBrakeCLI binary.
+        target_vmaf (float): The VMAF quality floor to meet.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
+        sample_count (int): The number of samples to probe.
+        sample_seconds (float): The length of each sample in seconds.
+        encoder (str): The video encoder, e.g. 'x265'.
+        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+
+    Returns:
+        tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
+            that is True when the movie should NOT be re-encoded.
+    """
+    samples = [s.resolve() for s in extract_samples(movie, workdir, sample_count, sample_seconds)]
+
+    # cheapest CRF (largest size) of the search range as the pessimistic bound
+    factor = estimate_size_factor(
+        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset
+    )
+    if factor >= 1.0:
+        log(
+            f"Skipping '{movie.name}': re-encode would not shrink it "
+            f"(probe factor {factor:.2f} at CRF {crf_range[1]})."
+        )
+        return crf_range[1], 0.0, [], True
+
+    chosen, achieved, probes = find_optimal_crf(
+        movie,
+        workdir,
+        handbrake,
+        target_vmaf=target_vmaf,
+        crf_range=crf_range,
+        sample_count=sample_count,
+        sample_seconds=sample_seconds,
+        encoder=encoder,
+        encoder_preset=encoder_preset,
+    )
+    return chosen, achieved, probes, False
 
 
 def encode_with_quality(
@@ -459,7 +559,7 @@ def encode_with_quality(
     workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
     try:
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes = find_optimal_crf(
+        crf, achieved, probes, skip = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
@@ -470,6 +570,17 @@ def encode_with_quality(
             encoder=encoder,
             encoder_preset=encoder_preset,
         )
+        if skip:
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                error="skipped: re-encode would not shrink the file",
+            )
         log(f"Chosen CRF {crf} (VMAF {achieved})")
 
         command = build_encode_command(

@@ -89,6 +89,11 @@ def probe_duration_seconds(path: Path) -> float | None:
         return None
 
 
+# files shorter than this are not treated as encodable movies (e.g. probe
+# samples, trailers, browser cache fragments) => skipped by encode_movies
+MIN_ENCODE_SECONDS = 300.0
+
+
 def durations_match(input_file: Path, output_file: Path) -> bool:
     """Checks that the encoded output has (almost) the input duration.
 
@@ -252,6 +257,14 @@ def encode_movies(
     with Progress() as progress:
         task = progress.add_task("Encoding movies", total=len(movies))
         for movie in movies:
+            duration = probe_duration_seconds(movie)
+            if duration is not None and duration < MIN_ENCODE_SECONDS:
+                log(
+                    f"Skipping '{movie.name}': duration {duration:.0f}s is below "
+                    f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
+                )
+                progress.advance(task)
+                continue
             output_file = output_dir / movie.name
             if output_file.exists() and not overwrite:
                 log(f"Skipping '{movie.name}': output file already exists.")
