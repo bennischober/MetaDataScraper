@@ -1,134 +1,111 @@
-# this script loads all the config data and ships it to the other scripts => provides default values
+# this module loads the config.json file and provides the settings to the other modules => provides default values
 import json
+from pathlib import Path
 from typing import Any
 
-Config: None | dict[str, Any] = None
+try:
+    from src.helper.logger import log_warning
+except ImportError:
+    from helper.logger import log_warning
 
-
-def read_config(root: str):
-    """Reads the config.json file and stores it in the global variable Config.
-
-    Args:
-        root (str): Root path of the project.
-    """
-    # get root path of project
-    with open(str(root) + '\\config.json', 'r', encoding="utf-8") as config:
-        test = json.load(config)
-
-    global Config
-    Config = test
-
-
-def check_config(root: str):
-    """Checks if the config is already loaded in the global space. If not, it will be loaded.
-
-    Args:
-        root (str): Root path of the project.
-    """
-    global Config
-    if Config == None:
-        read_config(root)
-
-
-def get_blackbar_settings(root: str):
-    """Returns the black bar settings from the config file.
-
-    Args:
-        root (str): Root path of the project.
-
-    Returns:
-        dict: Dictionary with the black bar settings.
-    """
-    # first of all check if config is in global space
-    check_config(root)
-
-    global Config
-
-    if Config != None:
-        # save access of values from config => instead of Config['ffmpeg']['black_bars']['MIN_WIDTH']
-        width = Config.get('ffmpeg', {}).get(
-            'black_bars', {}).get('MIN_WIDTH', None)
-        height = Config.get('ffmpeg', {}).get(
-            'black_bars', {}).get('MIN_HEIGHT', None)
-
-        # cast types of width and height
-        width = int(width) if width != None else None
-        height = int(height) if height != None else None
-
-        # returns a dict
-        return {'width': width, 'height': height}
-
-
-def get_codec(root: str):
-    """Returns the codec from the config file.
-
-    Args:
-        root (str): Root path of the project.
-
-    Returns:
-        str: Codec from the config file.
-    """
-    check_config(root)
-
-    global Config
-
-    return None if Config == None else Config.get('codec', None)
-
-    # if Config != None:
-    #     codec: dict[str, Any] = Config.get('codec', {})
-    #     print(type(codec['hdr']))
-
-    #     # returns a dict
-    #     return codec
+# fallback values if the config file is missing or a value is not set
+DEFAULT_EXTENSIONS = ['.mkv']
+DEFAULT_SEPARATOR = ';'
+DEFAULT_BLACK_BAR_MIN_WIDTH = 100
+DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
+DEFAULT_LANGUAGE = 'en'
 
 
 class Conf:
-    codec = None
-    extensions = None
-    ffmpeg = None
-    language = None
+    """Provides typed access to the config.json settings.
 
-    def __init__(self, root: str):
-        with open(str(root) + '\\config.json', 'r', encoding="utf-8") as config:
-            con: dict[str, Any] = json.load(config)
-            self.codec = con.get('codec', None)
-            self.extensions = con.get('file', {}).get('extensions', None)
-            self.ffmpeg = {'black_bars': {
-                'MIN_WIDTH': con.get('ffmpeg', {}).get('black_bars', {}).get('MIN_WIDTH', None),
-                'MIN_HEIGHT': con.get('ffmpeg', {}).get('black_bars', {}).get('MIN_HEIGHT', None)
-            }}
-            self.language = con.get('language', "en")
-    
+    All values fall back to sane defaults if they are missing in the config file.
+    """
+
+    def __init__(self, data: dict[str, Any] | None = None):
+        data = data or {}
+
+        # codec => hdr detection
+        codec: dict[str, Any] = data.get('codec') or {}
+        hdr: dict[str, Any] = codec.get('hdr') or {}
+        self.hdr_color_spaces: list[str] = hdr.get('color_space') or []
+        self.hdr_color_transfers: list[str] = hdr.get('color_transfer') or []
+
+        # file => extensions and output settings
+        file: dict[str, Any] = data.get('file') or {}
+        self.extensions: list[str] = file.get('extensions') or DEFAULT_EXTENSIONS
+        output: dict[str, Any] = file.get('output') or {}
+        self.separator: str = output.get('seperator', DEFAULT_SEPARATOR)
+
+        # ffmpeg => black bar detection
+        ffmpeg: dict[str, Any] = data.get('ffmpeg') or {}
+        black_bars: dict[str, Any] = ffmpeg.get('black_bars') or {}
+        self.black_bar_min_width: int = int(
+            black_bars.get('MIN_WIDTH', DEFAULT_BLACK_BAR_MIN_WIDTH))
+        self.black_bar_min_height: int = int(
+            black_bars.get('MIN_HEIGHT', DEFAULT_BLACK_BAR_MIN_HEIGHT))
+
+        self.language: str = data.get('language', DEFAULT_LANGUAGE)
+
     def print(self):
-        print(self.codec)
+        print(self.hdr_color_spaces)
+        print(self.hdr_color_transfers)
         print(self.extensions)
-        print(self.ffmpeg)
+        print(self.separator)
+        print(self.black_bar_min_width)
+        print(self.black_bar_min_height)
         print(self.language)
 
-    def get_codec(self):
-        return self.codec
-    
-    def get_extensions(self):
-        return self.extensions
-    
-    def get_ffmpeg(self):
-        return self.ffmpeg
 
-    def get_language(self):
-        return self.language
+_config: Conf | None = None
 
 
-def test_config(root: str):
+def load_config(root: str | Path | None = None) -> Conf:
+    """Loads the config.json file (once) and returns the settings.
+
+    If the config file does not exist, default values are used.
+
+    Args:
+        root (str | Path | None): Root path of the project.
+            Defaults to the project root (parent of the src directory).
+
+    Returns:
+        Conf: The config settings.
+    """
+    global _config
+    if _config is not None:
+        return _config
+
+    path = Path(root) if root else Path(__file__).parent.parent.parent
+    path = path / 'config.json'
+
+    data: dict[str, Any] = {}
+    if path.is_file():
+        with open(path, 'r', encoding='utf-8') as config:
+            data = json.load(config)
+    else:
+        log_warning(f"Config file not found at '{path}', using default values!")
+
+    _config = Conf(data)
+    return _config
+
+
+def test_config(root: str | Path):
+    """Checks if the config file exists and loads it.
+
+    Args:
+        root (str | Path): Root path of the project.
+
+    Returns:
+        dict: Dictionary with the 'status', 'message' and 'config' keys.
+    """
     msg = "Does not exist"
     status = "ERROR"
-    check_config(root)
-    if Config != None:
+    path = Path(root) / 'config.json'
+    if path.is_file():
         msg = "Does exist"
         status = "OK"
 
-    Conf(root).print()
+    conf = load_config(root)
 
-    return {'status': status, "message": msg}
-
-
-print(test_config('D:\\Projects\\Privat\\Other\\Python\\MetaDataScrapper'))
+    return {'status': status, 'message': msg, 'config': conf}
