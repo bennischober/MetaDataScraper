@@ -70,7 +70,7 @@ Python and package management: [uv](https://docs.astral.sh/uv/)
 ## Useful commands
 The CLI has two commands: ``scan`` (collect metadata) and ``encode`` (re-encode with HandBrake). Use ``--help`` on each for all options.
 
-``--csv`` generates a csv file of the processed data.
+``--csv`` generates a csv file of the processed data. The results are shown as a table in the console (disable with ``--no-table``).
 ```
 uv run metadata-scrapper scan 'path:\to\movie-root' --csv
 ```

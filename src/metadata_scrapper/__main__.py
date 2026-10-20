@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from metadata_scrapper.config import load_config
 from metadata_scrapper.helpers import (
@@ -273,6 +274,67 @@ def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = 
             writer.writerows(lines)
 
 
+def print_table(movies_by_category: dict, total_time, total_size: float):
+    """Prints the scanned movies as a rich table to the console.
+
+    Args:
+        movies_by_category (dict): Categories as keys and movie lists as values.
+        total_time (str | None): Total duration as 'HH:MM:SS' string.
+        total_size (float): Total size in GB.
+    """
+    table = Table(
+        title=f"Scanned {sum(len(m) for m in movies_by_category.values())} movies "
+        f"in {len(movies_by_category)} categories",
+        title_justify="left",
+        row_styles=["", "dim"],
+    )
+    table.add_column("Category", style="cyan", no_wrap=True, max_width=16)
+    table.add_column("Name", style="bold", max_width=28, overflow="ellipsis")
+    table.add_column("Duration", justify="right", no_wrap=True)
+    table.add_column("Size GB", justify="right", no_wrap=True)
+    table.add_column("GB/h", justify="right", no_wrap=True)
+    table.add_column("Codec", no_wrap=True)
+    table.add_column("Res", justify="center", no_wrap=True)
+    table.add_column("FPS", justify="right", no_wrap=True)
+    table.add_column("Bars", justify="center", no_wrap=True)
+    table.add_column("HDR", justify="center", no_wrap=True)
+
+    for category, movies in movies_by_category.items():
+        for index, movie in enumerate(movies):
+            dimensions = movie["dimensions"]
+            table.add_row(
+                category if index == 0 else "",
+                str(movie["name"]),
+                str(movie["duration"]),
+                f"{movie['size']:.2f}",
+                f"{movie['compression_rate']:.2f}",
+                str(movie["codec"]),
+                f"{dimensions['width']}x{dimensions['height']}",
+                str(movie["fps"]),
+                "yes" if movie["crop"] else "",
+                "yes" if movie["hdr"] else "",
+            )
+        # divider between categories
+        table.add_section()
+
+    # total row
+    table.add_row(
+        "",
+        "Total",
+        str(total_time),
+        f"{total_size:.2f}",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        style="bold green",
+    )
+
+    console.print(table)
+
+
 def print_summary(movies_by_category: dict, total_time, total_size: float):
     """Prints a summary of the scanned movies to the console.
 
@@ -313,6 +375,9 @@ def scan(
         min=0,
         help="Number of parallel workers (0 = automatic, 1 = sequential).",
     ),
+    no_table: bool = typer.Option(
+        False, "--no-table", help="Do not print the results as table to the console."
+    ),
 ):
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
@@ -323,6 +388,8 @@ def scan(
     if movies:
         total_time, total_size = _totals(movies_by_category)
         write_output(movies_by_category, total_time, total_size, config.separator, output_file)
+        if not no_table:
+            print_table(movies_by_category, total_time, total_size)
         print_summary(movies_by_category, total_time, total_size)
 
         if csv_output:
