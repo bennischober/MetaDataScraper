@@ -7,6 +7,8 @@
 
 # don't ignore config files
 !config.json
+!.devcontainer/devcontainer.json
+!.vscode/settings.json
 
 ## uv / python
 .venv/

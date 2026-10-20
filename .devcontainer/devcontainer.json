@@ -1,0 +1,33 @@
+{
+  "name": "MetaDataScraper",
+  "image": "mcr.microsoft.com/devcontainers/base:1.0-noble",
+  "features": {
+    "ghcr.io/devcontainers-extra/features/uv:1": {},
+    "ghcr.io/devcontainers-extra/features/apt-get-packages:1": {
+      "packages": "ffmpeg,handbrake-cli"
+    }
+  },
+  "postCreateCommand": "uv sync --dev",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "charliermarsh.ruff",
+        "ms-python.python",
+        "tamasfe.even-better-toml",
+        "editorconfig.editorconfig"
+      ],
+      "settings": {
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        }
+      }
+    }
+  },
+  "remoteEnv": {
+    "UV_LINK_MODE": "copy"
+  }
+}
