@@ -6,10 +6,11 @@
     - [Basic setup](#basic-setup)
     - [Install external dependencies](#install-external-dependencies)
         - [Automatically using the pip requirements file (requires pip!)](#automatically-using-the-pip-requirements-file-requires-pip)
-    - [Install MetaDataScraper](#install-metadatascraper)
+    - [Clone this repository](#clone-this-repository)
 - [How it works](#how-it-works)
 - [External dependencies](#external-dependencies)
 - [Useful commands](#useful-commands)
+- [Configuration](#configuration)
 - [Features for the future](#features-for-the-future)
 - [FAQ](#faq)
     - [Install the external dependencies manually](#install-the-external-dependencies-manually)
@@ -20,7 +21,7 @@ A short python script to get video meta data.\
 Notes:
 >This project uses Python 3.10
 
->This is an very early state of the tool. Many Null/None checks are missing and by now I´m only looking for .mkv files. These problems will be fixed in the future, but I don't have the time to address them currently.
+>Movie files are found by the extensions configured in [config.json](config.json) (by default `.mkv` and other common formats).
 
 ## Quickstart
 Usage: Run the main python script (main.py) with the root of you movies folder (e.g. 'D:\Movies') as parameter.\
@@ -34,18 +35,19 @@ python main.py 'path:\to\movie-root'
 The first steps are to install [Python](https://www.python.org/downloads/) (preffered the latest stable, currently 3.10), [FFmpeg](https://www.ffmpeg.org/download.html) ([short tutorial for windows](https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/)) and [pip](https://pypi.org/project/pip/).
 
 ### Install external dependencies
-### Clone this repository
-Run
-```
-git clone https://github.com/bennischober/MetaDataScraper.git
-```
 #### Automatically using the pip requirements file (requires pip!)
 ```
 pip install -r requirements.txt
 ```
 
+### Clone this repository
+Run
+```
+git clone https://github.com/bennischober/MetaDataScraper.git
+```
+
 ## How it works
-The scripts will search recursively for (by now .mkv) movie files. If the script found a movie file, it uses ``ffmpeg.probe()`` and looks specificly for its streams. If the return value is not ``None``, it proceeds to get all the meta data. Some of the data has to be calculated/created/converted, e.g the raw duration of the movie, the aspect ratio, the size of the movie file (convertion only) and the duration (convertion only).\
+The scripts will search recursively for movie files (extensions are configured in ``config.json``). If the script found a movie file, it uses ``ffmpeg.probe()`` and looks specificly for its streams. If the return value is not ``None``, it proceeds to get all the meta data. Some of the data has to be calculated/created/converted, e.g the raw duration of the movie, the aspect ratio, the size of the movie file (convertion only) and the duration (convertion only).\
 To detect black bars in the movie, we need to check some frames of the video by using a ``subprocess`` and using the ffmpeg ``cropdetect`` command. The output will checked against the codec data (using a threshold to be 100% sure, its not just some pixels that can be cut).\
 This is why we you need to install the ``ffmpeg-python`` package and the FFmpeg standalone tool.
 
@@ -62,9 +64,14 @@ Python package installer: [pip](https://pypi.org/project/pip/)
 python main.py 'path:\to\movie-root' -csv
 ```
 
+## Configuration
+The [config.json](config.json) file controls the behaviour of the tool:
+- ``file.extensions``: the movie file extensions to search for (e.g. `.mkv`, `.mp4`, `.avi`)
+- ``file.output.seperator``: the column separator of the `movies.txt` output file (default: `;`)
+- ``ffmpeg.black_bars``: `MIN_WIDTH`/`MIN_HEIGHT` threshold for the black bar (cropdetect) detection
+- ``language``: preferred language for metadata tags (e.g. `en`, `de`)
+
 ## Features for the future
-- config.json to change the settings (e.g. movie format, language, output, etc.)
-- support (almost) all common movie file formats
 - get missing meta data from external movie APIs, e.g. [OMDB API](http://www.omdbapi.com/) or [List](https://the-api-collective.com/category/media)
 
 ## FAQ
