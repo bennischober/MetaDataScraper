@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from metadata_scrapper import config as config_helper
-from metadata_scrapper import encode, helpers, quality
+from metadata_scrapper import db, encode, helpers, quality
 from metadata_scrapper import media as read_media
 
 
@@ -213,6 +213,99 @@ class TestEncode(unittest.TestCase):
             results = encode.encode_movies([Path("a.mkv")], out_dir)
             # skipped => no result recorded
             self.assertEqual(len(results), 0)
+
+
+class TestDb(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _record(self, path: str) -> db.MovieRecord:
+        return db.MovieRecord(path=Path(path), mtime=100.0, size=1000, name="test", category="Cat")
+
+    def test_connect_creates_schema(self):
+        tables = {
+            row["name"]
+            for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        self.assertIn("files", tables)
+        self.assertIn("encodes", tables)
+        self.assertIn("schema_version", tables)
+        version = self.connection.execute("SELECT version FROM schema_version").fetchone()
+        self.assertEqual(version["version"], db.SCHEMA_VERSION)
+
+    def test_upsert_and_cache(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "test.mkv"
+            file.write_bytes(b"x")
+            stat = file.stat()
+            record = db.MovieRecord(
+                path=file, mtime=stat.st_mtime, size=stat.st_size, name="test", category="Cat"
+            )
+            db.upsert_file(self.connection, record)
+
+            row = db.get_file_by_path(self.connection, file)
+            self.assertIsNotNone(row)
+            self.assertEqual(row["name"], "test")
+            # unchanged => valid cache entry
+            self.assertTrue(db.is_unchanged(row, file))
+            # changed size => invalid
+            file.write_bytes(b"more bytes than before")
+            self.assertFalse(db.is_unchanged(row, file))
+
+    def test_upsert_updates_existing(self):
+        record = self._record("D:/Movies/test.mkv")
+        file_id = db.upsert_file(self.connection, record)
+        record.name = "updated"
+        file_id2 = db.upsert_file(self.connection, record)
+        self.assertEqual(file_id, file_id2)
+        row = db.get_file_by_path(self.connection, Path("D:/Movies/test.mkv"))
+        self.assertEqual(row["name"], "updated")
+
+    def test_compute_hash(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "a.mkv"
+            file.write_bytes(b"A" * (2 * 1024 * 1024))
+            hash1 = db.compute_hash(file)
+            self.assertEqual(hash1, db.compute_hash(file))
+            # different content => different hash
+            file.write_bytes(b"B" * (2 * 1024 * 1024))
+            self.assertNotEqual(hash1, db.compute_hash(file))
+
+    def test_encode_history(self):
+        record = self._record("D:/Movies/test.mkv")
+        file_id = db.upsert_file(self.connection, record)
+        db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1000, 400, 60.0)
+
+        encodes = db.get_encodes_for_file(self.connection, file_id)
+        self.assertEqual(len(encodes), 1)
+        self.assertEqual(encodes[0]["preset"], "Fast 1080p30")
+        self.assertEqual(encodes[0]["saved_percent"], 60.0)
+
+    def test_prune_missing(self):
+        record1 = self._record("D:/Movies/a.mkv")
+        record2 = self._record("D:/Movies/b.mkv")
+        id1 = db.upsert_file(self.connection, record1)
+        db.upsert_file(self.connection, record2)
+        db.add_encode(self.connection, id1, "p", "x265", 1, 1, 0.0)
+
+        # prune with the stored path strings (Path normalizes the separators)
+        existing = {str(Path("D:/Movies/a.mkv"))}
+        deleted = db.prune_missing(self.connection, existing)
+        self.assertEqual(deleted, 1)
+        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
+        # encodes of surviving files are still there
+        self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
 
 
 class TestMain(unittest.TestCase):

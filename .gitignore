@@ -5,6 +5,9 @@
 # ignore helper output
 *.json
 
+# sqlite database
+*.db
+
 # don't ignore config files
 !config.json
 !.devcontainer/devcontainer.json

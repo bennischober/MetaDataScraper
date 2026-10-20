@@ -75,12 +75,17 @@ The CLI has two commands: ``scan`` (collect metadata) and ``encode`` (re-encode 
 uv run metadata-scrapper scan 'path:\to\movie-root' --csv
 ```
 
+Scans are cached in a small sqlite database (``metadata.db`` in the current directory, changeable with ``--db``): unchanged files (same mtime and size) are not probed again => repeated scans are much faster. Use ``--rescan`` to force a full re-probe and ``--hash`` to store a fast content hash (first/last MB) for new/changed files.
+
+``--workers N`` controls how many movies are scanned in parallel (default: automatic, ``1`` = sequential).
+
 ## Re-encoding with HandBrake
 With the ``encode`` command the found movies are re-encoded with HandBrake into an output directory (smaller file size at almost the same quality). Audio and subtitle tracks are kept as-is, the video is encoded with the configured preset/encoder (see [Configuration](#configuration)).\
 Preview what would be encoded with ``--dry-run``:
 ```
 uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --dry-run
 ```
+Every successful encode is recorded in the sqlite database (preset, encoder, sizes, saved percentage). Movies that were already encoded are skipped on the next run (disable with ``--overwrite``).
 
 ## Configuration
 The [config.json](config.json) file controls the behaviour of the tool:
