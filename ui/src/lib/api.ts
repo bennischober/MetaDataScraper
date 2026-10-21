@@ -42,6 +42,14 @@ export interface Status {
   database: string
 }
 
+export interface Config {
+  codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
+  file?: { extensions?: string[]; output?: { seperator?: string } }
+  ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number } }
+  handbrake?: { preset?: string; encoder?: string }
+  language?: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -59,6 +67,9 @@ export const api = {
   library: () => request<Movie[]>('/api/library'),
   jobs: (limit = 50) => request<Job[]>(`/api/jobs?limit=${limit}`),
   job: (id: number) => request<Job>(`/api/jobs/${id}`),
+  config: () => request<Config>('/api/config'),
+  saveConfig: (config: Config) =>
+    request<Config>('/api/config', { method: 'PUT', body: JSON.stringify(config) }),
   enqueue: (body: {
     kind: JobKind
     path: string

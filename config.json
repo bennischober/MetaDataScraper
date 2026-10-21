@@ -1,8 +1,12 @@
 {
   "codec": {
     "hdr": {
-      "color_space": ["bt2020nc"],
-      "color_transfer": ["smpte2084"]
+      "color_space": [
+        "bt2020nc"
+      ],
+      "color_transfer": [
+        "smpte2084"
+      ]
     }
   },
   "file": {
@@ -21,8 +25,6 @@
       ".mpeg",
       ".mpe",
       ".mpv",
-      ".mpg",
-      ".mpeg",
       ".svi",
       ".wmv"
     ],

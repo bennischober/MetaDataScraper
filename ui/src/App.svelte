@@ -5,6 +5,7 @@
   import ZoneRamp from './lib/ZoneRamp.svelte'
   import JobSheet from './lib/JobSheet.svelte'
   import LibraryTable from './lib/LibraryTable.svelte'
+  import Settings from './lib/Settings.svelte'
 
   let status: Status | null = $state(null)
   let movies: Movie[] = $state([])
@@ -12,6 +13,7 @@
   let error = $state<string | null>(null)
   let busy = $state(false)
   let showPlans = $state(false)
+  let showSettings = $state(false)
 
   // persisted defaults (recognition over recall)
   let scanPath = $state(localStorage.getItem('ms.path') ?? 'D:\\Movies')
@@ -281,7 +283,11 @@
     {/if}
 
     <!-- library -->
-    <LibraryTable {movies} />
+    <LibraryTable {movies} onsettings={() => (showSettings = true)} />
+
+    {#if showSettings}
+      <Settings onclose={() => (showSettings = false)} />
+    {/if}
   </div>
 </div>
 
