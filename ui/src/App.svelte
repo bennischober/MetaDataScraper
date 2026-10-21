@@ -170,6 +170,11 @@
     await enqueue(job.kind)
   }
 
+  function dismissFailed(id: number | null) {
+    if (id === null) return
+    dismissed = new Set([...dismissed, id])
+  }
+
   onMount(() => {
     refresh()
     refreshDuplicates()
@@ -184,7 +189,13 @@
   const runningJobs = $derived(
     history.filter((j) => j.state === 'running' || j.state === 'queued')
   )
-  const failedJobs = $derived(history.filter((j) => j.state === 'failed').slice(0, 3))
+  const failedJobs = $derived(
+    history
+      .filter((j) => j.state === 'failed' && !dismissed.has(j.id ?? -1))
+      .slice(0, 3)
+  )
+  // dismissed failures of this browser session (the db keeps the history)
+  let dismissed = $state<Set<number>>(new Set())
 
   // duplicate count for the toolbar badge (fetched with the status refresh)
   let dupCount = $state(0)
@@ -224,11 +235,12 @@
       {/each}
     </div>
 
-    <!-- failed jobs with recovery -->
+    <!-- failed jobs with recovery (dismissable per session) -->
     {#each failedJobs as job (job.id)}
       <div class="failed-row">
         <span class="mono bad">#{job.id} {job.kind} failed</span>
         <span class="mono dim error-text">{job.error}</span>
+        <button class="retry mono" onclick={() => dismissFailed(job.id)}>DISMISS</button>
         <button class="retry mono" onclick={() => retryJob(job)}>RETRY</button>
       </div>
     {/each}
