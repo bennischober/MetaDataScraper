@@ -346,8 +346,9 @@ def scan_movies(
                 continue
             record = movie_record_from_data(movies[index], result)
             db.upsert_file(connection, record)
-        # remove files that are no longer on disk
-        pruned = db.prune_missing(connection, {str(m) for m in movies})
+        # remove files that are no longer on disk (only inside the scanned
+        # root: other roots in the database keep their history)
+        pruned = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
         if pruned:
             log(f"Removed {pruned} missing movies from the database.")
 

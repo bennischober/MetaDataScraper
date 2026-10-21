@@ -378,6 +378,30 @@ class TestDb(unittest.TestCase):
         # encodes of surviving files are still there
         self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
 
+    def test_prune_missing_scoped(self):
+        # a scan of one root must not wipe the history of files outside it
+        id_inside = db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
+        db.add_encode(self.connection, id_inside, "p", "x265", 1, 1, 0.0)
+        id_outside = db.upsert_file(self.connection, self._record("E:/Other/b.mkv"))
+        db.add_encode(self.connection, id_outside, "p", "x265", 2, 1, 50.0)
+
+        # scan of D:/Movies finds only a.mkv, scope limits pruning to that root
+        existing = {str(Path("D:/Movies/a.mkv"))}
+        deleted = db.prune_missing(self.connection, existing, scope="D:/Movies")
+        self.assertEqual(deleted, 0)  # b.mkv is outside the scope => kept
+        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("E:/Other/b.mkv")))
+        self.assertEqual(len(db.get_encodes_for_file(self.connection, id_outside)), 1)
+
+        # a.mkv is inside the scope and on disk => kept as well
+        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv")))
+
+        # a file inside the scope that vanished is pruned
+        id_gone = db.upsert_file(self.connection, self._record("D:/Movies/gone.mkv"))
+        deleted = db.prune_missing(self.connection, existing, scope="D:/Movies")
+        self.assertEqual(deleted, 1)
+        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/gone.mkv")))
+        _ = id_gone
+
 
 class TestMain(unittest.TestCase):
     def test_get_category(self):

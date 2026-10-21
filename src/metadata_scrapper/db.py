@@ -375,20 +375,34 @@ def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[s
     ).fetchall()
 
 
-def prune_missing(connection: sqlite3.Connection, existing_paths: set[str]) -> int:
+def prune_missing(
+    connection: sqlite3.Connection,
+    existing_paths: set[str],
+    scope: str | None = None,
+) -> int:
     """Deletes file rows (and their encodes) that are no longer on disk.
+
+    Without a scope, only rows inside the given scope directory are
+    considered: a scan of one folder must never delete the history of files
+    stored elsewhere (e.g. a scan of testdata/movies_two would otherwise
+    wipe the records of testdata/movies).
 
     Args:
         connection (sqlite3.Connection): The database connection.
         existing_paths (set[str]): Paths that are still on disk.
+        scope (str | None): Only prune rows under this directory path.
 
     Returns:
         int: Number of deleted rows.
     """
     rows = connection.execute("SELECT id, path FROM files").fetchall()
+    scope_normalized = str(Path(scope)) if scope is not None else None
     deleted = 0
     for row in rows:
-        if row["path"] not in existing_paths:
+        path = row["path"]
+        if scope_normalized is not None and not path.startswith(scope_normalized):
+            continue
+        if path not in existing_paths:
             connection.execute("DELETE FROM encodes WHERE file_id = ?", (row["id"],))
             connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
             deleted += 1
