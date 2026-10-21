@@ -1,162 +1,233 @@
+<div align="center">
+
 # MetaDataScraper
-### Table of contents
-- [Overview](#overview)
-- [Quickstart](#quickstart)
-- [How to install](#how-to-install)
-    - [Basic setup](#basic-setup)
-    - [Install with uv](#install-with-uv)
-- [How it works](#how-it-works)
-- [External dependencies](#external-dependencies)
-- [Useful commands](#useful-commands)
-- [Re-encoding with HandBrake](#re-encoding-with-handbrake)
-- [Configuration](#configuration)
-- [Development](#development)
-    - [Devcontainer](#devcontainer)
-    - [Tests and linting](#tests-and-linting)
-- [Features for the future](#features-for-the-future)
-- [FAQ](#faq)
-- [Additional ressources](#additional-ressources)
 
-## Overview
-A short python script to get video meta data.\
-Notes:
->This project uses Python 3.15 (managed with [uv](https://docs.astral.sh/uv/), older versions >= 3.10 work too)
+**Scan your movie library — then shrink it without losing quality.**
 
->Movie files are found by the extensions configured in [config.json](config.json) (by default `.mkv` and other common formats).
+A Python CLI that catalogs video metadata and re-encodes your library with
+Netflix-style, quality-measured encoding: smallest files that are still
+perceptually transparent.
+
+[![CI](https://github.com/bennischober/MetaDataScraper/actions/workflows/ci.yml/badge.svg)](https://github.com/bennischober/MetaDataScraper/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/bennischober/MetaDataScraper/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/bennischober/MetaDataScraper/actions/workflows/codeql-analysis.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://docs.astral.sh/uv/)
+[![GitHub release](https://img.shields.io/github/v/release/bennischober/MetaDataScraper)](https://github.com/bennischober/MetaDataScraper/releases)
+
+</div>
+
+---
+
+## What does it do?
+
+**`scan`** walks your movie folders and catalogs every file: duration, codecs,
+resolution, FPS, audio languages, HDR detection, black-bar detection — cached
+in a sqlite database, so repeated scans are near-instant.
+
+**`encode`** re-encodes your library with HandBrake to save disk space. The
+default mode uses a fixed preset. The **quality mode** is where it gets
+interesting:
+
+> **Fix quality, not bitrate.** For every movie, short samples are probed at
+> different CRF values, each probe is scored with [VMAF](https://github.com/Netflix/vmaf)
+> (Netflix's Emmy-winning perceptual quality metric), and a binary search finds
+> the *largest* CRF that stays visually transparent — then the movie is encoded
+> once with exactly that setting.
+
+Measured on real content (target VMAF 95, x265):
+
+| Movie | Content | Result | Saved |
+|---|---|---|---|
+| Django Unchained (PAL DVD) | grainy live action | CRF 19, VMAF 95.25, letterbox bars removed | **64 %** |
+| Bloodshot (alt. ending) | 1080p live action | CRF 20, VMAF 95.76 | **73 %** |
+| Rick & Morty S01E01 | already-efficient HEVC | skipped — target unreachable | *(correctly)* |
+
+Nothing is guessed: every decision is measured, recorded in the database, and
+movies that cannot profit (already efficient sources) are skipped — not
+wasted.
 
 ## Quickstart
-Usage: run the ``scan`` command with the root of your movies folder (e.g. 'D:\Movies') as parameter.\
-Execute this command in the ``Windows Terminal``, ``CMD`` or any shell:
-```
-uvx metadata-scrapper scan 'path:\to\movie-root'
-```
-or, from a cloned repository:
-```
-uv run metadata-scrapper scan 'path:\to\movie-root'
+
+```bash
+# scan a movie library
+uvx metadata-scrapper scan 'D:\Movies'
+
+# shrink it (quality-measured, black bars removed)
+uvx metadata-scrapper encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
 ```
 
-## How to install
-### Basic setup
-The first steps are to install [uv](https://docs.astral.sh/uv/getting-started/installation/) (manages Python and all dependencies), [FFmpeg](https://www.ffmpeg.org/download.html) ([short tutorial for windows](https://www.geeksforgeeks.org/how-to-install-ffmpeg-on-windows/)) and, optionally, [HandBrake CLI](https://handbrake.fr/downloads.php) for re-encoding.
+> [!TIP]
+> Preview anything without writing files by adding `--dry-run`.
 
-### Install with uv
-Clone this repository:
+## Installation
+
+<details>
+<summary><strong>Option A — run directly from GitHub (no clone)</strong></summary>
+
+```bash
+uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper scan 'D:\Movies'
 ```
+
+</details>
+
+<details>
+<summary><strong>Option B — clone the repository</strong></summary>
+
+```bash
 git clone https://github.com/bennischober/MetaDataScraper.git
-```
-Install and run:
-```
+cd MetaDataScraper
 uv sync
-uv run metadata-scrapper scan 'path:\to\movie-root'
+uv run metadata-scrapper scan 'D:\Movies'
 ```
-Or run it directly from GitHub without cloning:
-```
-uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper scan 'path:\to\movie-root'
-```
+
+</details>
+
+### Prerequisites
+
+| Tool | Needed for | Install |
+|---|---|---|
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python & dependencies (manages everything else) | `winget install astral-sh.uv` |
+| [FFmpeg](https://www.ffmpeg.org/download.html) | scanning, bar detection, VMAF scoring (GPL build on Windows) | `winget install Gyan.FFmpeg` |
+| [HandBrake CLI](https://handbrake.fr/downloads.php) | re-encoding (optional) | `winget install HandBrake.HandBrake` |
 
 ## How it works
-The scripts will search recursively for movie files (extensions are configured in ``config.json``). If the script found a movie file, it uses ``ffprobe`` and looks specificly for its streams. If the return value is not ``None``, it proceeds to get all the meta data. Some of the data has to be calculated/created/converted, e.g the raw duration of the movie, the aspect ratio, the size of the movie file (convertion only) and the duration (convertion only).\
-To detect black bars in the movie, we need to check some frames of the video by using a ``subprocess`` and using the ffmpeg ``cropdetect`` command. The output will checked against the codec data (using a threshold to be 100% sure, its not just some pixels that can be cut).\
-This is why we you need to install the FFmpeg standalone tools (``ffmpeg`` and ``ffprobe``).
 
-## External dependencies
+1. **Discovery** — the library is walked recursively for configured extensions
+   (`config.json`), with the output directory always excluded.
+2. **Metadata** — `ffprobe` extracts stream details; duration, aspect ratio and
+   size are computed and cached (unchanged files skip probing entirely).
+3. **Black-bar detection** — `cropdetect` samples several segments per movie;
+   a threshold keeps noise pixels from being mistaken for bars.
+4. **Quality search** *(quality mode)* — three 10-second samples are encoded at
+   different CRF values and scored with VMAF against their source; a binary
+   search converges on the largest CRF that still meets the quality floor.
+5. **Encode & verify** — the full movie is encoded once with the winning CRF;
+   the output duration is verified against the source to catch interrupted
+   encodes.
 
-Meta data detection: [ffmpeg](https://www.ffmpeg.org/) (``ffmpeg``/``ffprobe`` binaries)\
-Black bar detection: [ffmpeg](https://www.ffmpeg.org/)\
-Re-encoding (optional): [HandBrake CLI](https://handbrake.fr/)\
-Loading bar and CLI output: [rich](https://github.com/Textualize/rich)\
-CLI framework: [typer](https://typer.tiangolo.com/)\
-Logging: [loguru](https://github.com/Delgan/loguru)\
-Python and package management: [uv](https://docs.astral.sh/uv/)
+## Commands
 
-## Useful commands
-The CLI has two commands: ``scan`` (collect metadata) and ``encode`` (re-encode with HandBrake). Use ``--help`` on each for all options.
+### `scan` — catalog your library
 
-``--csv`` generates a csv file of the processed data. The results are shown as a table in the console (disable with ``--no-table``).
-```
-uv run metadata-scrapper scan 'path:\to\movie-root' --csv
-```
-
-Scans are cached in a small sqlite database (``metadata.db`` in the current directory, changeable with ``--db``): unchanged files (same mtime and size) are not probed again => repeated scans are much faster. Use ``--rescan`` to force a full re-probe and ``--hash`` to store a fast content hash (first/last MB) for new/changed files.
-
-``--workers N`` controls how many movies are scanned in parallel (default: automatic, ``1`` = sequential).
-
-## Re-encoding with HandBrake
-With the ``encode`` command the found movies are re-encoded with HandBrake into an output directory (smaller file size at almost the same quality). Audio and subtitle tracks are kept as-is, the video is encoded with the configured preset/encoder (see [Configuration](#configuration)).\
-Preview what would be encoded with ``--dry-run``:
-```
-uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --dry-run
-```
-Every successful encode is recorded in the sqlite database (preset, encoder, sizes, saved percentage). Movies that were already encoded are skipped on the next run (disable with ``--overwrite``).
-
-## Quality-driven re-encoding (`--quality`)
-The fixed preset uses the same quality setting for every movie. With ``--quality`` the tool instead measures each movie and picks the largest CRF that keeps the picture perceptually transparent (VMAF >= target, measured with Netflix's [VMAF](https://github.com/Netflix/vmaf) via ffmpeg):
-
-```
-uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --quality --remove-bars --target-vmaf 95
+```bash
+uv run metadata-scrapper scan 'D:\Movies' --csv
 ```
 
-How it works per movie:
-1. Three 10-second samples are extracted and re-encoded by HandBrake at different CRF values (binary search).
-2. Each probe is scored against its source with VMAF; the largest CRF whose worst sample still meets the target wins.
-3. The whole movie is encoded once with that CRF; the output duration is verified against the source.
+| Option | Effect |
+|---|---|
+| `--csv` | additionally write the results as a CSV file |
+| `--output / -o` | path of the output file |
+| `--workers / -w N` | parallel workers (`0` = auto, `1` = sequential) |
+| `--no-table` | skip the console table |
+| `--rescan` | force a full re-probe, ignoring the cache |
+| `--hash` | store a fast content hash (first/last MB) |
 
-Measured on real content (ffmpeg 9, x265 medium, target VMAF 95):
+Scans are cached in `metadata.db` (sqlite): unchanged files (same mtime and
+size) are not probed again — repeated scans are much faster.
 
-| Movie | Content | Result | Savings |
-|---|---|---|---|
-| Django Unchained (PAL DVD rip) | grainy live action | CRF 19, VMAF 95.25, bars removed | 64% |
-| Bloodshot alternate ending | 1080p live action | CRF 20, VMAF 95.76 | 73% |
-| Rick & Morty S01E01 | already-efficient HEVC | skipped: target unreachable | 0% (correctly) |
+### `encode` — shrink your library
 
-Notes:
-- Movies whose target is provably unreachable (even CRF 14 scores below the floor) or that would not shrink are skipped and remembered in the database, so future runs do not re-probe them.
-- ``--remove-bars`` detects stable baked-in black bars (letterbox) and crops them away (irreversible, opt-in): cropdetect runs on several segments and only bars present in all of them are removed.
-- Absolute VMAF scores differ between libvmaf versions (the same encode scored 95.76 on ffmpeg 5 and 94.40 on ffmpeg 9); decisions stay consistent because the probing measures and decides with the local toolchain.
+```bash
+# fixed preset (fast, predictable)
+uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded'
+
+# quality-measured (smaller, transparent, slower)
+uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded' --quality
+
+# with options
+uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded' \
+    --quality --remove-bars --target-vmaf 95 --encoder x265
+```
+
+| Option | Effect |
+|---|---|
+| `--quality` | VMAF-driven CRF search per movie (see above) |
+| `--target-vmaf N` | quality floor for quality mode (default: `95`) |
+| `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
+| `--dry-run` | show what would be encoded, without encoding |
+| `--overwrite` | re-encode even if the output already exists |
+
+**Batch-safe:** every finished encode is recorded, so an interrupted run skips
+its completed work on the next start. Movies whose quality target is provably
+unreachable (e.g. already-efficient HEVC) or that would not shrink are skipped
+and remembered — future runs do not re-probe them.
+
+> [!NOTE]
+> VMAF scores are only comparable within the same libvmaf version: the same
+> encode scored 95.76 on ffmpeg 5 (libvmaf v2) and 94.40 on ffmpeg 9 (libvmaf v3).
+> Decisions stay consistent because probing measures and decides with the local
+> toolchain.
 
 ## Configuration
-The [config.json](config.json) file controls the behaviour of the tool:
-- ``file.extensions``: the movie file extensions to search for (e.g. `.mkv`, `.mp4`, `.avi`)
-- ``file.output.seperator``: the column separator of the `movies.txt` output file (default: `;`)
-- ``ffmpeg.black_bars``: `MIN_WIDTH`/`MIN_HEIGHT` threshold for the black bar (cropdetect) detection
-- ``handbrake.preset``: HandBrake preset for re-encoding (default: `Fast 1080p30`)
-- ``handbrake.encoder``: HandBrake video encoder (default: `x265`)
-- ``codec.hdr``: color space/transfer values that identify HDR content
-- ``language``: preferred language for metadata tags (e.g. `en`, `de`)
+
+Optional [config.json](config.json) (defaults are used when missing):
+
+```jsonc
+{
+    "file": {
+        "extensions": [".mkv"],
+        "output": { "seperator": ";" }
+    },
+    "ffmpeg": {
+        "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }
+    },
+    "handbrake": {
+        "preset": "Fast 1080p30",   // fixed-mode preset
+        "encoder": "x265"
+    },
+    "codec": { "hdr": { "color_space": [], "color_transfer": [] } },
+    "language": "en"
+}
+```
 
 ## Development
-### Devcontainer
-A [devcontainer](.devcontainer/devcontainer.json) is included (Ubuntu with uv, ffmpeg and handbrake-cli). Open the repository in VS Code and reopen in the container => everything is installed automatically.
 
-### Tests and linting
-```
-uv run pytest          # run the tests (with coverage report)
+A [devcontainer](.devcontainer/devcontainer.json) is included (Ubuntu with uv,
+ffmpeg and handbrake-cli) — open in VS Code and reopen in the container.
+
+```bash
+uv run pytest          # tests (with coverage report)
 uv run ruff check .    # lint
 uv run ruff format .   # format
 uv run mypy            # static type checking
 ```
 
-### Releasing
-Releases are automated: push a tag and the release workflow builds the package and publishes a GitHub release (after running ruff, mypy and the tests):
-```
-git tag v0.2.1
-git push origin v0.2.1
-```
+Releases are automated: push a tag, the workflow checks, builds and publishes.
 
-
-## Features for the future
-- get missing meta data from external movie APIs, e.g. [OMDB API](http://www.omdbapi.com/) or [List](https://the-api-collective.com/category/media)
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
 
 ## FAQ
-- The command ``python``/``uv`` does not work in the command prompt. [Have a look at this.](https://stackoverflow.com/a/13596981)
-- "No such filter: 'cropdetect'...". On Windows: Make sure you installed the gpl version of [ffmpeg](https://github.com/BtbN/FFmpeg-Builds/releases). On Linux/UNIX [this might help](http://ffmpeg.org/pipermail/ffmpeg-user/2015-October/028753.html)
-- "'HandBrakeCLI' not found!": Install [HandBrake CLI](https://handbrake.fr/downloads.php) and make sure it is in your ``PATH``.
 
-## Additional ressources
-[FFmpeg Documentation](https://ffmpeg.org/ffmpeg.html)\
-[How the black bar detection works](https://ffmpeg.org/ffmpeg-filters.html#cropdetect)\
-[HandBrake CLI options](https://handbrake.fr/docs/en/latest/cli/cli-options.html)\
-[rich Documentation](https://rich.readthedocs.io/)\
-[typer Documentation](https://typer.tiangolo.com/)\
-[loguru Documentation](https://loguru.readthedocs.io/)\
-[uv Documentation](https://docs.astral.sh/uv/)
+<details>
+<summary><code>python</code>/<code>uv</code> is not found in the command prompt</summary>
+
+Your PATH is missing the install location — [see this answer](https://stackoverflow.com/a/13596981).
+</details>
+
+<details>
+<summary><code>No such filter: 'cropdetect'</code></summary>
+
+On Windows you need the **GPL build** of
+[ffmpeg](https://github.com/BtbN/FFmpeg-Builds/releases) (the LGPL build lacks
+the filter). On Linux/UNIX [this might help](http://ffmpeg.org/pipermail/ffmpeg-user/2015-October/028753.html).
+</details>
+
+<details>
+<summary><code>'HandBrakeCLI' not found!</code></summary>
+
+Install [HandBrake CLI](https://handbrake.fr/downloads.php) and make sure it is
+on your `PATH` (the tool also checks the default install locations).
+</details>
+
+## Resources
+
+- [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html) ·
+  [cropdetect filter](https://ffmpeg.org/ffmpeg-filters.html#cropdetect) ·
+  [libvmaf](https://github.com/Netflix/vmaf)
+- [HandBrake CLI options](https://handbrake.fr/docs/en/latest/cli/cli-options.html)
+- [typer](https://typer.tiangolo.com/) ·
+  [rich](https://rich.readthedocs.io/) ·
+  [loguru](https://loguru.readthedocs.io/) ·
+  [uv](https://docs.astral.sh/uv/)
