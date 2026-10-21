@@ -56,6 +56,9 @@ class Job:
     state: JobState = JobState.QUEUED
     result: dict | None = None
     error: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
 
     def to_dict(self) -> dict:
         """Returns the job as a JSON-able dictionary (for the API/UI).
@@ -70,6 +73,9 @@ class Job:
             "state": self.state.value,
             "result": self.result,
             "error": self.error,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
 
 
@@ -89,6 +95,9 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         state=JobState(row["state"]),
         result=json.loads(row["result"]) if row["result"] else None,
         error=row["error"],
+        created_at=row["created_at"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
     )
 
 
@@ -158,6 +167,24 @@ class JobQueue:
         )
         self._connection.commit()
         return job
+
+    def report_progress(self, job: Job, progress: dict):
+        """Updates a running job's live progress (visible to API consumers).
+
+        The progress dict is stored in the job's result column with a
+        'progress' wrapper so the UI can render live state without the job
+        being finished. Only the worker thread calls this.
+
+        Args:
+            job (Job): The running job.
+            progress (dict): The current progress data (JSON-able).
+        """
+        job.result = {"progress": progress}
+        self._connection.execute(
+            "UPDATE jobs SET result = ? WHERE id = ?",
+            (json.dumps(job.result), job.id),
+        )
+        self._connection.commit()
 
     def finish(self, job: Job, result: dict):
         """Marks a job as done and stores its result.
@@ -289,13 +316,14 @@ class JobQueue:
         return _row_to_job(row) if row is not None else None
 
 
-def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
     """Executes a scan job.
 
     Args:
         job (Job): The job (payload: path, workers, rescan, hash, exclude).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
+        progress (callable | None): Callback progress(dict) for live updates.
 
     Returns:
         dict: The scan summary.
@@ -306,6 +334,8 @@ def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     payload = job.payload
     if cancel.is_set():
         return {"cancelled": True}
+    if progress:
+        progress({"stage": "scan", "detail": "scanning library"})
 
     config = load_config()
     by_category, movies, errors = scan_movies(
@@ -325,13 +355,14 @@ def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     }
 
 
-def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
     """Executes a plan job (probing only, no encodes).
 
     Args:
         job (Job): The job (payload: path, target_vmaf, remove_bars).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
+        progress (callable | None): Callback progress(dict) for live updates.
 
     Returns:
         dict: The per-movie plan summary.
@@ -345,10 +376,21 @@ def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     _, movies, _ = scan_movies(Path(payload["path"]), config, connection=connection)
 
     plans: list[dict] = []
-    for movie in movies:
+    total = len(movies)
+    for index, movie in enumerate(movies):
         if cancel.is_set():
             plans.append({"movie": movie.name, "state": "cancelled"})
             continue
+        if progress:
+            progress(
+                {
+                    "stage": "probe",
+                    "detail": f"probing {movie.name}",
+                    "done": index,
+                    "total": total,
+                    "movie": movie.name,
+                }
+            )
         try:
             result = plan_quality(
                 movie,
@@ -373,7 +415,7 @@ def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     return {"plans": plans, "cancelled": cancel.is_set()}
 
 
-def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
     """Executes an encode job (quality or fixed mode).
 
     Args:
@@ -381,6 +423,7 @@ def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.E
             remove_bars, overwrite, workers).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
+        progress (callable | None): Callback progress(dict) for live updates.
 
     Returns:
         dict: The per-movie outcome summary.
@@ -403,17 +446,28 @@ def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.E
     )
 
     outcomes: list[dict] = []
+    total = len(movies)
     if payload.get("quality", False):
         encoded_paths: set[str] = (
             set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
         )
-        for movie in movies:
+        for index, movie in enumerate(movies):
             if cancel.is_set():
                 outcomes.append({"movie": movie.name, "state": "cancelled"})
                 continue
             if str(movie) in encoded_paths:
                 outcomes.append({"movie": movie.name, "state": "already_encoded"})
                 continue
+            if progress:
+                progress(
+                    {
+                        "stage": "probe",
+                        "detail": f"probing {movie.name}",
+                        "done": index,
+                        "total": total,
+                        "movie": movie.name,
+                    }
+                )
             result = encode_with_quality(
                 movie,
                 output_dir / movie.name,
@@ -436,7 +490,19 @@ def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.E
                 "error": result.error,
             }
             outcomes.append(entry)
+            if progress:
+                progress(
+                    {
+                        "stage": "encode",
+                        "detail": f"{movie.name}: {entry['state']}",
+                        "done": index + 1,
+                        "total": total,
+                        "movie": movie.name,
+                    }
+                )
     else:
+        if progress:
+            progress({"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total})
         results = encode_movies(
             movies,
             output_dir,
@@ -518,13 +584,19 @@ class JobWorker:
             return
         cancel = threading.Event()
         self.queue.register_cancel_event(job.id, cancel)
+
+        def progress(data: dict):
+            """Persists live progress for the API/UI (worker thread only)."""
+            if not cancel.is_set():
+                self.queue.report_progress(job, data)
+
         try:
             if job.kind == JobKind.SCAN:
-                result = execute_scan(job, self.connection, cancel)
+                result = execute_scan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.PLAN:
-                result = execute_plan(job, self.connection, cancel)
+                result = execute_plan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.ENCODE:
-                result = execute_encode(job, self.connection, cancel)
+                result = execute_encode(job, self.connection, cancel, progress=progress)
             else:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return
