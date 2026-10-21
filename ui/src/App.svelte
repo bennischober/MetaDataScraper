@@ -6,6 +6,7 @@
   import JobSheet from './lib/JobSheet.svelte'
   import LibraryTable from './lib/LibraryTable.svelte'
   import Settings from './lib/Settings.svelte'
+  import Duplicates from './lib/Duplicates.svelte'
 
   let status: Status | null = $state(null)
   let movies: Movie[] = $state([])
@@ -13,6 +14,7 @@
   let error = $state<string | null>(null)
   let busy = $state(false)
   let showSettings = $state(false)
+  let showDuplicates = $state(false)
 
   // result panels: always present, collapsible, visibility from data (never
   // from a hidden flag that a reload forgets)
@@ -170,14 +172,30 @@
 
   onMount(() => {
     refresh()
+    refreshDuplicates()
     const timer = setInterval(refresh, 3000)
-    return () => clearInterval(timer)
+    const dupTimer = setInterval(refreshDuplicates, 30000)
+    return () => {
+      clearInterval(timer)
+      clearInterval(dupTimer)
+    }
   })
 
   const runningJobs = $derived(
     history.filter((j) => j.state === 'running' || j.state === 'queued')
   )
   const failedJobs = $derived(history.filter((j) => j.state === 'failed').slice(0, 3))
+
+  // duplicate count for the toolbar badge (fetched with the status refresh)
+  let dupCount = $state(0)
+  async function refreshDuplicates() {
+    try {
+      const groups = await fetch('/api/duplicates').then((r) => r.json())
+      dupCount = groups.length
+    } catch {
+      dupCount = 0
+    }
+  }
 </script>
 
 <div class="app">
@@ -372,10 +390,18 @@
     {/if}
 
     <!-- library -->
-    <LibraryTable {movies} onsettings={() => (showSettings = true)} />
+    <LibraryTable
+      {movies}
+      onsettings={() => (showSettings = true)}
+      onduplicates={() => (showDuplicates = true)}
+      duplicateCount={dupCount}
+    />
 
     {#if showSettings}
       <Settings onclose={() => (showSettings = false)} />
+    {/if}
+    {#if showDuplicates}
+      <Duplicates onclose={() => (showDuplicates = false)} />
     {/if}
   </div>
 </div>

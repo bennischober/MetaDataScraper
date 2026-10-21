@@ -13,25 +13,30 @@
     (job.payload?.path as string | undefined)?.split(/[\\/]/).pop() ?? ''
   )
 
-  // live progress from the backend (stage, detail, done/total)
-  const progress = $derived(
-    (job.result as { progress?: ProgressData } | null)?.progress ?? null
-  )
-
+  // live progress from the backend (stage, detail, done/total, percent)
   interface ProgressData {
     stage?: string
     detail?: string
     done?: number
     total?: number
     movie?: string
+    percent?: number
   }
+  const progress = $derived(
+    (job.result as { progress?: ProgressData } | null)?.progress ?? null
+  )
 
   // density on the zone ramp per stage: solid = measured work done,
   // hatched = work in progress, empty = work ahead
   const stageFraction = $derived.by(() => {
     if (job.state === 'done') return 1.0
-    if (!progress?.done || !progress.total) return 0
-    return progress.done / progress.total
+    if (progress?.percent !== undefined && progress.percent > 0) {
+      return Math.min(1, progress.percent / 100)
+    }
+    if (progress?.done !== undefined && progress.total) {
+      return progress.done / progress.total
+    }
+    return 0
   })
 
   // live elapsed time, ticking while running
@@ -75,24 +80,24 @@
     </span>
   </div>
 
-  {#if job.state === 'running'}
-    <!-- density trace: fill = fraction of batch done, hatched while working -->
-    <div
-      class="trace"
-      role="progressbar"
-      aria-valuenow={Math.round(stageFraction * 100)}
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-label="job progress"
-    >
-      <div class="fill" style="width: {Math.max(stageFraction * 100, 2)}%"></div>
-      {#if progress?.detail}
-        <span class="mono reading">{progress.detail}</span>
-      {:else}
-        <span class="mono reading dim">starting…</span>
-      {/if}
-    </div>
-  {:else if job.state === 'queued' && queuedNote}
+      {#if job.state === 'running'}
+        <!-- density trace: fill = percent (within-encode) or batch fraction -->
+        <div
+          class="trace"
+          role="progressbar"
+          aria-valuenow={Math.round(stageFraction * 100)}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-label="job progress"
+        >
+          <div class="fill" style="width: {Math.max(stageFraction * 100, 2)}%"></div>
+          <span class="mono reading">
+            {progress?.percent !== undefined && progress.percent > 0
+              ? `${progress.percent.toFixed(1)}%`
+              : progress?.detail ?? 'starting…'}
+          </span>
+        </div>
+      {:else if job.state === 'queued' && queuedNote}
     <div class="queued-note mono dim">{queuedNote}</div>
   {:else if job.error}
     <div class="error mono">{job.error}</div>

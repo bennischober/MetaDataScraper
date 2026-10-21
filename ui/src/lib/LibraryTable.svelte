@@ -2,7 +2,12 @@
   import { api, type Movie, type Job } from './api'
   import { fmtGb, fmtSaved } from './api'
 
-  let { movies, onsettings }: { movies: Movie[]; onsettings: () => void } = $props()
+  let { movies, onsettings, onduplicates, duplicateCount = 0 }: {
+    movies: Movie[]
+    onsettings: () => void
+    onduplicates: () => void
+    duplicateCount?: number
+  } = $props()
 
   // ── filtering + sorting state ──
   let categoryFilter = $state<string | null>(null)
@@ -101,7 +106,14 @@
         </button>
       {/each}
     </div>
-    <button class="settings-btn legend" onclick={onsettings}>CONFIG ⚙</button>
+    <div class="right">
+      {#if duplicateCount > 0}
+        <button class="dup-btn legend" onclick={onduplicates}>
+          DUPLICATES {duplicateCount}
+        </button>
+      {/if}
+      <button class="settings-btn legend" onclick={onsettings}>CONFIG ⚙</button>
+    </div>
   </div>
 
   <div class="table-wrap">
@@ -236,6 +248,15 @@
     border-color: var(--ink-dim);
     background: var(--panel-active);
   }
+  .right { display: flex; gap: 8px; align-items: center; }
+  .dup-btn {
+    background: transparent;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .dup-btn:hover { background: rgba(210, 153, 34, 0.12); }
   .settings-btn {
     background: transparent;
     border: 1px solid var(--seam);
