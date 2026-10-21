@@ -7,6 +7,7 @@ to the local HTTP API — same engine, same database, same guardrails.
 Run with `metadata-scrapper app`.
 """
 
+import json
 import threading
 from pathlib import Path
 
@@ -218,6 +219,106 @@ def ui_asset(asset_path: str):
     if not asset.is_file():
         raise HTTPException(status_code=404, detail="asset not found")
     return FileResponse(asset)
+
+
+@app.get("/api/config")
+def get_config():
+    """Returns the current configuration (as stored in config.json).
+
+    Returns:
+        dict: The configuration data.
+    """
+    s = get_state()
+    config_path = _config_path(s)
+    if not config_path.is_file():
+        # return the effective defaults so the UI can edit them
+        from metadata_scrapper.config import Conf
+
+        conf = Conf()
+        return _conf_to_dict(conf)
+    with open(config_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _config_path(s: AppState) -> Path:
+    """Resolves the config.json path for the app's database location.
+
+    Args:
+        s (AppState): The app state.
+
+    Returns:
+        Path: The config.json path.
+    """
+    return s.db_file.parent / "config.json"
+
+
+def _conf_to_dict(conf) -> dict:
+    """Converts a Conf object into the config.json dict shape.
+
+    Args:
+        conf (Conf): The configuration object.
+
+    Returns:
+        dict: The config.json-shaped dict.
+    """
+    return {
+        "codec": {
+            "hdr": {
+                "color_space": conf.hdr_color_spaces,
+                "color_transfer": conf.hdr_color_transfers,
+            }
+        },
+        "file": {
+            "extensions": conf.extensions,
+            "output": {"seperator": conf.separator},
+        },
+        "ffmpeg": {
+            "black_bars": {
+                "MIN_WIDTH": conf.black_bar_min_width,
+                "MIN_HEIGHT": conf.black_bar_min_height,
+            }
+        },
+        "handbrake": {
+            "preset": conf.handbrake_preset,
+            "encoder": conf.handbrake_encoder,
+        },
+        "language": conf.language,
+    }
+
+
+@app.put("/api/config")
+def update_config(data: dict):
+    """Updates the configuration (writes config.json).
+
+    The config is validated by loading it through Conf after writing;
+    invalid configs are rejected with 400 and the file restored.
+
+    Args:
+        data (dict): The configuration in config.json shape.
+
+    Returns:
+        dict: The saved configuration.
+    """
+    s = get_state()
+    config_path = _config_path(s)
+
+    backup = None
+    if config_path.is_file():
+        backup = config_path.read_text(encoding="utf-8")
+
+    try:
+        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # validate: reset the cached config and load it fresh
+        import metadata_scrapper.config as config_module
+
+        config_module._config = None
+        config_module.load_config(s.db_file.parent)
+    except Exception as e:
+        # restore the backup on failure
+        if backup is not None:
+            config_path.write_text(backup, encoding="utf-8")
+        raise HTTPException(status_code=400, detail=f"invalid config: {e}") from e
+    return data
 
 
 @app.get("/api/status")
