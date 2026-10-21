@@ -82,22 +82,33 @@ def get_category(filename: Path, root: Path) -> str:
     return parts[0]
 
 
-def find_movies(root: Path, extensions: list[str]) -> list[Path]:
+def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) -> list[Path]:
     """Finds all movie files with the given extensions recursively.
 
     Args:
         root (Path): Root directory to search in.
         extensions (list[str]): Extensions to search for, e.g. ['.mkv', '.mp4'].
+        exclude (Path | None): Directory to exclude from the search (e.g. the
+            output directory of an encode run).
 
     Returns:
         list[Path]: List of movie files.
     """
+    excluded = exclude.resolve() if exclude is not None else None
     movies: list[Path] = []
     for extension in extensions:
         extension = extension.lower().lstrip(".")
         # glob is case sensitive on linux => check both cases
-        movies.extend(root.glob(f"**/*.{extension}"))
-        movies.extend(root.glob(f"**/*.{extension.upper()}"))
+        candidates = list(root.glob(f"**/*.{extension}"))
+        candidates.extend(root.glob(f"**/*.{extension.upper()}"))
+        for candidate in candidates:
+            if excluded is not None:
+                try:
+                    candidate.resolve().relative_to(excluded)
+                    continue  # inside the excluded directory
+                except ValueError:
+                    pass
+            movies.append(candidate)
     # on windows glob is case insensitive => the same file is found twice
     return list(dict.fromkeys(movies))
 
@@ -240,6 +251,7 @@ def scan_movies(
     connection=None,
     rescan: bool = False,
     compute_hash: bool = False,
+    exclude: Path | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 
@@ -260,6 +272,7 @@ def scan_movies(
             scan cache.
         rescan (bool): Re-probe all files even if they are cached.
         compute_hash (bool): Compute a fast content hash for new/changed files.
+        exclude (Path | None): Directory to exclude (e.g. the encode output).
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
@@ -267,7 +280,7 @@ def scan_movies(
     movies_by_category: dict[str, list[dict]] = {}
 
     # search for movie files with the configured extensions, recursive
-    movies = find_movies(root, config.extensions)
+    movies = find_movies(root, config.extensions, exclude=exclude)
     if not movies:
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
@@ -604,7 +617,9 @@ def encode(
     config = load_config()
     connection = db.connect(db_file)
     try:
-        _, movies, _ = scan_movies(path, config, connection=connection)
+        # the output directory must never be a scan target (previous outputs
+        # would be re-encoded/re-probed)
+        _, movies, _ = scan_movies(path, config, connection=connection, exclude=output_dir)
         _record_encodes(
             connection,
             movies,

@@ -400,6 +400,25 @@ class TestMain(unittest.TestCase):
         # multi-file folder => folder name
         self.assertEqual(get_name(Path("D:/Movies/Action/movie_t0.mkv")), "Action")
 
+    def test_find_movies_exclude(self):
+        import tempfile
+
+        from metadata_scrapper.__main__ import find_movies
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.mkv").write_bytes(b"x")
+            (root / "out").mkdir()
+            (root / "out" / "b.mkv").write_bytes(b"x")
+
+            movies = find_movies(root, [".mkv"], exclude=root / "out")
+            names = [m.name for m in movies]
+            self.assertIn("a.mkv", names)
+            self.assertNotIn("b.mkv", names)
+            # without exclusion both are found
+            movies = find_movies(root, [".mkv"])
+            self.assertEqual(len(movies), 2)
+
     def test_scan_movies_parallel_deterministic(self):
         import tempfile
 
