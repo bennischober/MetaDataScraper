@@ -10,6 +10,9 @@ export interface Job {
   state: JobState
   result: Record<string, unknown> | null
   error: string | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 export interface EncodeInfo {

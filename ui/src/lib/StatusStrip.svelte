@@ -1,16 +1,20 @@
 <script lang="ts">
   import type { Status } from './api'
 
-  let { status }: { status: Status } = $props()
+  let { status, onwatch }: { status: Status; onwatch?: () => void } = $props()
 </script>
 
 <div class="strip">
   <span class="brand">METADATASCRAPER</span>
   <span class="mono dim">ZONE RECORD</span>
   <div class="spacer"></div>
-  <span class="mono" class:ok={status.watcher === 'running'} class:dim={status.watcher !== 'running'}>
+  <button
+    class="mono watch-btn"
+    class:running={status.watcher === 'running'}
+    onclick={() => onwatch?.()}
+  >
     {status.watcher === 'running' ? '● WATCHER RUNNING' : '○ WATCHER STOPPED'}
-  </span>
+  </button>
   <span class="mono queue-chip">QUEUE {status.queue.length}</span>
 </div>
 
@@ -38,6 +42,15 @@
     padding: 2px 8px;
     border-radius: 3px;
   }
-  .ok { color: var(--ok); }
+  .watch-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+  }
+  .watch-btn.running { color: var(--ok); }
+  .watch-btn:not(.running) { color: var(--ink-dim); }
+  .watch-btn:not(.running):hover { color: var(--ink); }
   .dim { color: var(--ink-dim); }
 </style>

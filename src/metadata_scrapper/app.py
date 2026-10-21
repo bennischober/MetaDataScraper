@@ -106,6 +106,10 @@ class AppState:
     def __init__(self, db_file: Path):
         """Initializes the app state.
 
+        Jobs left 'running' by a previous app instance are marked failed
+        (interrupted): the worker is single-threaded, so a running state in
+        the database without a live worker is stale by definition.
+
         Args:
             db_file (Path): The sqlite database file.
         """
@@ -113,8 +117,22 @@ class AppState:
         self.connection = db.connect(db_file)
         self.queue = JobQueue(self.connection)
         self.worker = JobWorker(self.connection, self.queue)
+        self._recover_stale_jobs()
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
+
+    def _recover_stale_jobs(self):
+        """Marks jobs left running by a previous app instance as failed."""
+        self.connection.execute(
+            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
+            "WHERE state = ?",
+            (
+                "failed",
+                "interrupted by app restart",
+                "running",
+            ),
+        )
+        self.connection.commit()
 
     def shutdown(self):
         """Stops the worker and closes the database."""
