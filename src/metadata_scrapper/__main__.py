@@ -679,10 +679,10 @@ def _record_encodes(
                         chosen_crf=result.chosen_crf,
                         achieved_vmaf=result.achieved_vmaf,
                     )
-                elif result.error and "skipped" in result.error:
-                    # size-probe skip => record it so future runs do not re-probe
+                elif result.skipped_reason is not None:
+                    # guardrail skip => record it so future runs do not re-probe
                     console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
-                    _save_skip(connection, movie, "no size gain")
+                    _save_skip(connection, movie, result.skipped_reason)
                 else:
                     log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except (RuntimeError, FileNotFoundError) as e:

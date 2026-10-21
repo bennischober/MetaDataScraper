@@ -280,6 +280,7 @@ class QualityResult:
     input_size: int = 0
     output_size: int = 0
     error: str | None = None
+    skipped_reason: str | None = None
 
     @property
     def saved_percent(self) -> float:
@@ -559,9 +560,7 @@ def measure_vmaf(
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
-    code, err = _run(
-        build_vmaf_command(distorted, reference, threads, crop=crop), cwd=workdir
-    )
+    code, err = _run(build_vmaf_command(distorted, reference, threads, crop=crop), cwd=workdir)
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")
@@ -843,10 +842,8 @@ def encode_with_quality(
             output=output_file,
             success=False,
             target_vmaf=target_vmaf,
-            error=(
-                f"skipped: duration {duration:.0f}s is below the "
-                f"{MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)"
-            ),
+            error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
+            skipped_reason="too short",
         )
 
     handbrake = find_handbrake()
@@ -887,8 +884,32 @@ def encode_with_quality(
                 achieved_vmaf=achieved,
                 probes=probes,
                 error="skipped: re-encode would not shrink the file",
+                skipped_reason="no size gain",
             )
         log(f"Chosen CRF {crf} (VMAF {achieved})")
+
+        # target unreachable even at the lowest CRF => the encode would be
+        # BOTH below the quality floor AND likely larger than the source
+        if achieved < target_vmaf and crf == crf_range[0]:
+            log(
+                f"Skipping '{input_file.name}': target VMAF {target_vmaf} unreachable "
+                f"(best {achieved} at CRF {crf_range[0]}); source is likely "
+                "already efficiently encoded."
+            )
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                error=(
+                    f"skipped: target VMAF {target_vmaf} unreachable "
+                    f"(best {achieved} at CRF {crf_range[0]})"
+                ),
+                skipped_reason="target unreachable",
+            )
 
         command = build_encode_command(
             handbrake, input_file, output_file, crf, encoder, encoder_preset, crop=crop

@@ -97,8 +97,9 @@ def probe_duration_seconds(path: Path) -> float | None:
 
 
 # files shorter than this are not treated as encodable movies (e.g. probe
-# samples, trailers, browser cache fragments) => skipped by encode_movies
-MIN_ENCODE_SECONDS = 300.0
+# samples, trailers) => skipped by encode_movies; real featurettes can be
+# a few minutes long, so this stays well below that
+MIN_ENCODE_SECONDS = 90.0
 
 
 def durations_match(input_file: Path, output_file: Path) -> bool:

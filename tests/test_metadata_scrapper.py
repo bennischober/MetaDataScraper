@@ -483,7 +483,7 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(command[command.index("--encoder-preset") + 1], "medium")
 
     def test_min_encode_seconds_guard(self):
-        self.assertEqual(encode.MIN_ENCODE_SECONDS, 300.0)
+        self.assertEqual(encode.MIN_ENCODE_SECONDS, 90.0)
         # the guard lives in the encode path => importable constant
 
     def test_parse_crop_line(self):
