@@ -525,6 +525,7 @@ def execute_encode(
                 target_vmaf=payload.get("target_vmaf", 95.0),
                 encoder=config.handbrake_encoder,
                 remove_bars=payload.get("remove_bars", False),
+                progress=progress,
             )
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
@@ -563,6 +564,7 @@ def execute_encode(
             encoder=config.handbrake_encoder,
             overwrite=payload.get("overwrite", False),
             workers=payload.get("workers"),
+            progress=progress,
         )
         fixed = record_fixed_results(connection, results, config)
         outcomes = [

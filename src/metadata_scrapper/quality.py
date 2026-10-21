@@ -28,6 +28,7 @@ from pathlib import Path
 from metadata_scrapper.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
+    _encode_with_command,
     durations_match,
     find_handbrake,
     probe_duration_seconds,
@@ -1077,6 +1078,7 @@ def encode_with_quality(
     encoder: str = "x265",
     encoder_preset: str = "medium",
     remove_bars: bool = False,
+    progress=None,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1095,6 +1097,8 @@ def encode_with_quality(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars (opt-in, the
             crop is irreversible).
+        progress (callable | None): Callback progress(dict) for live updates
+            of the running encode's percentage.
 
     Returns:
         QualityResult: The result of the encode.
@@ -1157,7 +1161,33 @@ def encode_with_quality(
         encoder_preset,
         crop=crop,
     )
-    code, err = _run(command)
+    if progress is None:
+        code, err = _run(command)
+    else:
+        encode_result = _encode_with_command(input_file, output_file, command, progress=progress)
+        if not encode_result.success:
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                error=encode_result.error,
+            )
+        # success path: skip the verification below (already done)
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=True,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            input_size=input_file.stat().st_size,
+            output_size=output_file.stat().st_size,
+        )
     if code != 0:
         return QualityResult(
             input=input_file,

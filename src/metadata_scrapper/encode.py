@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -177,24 +178,62 @@ def build_command(
     return command
 
 
-def _encode_with_command(input_file: Path, output_file: Path, command: list[str]) -> EncodeResult:
+def _encode_with_command(
+    input_file: Path,
+    output_file: Path,
+    command: list[str],
+    progress=None,
+) -> EncodeResult:
     """Runs one HandBrake command and verifies its output.
+
+    With a progress callback, HandBrake's stdout is streamed and its
+    percentage lines ('Encoding: task 1 of 1, 42.31 %') are reported live
+    as {'stage': 'encode', 'percent': 42.31, 'movie': name}.
 
     Args:
         input_file (Path): The source file.
         output_file (Path): The target file.
         command (list[str]): The full HandBrakeCLI command.
+        progress (callable | None): Callback progress(dict) for live updates.
 
     Returns:
         EncodeResult: The result of the encode.
     """
+    stderr = ""
+    returncode: int
+    stderr_bytes: bytes | None = None
     try:
-        proc = subprocess.run(command, capture_output=True)
+        if progress is None:
+            proc = subprocess.run(command, capture_output=True)
+            returncode = proc.returncode
+            stderr_bytes = proc.stderr
+        else:
+            popen = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            assert popen.stdout is not None  # stdout=PIPE guarantees it
+            for raw in iter(popen.stdout.readline, b""):
+                line = raw.decode(errors="replace").strip()
+                match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
+                if match:
+                    progress(
+                        {
+                            "stage": "encode",
+                            "percent": float(match.group(1)),
+                            "movie": input_file.name,
+                        }
+                    )
+            popen.stdout.close()
+            _, stderr_raw = popen.communicate()
+            stderr_bytes = stderr_raw
+            returncode = popen.returncode
     except (OSError, subprocess.SubprocessError) as e:
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
 
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode(errors="replace").strip()
+    stderr = (stderr_bytes or b"").decode(errors="replace").strip()
+    if returncode != 0:
         return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
 
     # HandBrake may exit with 0 even if the encode failed => the output file
@@ -231,6 +270,7 @@ def encode_file(
     preset: str = "Fast 1080p30",
     encoder: str = "x265",
     overwrite: bool = False,
+    progress=None,
 ) -> EncodeResult:
     """Re-encodes a movie file with HandBrakeCLI to reduce its file size.
 
@@ -242,6 +282,7 @@ def encode_file(
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
         encoder (e.g. str): The video encoder, e.g. 'x265'.
         overwrite (bool): Whether an existing output file may be replaced.
+        progress (callable | None): Callback progress(dict) for live updates.
 
     Returns:
         EncodeResult: The result of the encode.
@@ -257,7 +298,7 @@ def encode_file(
         )
 
     command = build_command(handbrake, input_file, output_file, preset, encoder)
-    return _encode_with_command(input_file, output_file, command)
+    return _encode_with_command(input_file, output_file, command, progress=progress)
 
 
 def encode_movies(
@@ -268,6 +309,7 @@ def encode_movies(
     dry_run: bool = False,
     overwrite: bool = False,
     workers: int | None = None,
+    progress=None,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
 
@@ -285,6 +327,8 @@ def encode_movies(
         workers (int | None): Number of concurrent encodes (1 = sequential,
             None = automatic: 1, since a single x265 encode already scales
             across all cores).
+        progress (callable | None): Callback progress(dict) for live updates
+            of the running encode's percentage.
 
     Returns:
         list[EncodeResult]: The results of the encodes.
@@ -346,7 +390,7 @@ def encode_movies(
             encoder,
             encoder_threads=threads,
         )
-        return _encode_with_command(movie, output_file, command)
+        return _encode_with_command(movie, output_file, command, progress=progress)
 
     with Progress() as progress:
         task = progress.add_task("Encoding movies", total=len(pending))
