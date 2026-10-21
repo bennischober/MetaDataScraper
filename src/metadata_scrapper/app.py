@@ -149,13 +149,26 @@ def index():
     Returns:
         FileResponse: The UI's index.html (or a hint when not built).
     """
-    index_path = Path(__file__).parent / "ui" / "dist" / "index.html"
+    # the built UI lives at the repo root (dev: ui/dist; the app resolves it
+    # relative to the repository root so a checkout layout works everywhere)
+    index_path = _ui_dist() / "index.html"
     if not index_path.is_file():
         raise HTTPException(
             status_code=404,
-            detail="UI not built. Run: npm install && npm run build in src/metadata_scrapper/ui",
+            detail="UI not built. Run: npm install && npm run build in ui/",
         )
     return FileResponse(index_path)
+
+
+def _ui_dist() -> Path:
+    """Resolves the built UI directory (repo-root ui/dist).
+
+    Returns:
+        Path: The dist directory (may not exist if the UI is not built).
+    """
+    # dev/checkout layout: repo root is three levels above this module
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    return repo_root / "ui" / "dist"
 
 
 @app.get("/assets/{asset_path:path}")
@@ -168,7 +181,7 @@ def ui_asset(asset_path: str):
     Returns:
         FileResponse: The asset file.
     """
-    asset = Path(__file__).parent / "ui" / "dist" / "assets" / asset_path
+    asset = _ui_dist() / "assets" / asset_path
     if not asset.is_file():
         raise HTTPException(status_code=404, detail="asset not found")
     return FileResponse(asset)
