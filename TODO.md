@@ -3,14 +3,28 @@
 ## Known limitations / planned work
 
 ### UI (next round)
+- [x] Critique round 2026-10-21 (impeccable dual-agent, 20/40): evidence wall
+      shipped — the zone ramp plots every movie's measured VMAF as ticks;
+      remove-bars no longer persists (per-run arming + confirmation strip
+      naming the affected movie count); plan/encode result panels are
+      always present and collapsible (no hidden showPlans state); ramp and
+      strip captions say VMAF, not zones
 - [ ] Design-rethink round: the user may want new prototypes for the dashboard
       (the Zone Record direction is locked, but a re-shape with new comps is
       possible at any time)
 - [ ] Live job progress for encodes: the encode engine reports stage +
       per-movie fractions; a within-encode percent (frames encoded) needs a
-      HandBrake progress parse or a size-based estimate
+      HandBrake progress parse or a size-based estimate (also: show
+      done/total + current movie + ETA in the job sheet — critique P1)
 - [ ] Job detail view in the UI (click a history row -> full payload/result)
 - [ ] Per-movie actions: encode/plan a single movie from its detail drawer
+- [ ] Retry from job payload verbatim (current retry re-binds the form;
+      critique P1) + history filter matching all job paths (multi-folder
+      batches show "no jobs" per movie today)
+- [ ] A11y pass: focus traps in overlays, aria-sort/aria-pressed, 24px+ hit
+      targets, larger interactive type (critique found 10px interactive
+      default); fmtSaved growth sign reads as gain ("+5.0%" in a "Saved"
+      column)
 
 ### HDR support (partially unblocked: real HDR content exists)
 - [x] Refuse HDR content in quality mode until proper support exists

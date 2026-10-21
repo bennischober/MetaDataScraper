@@ -6,7 +6,7 @@
 
 <div class="strip">
   <span class="brand">METADATASCRAPER</span>
-  <span class="mono dim">ZONE RECORD</span>
+  <span class="mono dim">VMAF RECORD</span>
   <div class="spacer"></div>
   <button
     class="mono watch-btn"

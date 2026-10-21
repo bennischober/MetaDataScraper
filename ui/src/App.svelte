@@ -12,24 +12,40 @@
   let history: Job[] = $state([])
   let error = $state<string | null>(null)
   let busy = $state(false)
-  let showPlans = $state(false)
   let showSettings = $state(false)
 
-  // persisted defaults (recognition over recall)
+  // result panels: always present, collapsible, visibility from data (never
+  // from a hidden flag that a reload forgets)
+  let planOpen = $state(true)
+  let encodeOpen = $state(true)
+
+  // per-run arming of the irreversible bar crop — never persisted, so a
+  // fresh session always starts unarmed
+  let confirmBars = $state(false)
+
+  // persisted defaults (recognition over recall). removeBars is deliberately
+  // not persisted: the irreversible option must be armed per run.
   let scanPaths = $state<string[]>(
     JSON.parse(localStorage.getItem('ms.paths') ?? '["D:\\\\Movies"]')
   )
   let newPath = $state('')
   let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
   let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 95))
-  let removeBars = $state(localStorage.getItem('ms.bars') === '1')
+  let removeBars = $state(false)
 
   function persist() {
     localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
     localStorage.setItem('ms.out', outputDir)
     localStorage.setItem('ms.vmaf', String(targetVmaf))
-    localStorage.setItem('ms.bars', removeBars ? '1' : '0')
   }
+
+  // movies inside any scan path (case-insensitive prefix) — the blast radius
+  // the bars confirmation names
+  const barsAffected = $derived(
+    movies.filter((m) =>
+      scanPaths.some((p) => m.path.toLowerCase().startsWith(p.toLowerCase()))
+    ).length
+  )
 
   function addPath() {
     const value = newPath.trim()
@@ -64,6 +80,7 @@
     vmaf?: number | null
     input_size?: number
     output_size?: number
+    saved_percent?: number
     error?: string
   }
   const lastPlan = $derived(
@@ -78,6 +95,11 @@
   const encodeEntries = $derived(
     (lastEncode?.result as { outcomes?: OutcomeEntry[] } | null)?.outcomes ?? []
   )
+  const encodeSavedTotal = $derived(
+    encodeEntries
+      .filter((o) => o.state === 'encoded' && o.saved_percent != null)
+      .reduce((sum, o) => sum + (o.saved_percent ?? 0), 0)
+  )
 
   async function refresh() {
     try {
@@ -91,13 +113,19 @@
     }
   }
 
-  async function enqueue(kind: 'scan' | 'plan' | 'encode') {
+  async function enqueue(kind: 'scan' | 'plan' | 'encode', confirmed = false) {
     if (scanPaths.length === 0) {
       error = 'at least one movie folder is required'
       return
     }
+    if (kind === 'encode' && removeBars && !confirmed && !confirmBars) {
+      // irreversible work demands explicit per-run confirmation
+      confirmBars = true
+      return
+    }
     busy = true
     persist()
+    confirmBars = false
     try {
       await api.enqueue({
         kind,
@@ -108,7 +136,6 @@
         target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
         remove_bars: removeBars,
       })
-      if (kind === 'plan') showPlans = true
       await refresh()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -161,7 +188,7 @@
   {/if}
 
   <div class="content">
-    <ZoneRamp targetVmaf={targetVmaf} />
+    <ZoneRamp {movies} {targetVmaf} />
 
     {#if error}
       <div class="api-error mono">
@@ -236,78 +263,111 @@
         onclick={() => enqueue('encode')}
         disabled={busy}
         class="primary"
+        class:armed={removeBars}
         title={removeBars ? 'Irreversible: bars are cropped away permanently' : ''}
       >
-        Encode
+        {removeBars ? 'Encode · bars' : 'Encode'}
       </button>
       <a class="mono" href="/report" target="_blank" rel="noopener">REPORT ↗</a>
     </div>
 
-    <!-- plan results: the tool's unique answer, no longer discarded -->
-    {#if showPlans && planEntries.length > 0}
-      <div class="panel">
-        <div class="panel-head">
-          <span class="legend">PLAN RESULT</span>
-          <span class="dim note">
-            {planEntries.filter((p) => p.state === 'encode').length} to encode ·
-            {planEntries.filter((p) => p.state === 'skip').length} skipped
-          </span>
+    <!-- irreversible-work confirmation strip: names the blast radius -->
+    {#if confirmBars}
+      <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal">
+        <div class="bars-text">
+          <strong>BARS WILL BE CROPPED PERMANENTLY.</strong>
+          {barsAffected} movie{barsAffected === 1 ? '' : 's'} in {scanPaths.join(', ')} — there
+          is no undo.
         </div>
-        <table class="plan-table">
-          <tbody>
-            {#each planEntries as entry (entry.movie)}
-              <tr>
-                <td class="name">{entry.movie}</td>
-                <td>
-                  {#if entry.state === 'encode'}
-                    <span class="chip done"><span class="swatch"></span>ENCODE</span>
-                  {:else if entry.state === 'skip'}
-                    <span class="chip skip"><span class="swatch"></span>SKIP</span>
-                  {:else}
-                    <span class="chip failed"><span class="swatch"></span>{entry.state.toUpperCase()}</span>
-                  {/if}
-                </td>
-                <td class="mono num">{entry.crf ?? '—'}</td>
-                <td class="mono num">{entry.vmaf?.toFixed(2) ?? '—'}</td>
-                <td class="mono num">{fmtGb(entry.estimated_size)}</td>
-                <td class="mono num">{fmtSaved(entry.saved_percent)}</td>
-                <td class="dim reason">{entry.reason ?? entry.error ?? ''}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+        <div class="bars-buttons">
+          <button class="mono confirm" onclick={() => enqueue('encode', true)}>
+            CROP {barsAffected} MOVIE{barsAffected === 1 ? '' : 'S'}
+          </button>
+          <button class="mono deny" onclick={() => (confirmBars = false)}>KEEP BARS</button>
+        </div>
       </div>
     {/if}
 
-    <!-- encode results of the last run -->
-    {#if !showPlans && encodeEntries.length > 0}
+    <!-- plan results: the tool's unique answer, always present when a plan
+         exists in the job history (visibility from data, not hidden state) -->
+    {#if planEntries.length > 0}
       <div class="panel">
-        <div class="panel-head">
-          <span class="legend">LAST ENCODE RUN</span>
+        <button
+          class="panel-head"
+          onclick={() => (planOpen = !planOpen)}
+          aria-expanded={planOpen}
+        >
+          <span class="legend">PLAN RESULT — RUN #{lastPlan?.id ?? '—'}</span>
+          <span class="dim note">
+            {planEntries.filter((p) => p.state === 'encode').length} to encode ·
+            {planEntries.filter((p) => p.state === 'skip').length} skipped ·
+            {planOpen ? 'HIDE ▲' : 'SHOW ▼'}
+          </span>
+        </button>
+        {#if planOpen}
+          <table class="plan-table">
+            <tbody>
+              {#each planEntries as entry (entry.movie)}
+                <tr>
+                  <td class="name">{entry.movie}</td>
+                  <td>
+                    {#if entry.state === 'encode'}
+                      <span class="chip done"><span class="swatch"></span>ENCODE</span>
+                    {:else if entry.state === 'skip'}
+                      <span class="chip skip"><span class="swatch"></span>SKIP</span>
+                    {:else}
+                      <span class="chip failed"><span class="swatch"></span>{entry.state.toUpperCase()}</span>
+                    {/if}
+                  </td>
+                  <td class="mono num">{entry.crf ?? '—'}</td>
+                  <td class="mono num">{entry.vmaf?.toFixed(2) ?? '—'}</td>
+                  <td class="mono num">{fmtGb(entry.estimated_size)}</td>
+                  <td class="mono num">{fmtSaved(entry.saved_percent)}</td>
+                  <td class="dim reason">{entry.reason ?? entry.error ?? ''}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- encode results of the latest run, same data-driven presence -->
+    {#if encodeEntries.length > 0}
+      <div class="panel">
+        <button
+          class="panel-head"
+          onclick={() => (encodeOpen = !encodeOpen)}
+          aria-expanded={encodeOpen}
+        >
+          <span class="legend">LAST ENCODE RUN — #{lastEncode?.id ?? '—'} · SAVED {encodeSavedTotal}</span>
           <span class="dim note">
             {encodeEntries.filter((o) => o.state === 'encoded').length} encoded ·
-            {encodeEntries.filter((o) => o.state === 'failed').length} failed
+            {encodeEntries.filter((o) => o.state === 'failed').length} failed ·
+            {encodeOpen ? 'HIDE ▲' : 'SHOW ▼'}
           </span>
-        </div>
-        <table class="plan-table">
-          <tbody>
-            {#each encodeEntries as entry (entry.movie)}
-              <tr>
-                <td class="name">{entry.movie}</td>
-                <td>
-                  <span class="chip {entry.state === 'encoded' ? 'done' : entry.state === 'skipped' ? 'skip' : 'failed'}">
-                    <span class="swatch"></span>{entry.state.toUpperCase()}
-                  </span>
-                </td>
-                <td class="mono num">{fmtGb(entry.input_size)}</td>
-                <td class="mono num">{fmtGb(entry.output_size)}</td>
-                <td class="mono num">{entry.crf ?? '—'}</td>
-                <td class="mono num">{entry.vmaf?.toFixed(2) ?? '—'}</td>
-                <td class="dim reason">{entry.error ?? ''}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+        </button>
+        {#if encodeOpen}
+          <table class="plan-table">
+            <tbody>
+              {#each encodeEntries as entry (entry.movie)}
+                <tr>
+                  <td class="name">{entry.movie}</td>
+                  <td>
+                    <span class="chip {entry.state === 'encoded' ? 'done' : entry.state === 'skipped' ? 'skip' : 'failed'}">
+                      <span class="swatch"></span>{entry.state.toUpperCase()}
+                    </span>
+                  </td>
+                  <td class="mono num">{fmtGb(entry.input_size)}</td>
+                  <td class="mono num">{fmtGb(entry.output_size)}</td>
+                  <td class="mono num">{entry.crf ?? '—'}</td>
+                  <td class="mono num">{entry.vmaf?.toFixed(2) ?? '—'}</td>
+                  <td class="dim reason">{entry.error ?? ''}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
       </div>
     {/if}
 
@@ -467,6 +527,10 @@
   }
   .actions button:hover:not(:disabled) { border-color: var(--ink-dim); }
   .actions button.primary { border-color: var(--ok); color: var(--ok); }
+  .actions button.primary.armed {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
   .actions button:disabled { opacity: 0.4; cursor: default; }
   .actions a { color: var(--magenta); text-decoration: none; font-size: var(--fs-legend); }
   .panel {
@@ -476,9 +540,47 @@
   .panel-head {
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    width: 100%;
     padding: 8px 16px;
     border-bottom: 1px solid var(--seam);
+    background: transparent;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
   }
+  .panel-head:hover .legend { color: var(--ink); }
+  .bars-confirm {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    border: 1px solid var(--warn);
+    background: var(--panel);
+    padding: 10px 14px;
+  }
+  .bars-text { font-size: var(--fs-data); }
+  .bars-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .bars-buttons button {
+    background: transparent;
+    border: 1px solid var(--seam);
+    color: var(--ink);
+    padding: 5px 14px;
+    cursor: pointer;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+  }
+  .bars-buttons .confirm {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .bars-buttons .confirm:hover { background: var(--warn); color: var(--ground); }
+  .bars-buttons .deny:hover { border-color: var(--ink-dim); }
   .note { font-size: 11px; }
   .plan-table { width: 100%; border-collapse: collapse; }
   .plan-table td {
