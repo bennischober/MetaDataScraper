@@ -1,9 +1,10 @@
-# ignore output files
-*.txt
-*.csv
-
-# ignore helper output
-*.json
+# ignore scan/encode output files (txt/csv/json at the repo root)
+/movies.txt
+/output.csv
+/report.html
+/config.json.bak
+/*.json
+!config.json
 
 # sqlite database
 *.db
