@@ -88,9 +88,12 @@ def probe_duration_seconds(path: Path) -> float | None:
     if proc.returncode != 0:
         return None
     try:
-        return float(json.loads(proc.stdout.decode())["format"]["duration"])
+        duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
+    if duration <= 0:
+        return None
+    return duration
 
 
 # files shorter than this are not treated as encodable movies (e.g. probe

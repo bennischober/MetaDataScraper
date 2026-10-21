@@ -88,6 +88,10 @@ DEFAULT_CRF_RANGE = (14, 32)
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
 
+# libvmaf v3 thread cap: values above ~8 crash the filter with EINVAL on
+# some builds (frame queue limit), so stay on the safe side
+MAX_VMAF_THREADS = 8
+
 # a detected bar smaller than this percentage of the dimension is noise
 MIN_BAR_PERCENT = 2.0
 # blackness threshold for cropdetect (0-255); 24 matches ffmpeg's default
@@ -522,7 +526,7 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
     model = workdir / VMAF_MODEL.name
     shutil.copyfile(VMAF_MODEL, model)
 
-    threads = os.cpu_count() or 0
+    threads = min(os.cpu_count() or MAX_VMAF_THREADS, MAX_VMAF_THREADS)
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
