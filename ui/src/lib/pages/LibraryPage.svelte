@@ -7,6 +7,7 @@
     selectedPaths,
     targetVmaf,
     removeBars,
+    scanning = false,
     runningMovie = null,
     runningPercent = null,
     plannedPaths = [],
@@ -20,6 +21,7 @@
     selectedPaths: Set<string>
     targetVmaf: number
     removeBars: boolean
+    scanning?: boolean
     runningMovie?: string | null
     runningPercent?: number | null
     plannedPaths?: string[]
@@ -73,7 +75,7 @@
     <p class="legend">{filtered.length} OF {movies.length} TITLES · TARGET VMAF {targetVmaf}</p>
   </header>
 
-  <!-- ══ toolbar: search + category + view toggle ══ -->
+  <!-- ══ toolbar: search + category + view toggle + scan ══ -->
   <div class="toolbar">
     <input
       class="search mono"
@@ -94,10 +96,14 @@
         hide missing
       </label>
     {/if}
+    <span class="spacer"></span>
     <div class="view-toggle" role="group" aria-label="View">
       <button class="vt" class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-pressed={view === 'grid'}>GRID</button>
       <button class="vt" class:active={view === 'table'} onclick={() => (view = 'table')} aria-pressed={view === 'table'}>TABLE</button>
     </div>
+    <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning}>
+      {scanning ? 'SCANNING…' : 'RESCAN ALL'}
+    </button>
   </div>
 
   <!-- ══ bulk bar (only when a selection exists) ══ -->
@@ -126,10 +132,6 @@
     <div class="bulk-bar idle">
       <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work, or</span>
       <span class="spacer"></span>
-      <label class="bars-toggle mono dim" title="Irreversible: stable black bars are cropped away permanently">
-        <input type="checkbox" bind:checked={removeBars} />
-        REMOVE BARS
-      </label>
       <button class="act" onclick={() => onenqueue('plan')}>PLAN ALL</button>
       <button class="act primary" onclick={() => onenqueue('encode')}>ENCODE ALL</button>
     </div>
@@ -256,8 +258,6 @@
   }
   .missing-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   .missing-toggle input { accent-color: var(--red); }
-  .bars-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-  .bars-toggle input { accent-color: var(--red); }
   .view-toggle { display: inline-flex; border: 1px solid var(--seam); border-radius: var(--radius); overflow: hidden; }
   .vt {
     background: var(--panel);
@@ -269,6 +269,20 @@
     letter-spacing: var(--track-legend);
   }
   .vt.active { background: var(--panel-active); color: var(--teal-ink); }
+  .act.scan {
+    background: var(--panel-raised);
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-transform: uppercase;
+  }
+  .act.scan:hover:not(:disabled) { border-color: var(--teal); color: var(--teal-ink); }
+  .act.scan:disabled { opacity: 0.5; cursor: default; }
+  .spacer { flex: 1; }
 
   .bulk-bar {
     display: flex;

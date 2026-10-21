@@ -7,16 +7,22 @@
   let {
     scanPaths,
     outputDir,
+    removeBars = false,
     onpathsChange,
     onoutputChange,
+    onbarsChange,
   }: {
     scanPaths: string[]
     outputDir: string
+    removeBars?: boolean
     onpathsChange: (paths: string[]) => void
     onoutputChange: (dir: string) => void
+    onbarsChange?: (armed: boolean) => void
   } = $props()
 
   let newPath = $state('')
+  // two-way: the armed state lives at app level; this page only edits it
+  let barsArmed = $derived(removeBars)
   let config = $state<Config | null>(null)
   let saveError = $state<string | null>(null)
   let saved = $state(false)
@@ -27,6 +33,10 @@
       .config()
       .then((c) => (config = c))
       .catch((e) => (saveError = e instanceof Error ? e.message : String(e)))
+  })
+
+  $effect(() => {
+    onbarsChange?.(barsArmed)
   })
 
   function addPath() {
@@ -129,6 +139,26 @@
     </div>
   </section>
 
+  <!-- ══ dangerous options ══ -->
+  <section class="panel danger">
+    <div class="panel-head">
+      <span class="legend red">DANGEROUS OPTIONS — PER SESSION ONLY</span>
+    </div>
+    <div class="pad">
+      <label class="bars-option">
+        <input
+          type="checkbox"
+          checked={barsArmed}
+          onchange={(e) => onbarsChange?.(e.currentTarget.checked)}
+        />
+        <span>
+          <strong>REMOVE BLACK BARS ON ENCODE</strong>
+          <span class="mono dim block">crops stable letterbox bars permanently — irreversible, never persisted, must be re-armed each session</span>
+        </span>
+      </label>
+    </div>
+  </section>
+
   <!-- ══ tool settings ══ -->
   <section class="panel">
     <div class="panel-head">
@@ -224,6 +254,17 @@
   .pad { padding: 14px; }
   .pad.row { padding: 14px; }
   .groups { display: flex; flex-direction: column; gap: 14px; }
+
+  .panel.danger { border-color: var(--red); }
+  .red { color: var(--red); }
+  .bars-option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    cursor: pointer;
+  }
+  .bars-option input { accent-color: var(--red); margin-top: 2px; }
+  .bars-option .block { display: block; margin-top: 2px; font-size: 11px; }
 
   .path-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .path-chip {

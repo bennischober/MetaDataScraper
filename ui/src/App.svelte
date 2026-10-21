@@ -281,61 +281,70 @@
         onencode={encodeOne}
         onplan={(p) => enqueue('plan', [p])}
       />
-    {:else if page === 'overview'}
-      <OverviewPage
-        {movies}
-        {history}
-        {status}
-        {targetVmaf}
-        {savedTotalGb}
-        {measuredCount}
-        duplicates={duplicates.length}
-        duplicateWastedGb={duplicateWasted / 1024 ** 3}
-        {missingMovies}
-        {runningJobs}
-        {failedJobs}
-        {scanPaths}
-        {outputDir}
-        ondismiss={dismissFailed}
-        ongoto={(p) => (page = p)}
-        onopenmovie={openDetail}
-      />
-    {:else if page === 'library'}
-      <LibraryPage
-        {movies}
-        {selectedPaths}
-        {targetVmaf}
-        {removeBars}
-        runningMovie={runningProgress?.movie ?? null}
-        runningPercent={runningProgress?.percent ?? null}
-        plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
-        onenqueue={enqueue}
-        onopenmovie={openDetail}
-        ontoggle={(path, checked) => {
-          const next = new Set(selectedPaths)
-          if (checked) next.add(path)
-          else next.delete(path)
-          selectedPaths = next
-        }}
-        onselectall={(checked, paths) => {
-          const next = new Set(selectedPaths)
-          if (checked) paths.forEach((p) => next.add(p))
-          else paths.forEach((p) => next.delete(p))
-          selectedPaths = next
-        }}
-        onclear={() => (selectedPaths = new Set())}
-      />
-    {:else if page === 'duplicates'}
-      <DuplicatesPage {duplicates} onrefresh={refreshDuplicates} />
-    {:else if page === 'jobs'}
-      <JobsPage {history} oncancel={cancelJob} onretry={(j) => enqueue(j.kind)} />
     {:else}
-      <ConfigPage
-        {scanPaths}
-        {outputDir}
-        onpathsChange={(p) => { scanPaths = p; persist() }}
-        onoutputChange={(o) => { outputDir = o; persist() }}
-      />
+      <div class="pages" class:hidden={page !== 'overview'}>
+        <OverviewPage
+          {movies}
+          {history}
+          {status}
+          {targetVmaf}
+          {savedTotalGb}
+          {measuredCount}
+          duplicates={duplicates.length}
+          duplicateWastedGb={duplicateWasted / 1024 ** 3}
+          {missingMovies}
+          {runningJobs}
+          {failedJobs}
+          {scanPaths}
+          {outputDir}
+          ondismiss={dismissFailed}
+          ongoto={(p) => (page = p)}
+          onopenmovie={openDetail}
+        />
+      </div>
+      <div class="pages" class:hidden={page !== 'library'}>
+        <LibraryPage
+          {movies}
+          {selectedPaths}
+          {targetVmaf}
+          {removeBars}
+          scanning={runningJobs.some((j) => j.kind === 'scan')}
+          runningMovie={runningProgress?.movie ?? null}
+          runningPercent={runningProgress?.percent ?? null}
+          plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
+          onenqueue={enqueue}
+          onopenmovie={openDetail}
+          ontoggle={(path, checked) => {
+            const next = new Set(selectedPaths)
+            if (checked) next.add(path)
+            else next.delete(path)
+            selectedPaths = next
+          }}
+          onselectall={(checked, paths) => {
+            const next = new Set(selectedPaths)
+            if (checked) paths.forEach((p) => next.add(p))
+            else paths.forEach((p) => next.delete(p))
+            selectedPaths = next
+          }}
+          onclear={() => (selectedPaths = new Set())}
+        />
+      </div>
+      <div class="pages" class:hidden={page !== 'duplicates'}>
+        <DuplicatesPage {duplicates} onrefresh={refreshDuplicates} />
+      </div>
+      <div class="pages" class:hidden={page !== 'jobs'}>
+        <JobsPage {history} oncancel={cancelJob} onretry={(j) => enqueue(j.kind)} />
+      </div>
+      <div class="pages" class:hidden={page !== 'config'}>
+        <ConfigPage
+          {scanPaths}
+          {outputDir}
+          {removeBars}
+          onpathsChange={(p) => { scanPaths = p; persist() }}
+          onoutputChange={(o) => { outputDir = o; persist() }}
+          onbarsChange={(armed) => { removeBars = armed }}
+        />
+      </div>
     {/if}
   </main>
 </div>
@@ -445,6 +454,9 @@
     gap: 14px;
     max-width: 1500px;
   }
+  /* pages stay mounted (state survives tab switches); only one visible */
+  .pages { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .pages.hidden { display: none; }
 
   .api-error {
     border: 1px solid var(--red);

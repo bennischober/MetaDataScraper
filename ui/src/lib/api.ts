@@ -119,6 +119,29 @@ export function fmtSaved(percent: number | null | undefined): string {
   return percent <= 0 ? `+${Math.abs(percent).toFixed(1)}%` : `${percent.toFixed(1)}%`
 }
 
+/** Formats an ISO timestamp as a short "when" (time today, date+time before). */
+export function fmtWhen(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z')
+  if (Number.isNaN(d.getTime())) return '—'
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (d.toDateString() === new Date().toDateString()) return time
+  return `${d.toLocaleDateString([], { day: '2-digit', month: 'short' })} ${time}`
+}
+
+/** Formats the span between two ISO timestamps as a human duration. */
+export function fmtSpan(startIso: string | null | undefined, endIso: string | null | undefined): string | null {
+  if (!startIso || !endIso) return null
+  const s = Date.parse(startIso.endsWith('Z') || startIso.includes('+') ? startIso : startIso + 'Z')
+  const e = Date.parse(endIso.endsWith('Z') || endIso.includes('+') ? endIso : endIso + 'Z')
+  if (Number.isNaN(s) || Number.isNaN(e)) return null
+  const seconds = Math.max(0, Math.round((e - s) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  if (m < 60) return `${m}m ${seconds % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
 /** Formats a duration in seconds as a human string ('—' for none). */
 export function fmtSeconds(seconds: number | null | undefined): string {
   if (seconds == null || seconds <= 0) return '—'

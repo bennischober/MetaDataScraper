@@ -68,6 +68,16 @@
     <p class="legend">THE LIBRARY AT A GLANCE · VMAF TARGET {targetVmaf}</p>
   </header>
 
+  <!-- system line: the console's own telemetry -->
+  <div class="sysline mono dim">
+    <span>POLL 3s</span>
+    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
+    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
+    <span>Q {runningJobs.length} · FAIL {failedJobs.length} · DUPES {duplicates}</span>
+    <span class="spacer"></span>
+    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'} → {outputDir || '—'}</span>
+  </div>
+
   <!-- ══ stat band ══ -->
   <div class="stats">
     <button class="stat" onclick={() => ongoto('library')}>
@@ -192,28 +202,42 @@
   .bad { color: var(--red); }
   .amber { color: var(--amber); }
 
-  /* stat band */
+  .sysline {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    font-size: 10.5px;
+    letter-spacing: 0.4px;
+    padding: 0 2px;
+    flex-wrap: wrap;
+  }
+  .sysline .spacer { flex: 1; }
+
+  /* stat band — dense, tile-sized, data-first */
   .stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 1px;
+    background: var(--seam);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    overflow: hidden;
   }
   .stat {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
     background: var(--panel);
-    border: 1px solid var(--seam);
-    border-radius: var(--radius);
-    padding: 12px 14px;
+    padding: 9px 12px;
     text-align: left;
     color: inherit;
     font: inherit;
     cursor: pointer;
+    border: none;
   }
-  .stat:hover { border-color: var(--ink-dim); background: var(--panel-raised); }
-  .stat-v { font-size: 22px; font-weight: 600; }
-  .stat-sub { font-size: 10.5px; }
+  .stat:hover { background: var(--panel-raised); }
+  .stat-v { font-size: 17px; font-weight: 600; }
+  .stat-sub { font-size: 10px; }
 
   /* running band */
   .running {

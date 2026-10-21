@@ -47,7 +47,7 @@
   {#if duplicates.length === 0}
     <div class="empty dim">no duplicates found — the library is clean</div>
   {:else}
-    <button class="act rescan" onclick={() => onrefresh?.()}>RESCAN</button>
+    <button class="act rescan" onclick={() => onrefresh?.()}>RE-ANALYZE</button>
     {#each duplicates as group (group.files[0].path)}
       <div class="group">
         <div class="group-head">
