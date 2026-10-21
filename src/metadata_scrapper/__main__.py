@@ -919,6 +919,26 @@ def _ensure_file_row(connection, movie: Path) -> int:
     return db.upsert_file(connection, record)
 
 
+@app.command()
+def report(
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file."
+    ),
+    output: Path = typer.Option(
+        Path("report.html"), "--output", "-o", help="Path of the HTML report."
+    ),
+):
+    """Generates a self-contained HTML report from the database."""
+    from metadata_scrapper.report import generate_report
+
+    if not db_file.is_file():
+        log_error(f"Database '{db_file}' not found! Run a scan first.")
+        raise typer.Exit(1)
+
+    generate_report(db_file, output)
+    console.print(f"[green]Report written to '{output}'.[/green]")
+
+
 def _totals(movies_by_category: dict) -> tuple:
     """Calculates the total duration and size of the scanned movies.
 

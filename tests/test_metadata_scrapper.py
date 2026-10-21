@@ -596,5 +596,38 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(plain[plain.index("--crop") + 1], "0:0:0:0")
 
 
+class TestReport(unittest.TestCase):
+    def test_generate_report(self):
+        import tempfile
+
+        from metadata_scrapper.report import generate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            connection = db.connect(db_path)
+            file_id = connection.execute(
+                "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("D:/Movies/a.mkv", 1.0, 1000, "a", "Movies", "01:00:00", "h264", 1920, 1080),
+            ).lastrowid
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (file_id, "VMAF>95.0", "x265", 1000, 400, 60.0, 20, 95.4),
+            )
+            connection.commit()
+            connection.close()
+
+            out = Path(tmp) / "report.html"
+            generate_report(db_path, out)
+            html = out.read_text(encoding="utf-8")
+            self.assertIn("MetaDataScraper Report", html)
+            self.assertIn("a.mkv", html)
+            self.assertIn("95.40", html)
+            # the skipped-preset rendering
+            self.assertIn("quality mode (VMAF&gt;95.0)", html)
+
+
 if __name__ == "__main__":
     unittest.main()
