@@ -78,20 +78,32 @@ def _migrate(connection: sqlite3.Connection):
         current += 1
         for statement in MIGRATIONS.get(current, []):
             if statement == "__absolute_paths__":
-                # rewrite relative file paths to absolute ones (rows whose
-                # path no longer exists relative to the cwd are dropped)
+                # rewrite relative file paths to absolute ones; a relative row
+                # whose absolute twin already exists is merged into it (the
+                # absolute row wins, the relative one is removed)
                 rows = connection.execute("SELECT id, path FROM files").fetchall()
                 for row in rows:
                     path = Path(row["path"])
-                    if not path.is_absolute():
-                        absolute = path.resolve()
-                        if absolute.is_file():
-                            connection.execute(
-                                "UPDATE files SET path = ? WHERE id = ?",
-                                (str(absolute), row["id"]),
-                            )
-                        else:
-                            connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+                    if path.is_absolute():
+                        continue
+                    absolute = path.resolve()
+                    twin = connection.execute(
+                        "SELECT id FROM files WHERE path = ?", (str(absolute),)
+                    ).fetchone()
+                    if twin is not None:
+                        # move encodes to the twin, then drop the relative row
+                        connection.execute(
+                            "UPDATE encodes SET file_id = ? WHERE file_id = ?",
+                            (twin["id"], row["id"]),
+                        )
+                        connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+                    elif absolute.is_file():
+                        connection.execute(
+                            "UPDATE files SET path = ? WHERE id = ?",
+                            (str(absolute), row["id"]),
+                        )
+                    else:
+                        connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")

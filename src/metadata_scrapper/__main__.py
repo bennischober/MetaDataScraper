@@ -1,6 +1,11 @@
+"""The command line interface of MetaDataScraper.
+
+All engine logic lives in dedicated modules (scanner, encode, quality,
+service, watch, report, db) — this module only defines the commands, their
+options and the console presentation.
+"""
+
 import csv
-import os
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import typer
@@ -9,19 +14,15 @@ from rich.table import Table
 
 from metadata_scrapper import db
 from metadata_scrapper.config import load_config
-from metadata_scrapper.helpers import (
-    SIZE_UNIT,
-    calc_time,
-    check_black_bars,
-    convert_unit,
-    create_movie_progress,
-    generate_string,
-    get_other_codecs,
-    sanitize_number,
-    timestr_to_int,
+from metadata_scrapper.helpers import calc_time, generate_string, sanitize_number
+from metadata_scrapper.logger import log, log_error
+from metadata_scrapper.report import generate_report
+from metadata_scrapper.scanner import find_movies, get_category, get_name, scan_movies
+from metadata_scrapper.service import (
+    finished_movies,
+    record_fixed_results,
+    record_quality_results,
 )
-from metadata_scrapper.logger import log, log_error, log_warning
-from metadata_scrapper.media import get_data
 
 app = typer.Typer(
     help="A short python script to get video meta data.",
@@ -34,325 +35,19 @@ OUTPUT_FILE = Path("movies.txt")
 CSV_FILE = Path("output.csv")
 DB_FILE = Path("metadata.db")
 
-
-def get_name(filename: Path) -> str:
-    """Determines the movie name from the file name.
-
-    Multiple movies in one folder get their names from the file,
-    otherwise the parent folder name is used (e.g. 'Movie (2020)' folders).
-
-    Args:
-        filename (Path): Path to the movie file.
-
-    Returns:
-        str: The movie name without extension.
-    """
-    if "title" in filename.name or "_t0" in filename.name:
-        return filename.parent.name
-    return filename.stem
-
-
-def get_category(filename: Path, root: Path) -> str:
-    """Determines the movie category from the folder structure.
-
-    The category is the folder above the movie folder (relative to the root),
-    e.g. 'Movies/Matrix/movie.mkv' => 'Movies'. If the file is not nested
-    deep enough, 'Uncategorized' is used.
-
-    Args:
-        filename (Path): Path to the movie file.
-        root (Path): The scan root directory.
-
-    Returns:
-        str: The category name.
-    """
-    try:
-        relative = filename.parent.relative_to(root)
-    except ValueError:
-        # file is not inside the root (should not happen) => no category
-        return "Uncategorized"
-
-    parts = relative.parts
-    if len(parts) == 0:
-        # movie file directly in the root
-        return "Uncategorized"
-    if len(parts) == 1:
-        # movie file in a folder directly under the root => use that folder
-        return parts[0]
-    return parts[0]
-
-
-def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) -> list[Path]:
-    """Finds all movie files with the given extensions recursively.
-
-    Args:
-        root (Path): Root directory to search in.
-        extensions (list[str]): Extensions to search for, e.g. ['.mkv', '.mp4'].
-        exclude (Path | None): Directory to exclude from the search (e.g. the
-            output directory of an encode run).
-
-    Returns:
-        list[Path]: List of movie files.
-    """
-    excluded = exclude.resolve() if exclude is not None else None
-    movies: list[Path] = []
-    for extension in extensions:
-        extension = extension.lower().lstrip(".")
-        # glob is case sensitive on linux => check both cases
-        candidates = list(root.glob(f"**/*.{extension}"))
-        candidates.extend(root.glob(f"**/*.{extension.upper()}"))
-        for candidate in candidates:
-            if excluded is not None:
-                try:
-                    candidate.resolve().relative_to(excluded)
-                    continue  # inside the excluded directory
-                except ValueError:
-                    pass
-            movies.append(candidate)
-    # on windows glob is case insensitive => the same file is found twice
-    return list(dict.fromkeys(movies))
-
-
-def movie_record_from_data(filename: Path, data: dict) -> db.MovieRecord:
-    """Converts the get_data output into a database record.
-
-    Args:
-        filename (Path): Path to the movie file.
-        data (dict): The metadata dictionary from get_data.
-
-    Returns:
-        db.MovieRecord: The record for the database.
-    """
-    stat = filename.stat()
-    return db.MovieRecord(
-        path=filename.resolve(),
-        mtime=stat.st_mtime,
-        size=stat.st_size,
-        hash=data.get("hash"),
-        name=data["name"],
-        category=data["category"],
-        duration=data["duration"],
-        duration_raw=data["duration_raw"],
-        fps=data["fps"],
-        codec=data["codec"],
-        bitrate=data["bitrate"],
-        aspect_ratio=data["aspect_ratio"],
-        width=data["dimensions"]["width"],
-        height=data["dimensions"]["height"],
-        crop=data["crop"],
-        hdr=int(data["hdr"]),
-        other_codecs=data["other_codecs"],
-        audio_languages=data["audio_languages"],
-    )
-
-
-def record_from_cache(row) -> dict:
-    """Converts a cached database row into the movie data dictionary used by the output.
-
-    Size and compression rate are recomputed from the row data since they
-    are derived values that are not stored in the database.
-
-    Args:
-        row (sqlite3.Row): The cached file row.
-
-    Returns:
-        dict: The movie data dictionary.
-    """
-    size = convert_unit(row["size"], SIZE_UNIT.GB)
-
-    # it's not really the compression rate, it's rather size/time
-    compression_rate = 0
-    if row["duration_raw"] is not None:
-        compression_rate = round(size / (row["duration_raw"] / 3600), 2)
-    elif row["duration"] is not None:
-        compression_rate = round(size / (timestr_to_int(row["duration"]) / 3600), 2)
-
-    # fps comes back as float from the database => '25' instead of '25.0'
-    fps = row["fps"]
-    if fps is not None and float(fps).is_integer():
-        fps = int(fps)
-
-    return {
-        "name": row["name"],
-        "category": row["category"],
-        "duration": row["duration"],
-        "duration_raw": row["duration_raw"],
-        "fps": fps,
-        "codec": row["codec"],
-        "bitrate": row["bitrate"],
-        "aspect_ratio": row["aspect_ratio"],
-        "dimensions": {"width": row["width"], "height": row["height"]},
-        "crop": row["crop"],
-        "hdr": bool(row["hdr"]),
-        "other_codecs": row["other_codecs"],
-        "audio_languages": row["audio_languages"],
-        "size": size,
-        "compression_rate": compression_rate,
-    }
-
-
-def process_movie(
-    filename: Path, root: Path, config, compute_hash: bool = False
-) -> tuple[dict | None, str | None]:
-    """Collects the metadata of a single movie file.
-
-    Args:
-        filename (Path): Path to the movie file.
-        root (Path): The scan root directory (for the category).
-        config (Conf): The config settings.
-        compute_hash (bool): Compute a fast content hash of the file.
-
-    Returns:
-        tuple: The movie data dictionary (or None on error) and an error
-            message (or None on success).
-    """
-    name = get_name(filename)
-    category = get_category(filename, root)
-    try:
-        ret = get_data(filename, config)
-    except Exception as e:
-        # move errors to the caller and show them at the end
-        return None, f"A reading error occured in '{name}' at '{filename}'. Exception: {e}"
-
-    file_hash = db.compute_hash(filename) if compute_hash else None
-
-    size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
-
-    # it's not really the compression rate, it's rather size/time
-    compression_rate = 0
-    if ret["duration_raw"] is not None:
-        compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
-    elif ret["duration"] is not None:
-        compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
-
-    # check for cropping
-    ret["crop"] = check_black_bars(
-        filename,
-        ret["dimensions"],
-        min_width=config.black_bar_min_width,
-        min_height=config.black_bar_min_height,
-    )
-
-    # add additional data to dictionary
-    ret["name"] = name
-    ret["category"] = category
-    ret["size"] = size
-    ret["compression_rate"] = compression_rate  # is SIZE/TIME
-    ret["other_codecs"] = get_other_codecs(ret["other_codecs"])
-    ret["hash"] = file_hash
-
-    return ret, None
-
-
-def scan_movies(
-    root: Path,
-    config,
-    workers: int | None = None,
-    connection=None,
-    rescan: bool = False,
-    compute_hash: bool = False,
-    exclude: Path | None = None,
-) -> tuple[dict, list[Path], list[str]]:
-    """Scans the root directory for movies and collects their metadata.
-
-    The movies are processed in parallel (thread pool) since the per-movie
-    work consists of ffprobe/cropdetect subprocess calls. Results are
-    collected by index => the output order stays deterministic.
-
-    If a database connection is given, unchanged files (mtime + size) are
-    taken from the cache instead of being probed again, and all results are
-    written back to the database.
-
-    Args:
-        root (Path): Root directory to search in.
-        config (Conf): The config settings.
-        workers (int | None): Number of parallel workers. Defaults to
-            min(8, cpu count).
-        connection (sqlite3.Connection | None): Database connection for the
-            scan cache.
-        rescan (bool): Re-probe all files even if they are cached.
-        compute_hash (bool): Compute a fast content hash for new/changed files.
-        exclude (Path | None): Directory to exclude (e.g. the encode output).
-
-    Returns:
-        tuple: Movies by category, all found movies and error messages.
-    """
-    movies_by_category: dict[str, list[dict]] = {}
-
-    # search for movie files with the configured extensions, recursive
-    movies = find_movies(root, config.extensions, exclude=exclude)
-    if not movies:
-        log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
-        return movies_by_category, movies, []
-
-    error_messages: list[str | None] = [None] * len(movies)
-    results: list[dict | None] = [None] * len(movies)
-
-    # cache lookup => which files can be taken from the database?
-    cached: dict[str, object] = {}
-    if connection is not None and not rescan:
-        cache = db.get_cached_records(connection)
-        for index, filename in enumerate(movies):
-            row = cache.get(str(filename))
-            if row is not None and db.is_unchanged(row, filename):
-                results[index] = record_from_cache(row)
-                cached[str(filename)] = row
-
-    to_scan = [filename for index, filename in enumerate(movies) if results[index] is None]
-
-    with create_movie_progress() as progress:
-        task = progress.add_task("Scanning movies", total=len(movies))
-        progress.advance(task, advance=len(cached))
-        if cached:
-            log(f"{len(cached)} movies taken from the cache.")
-
-        if not to_scan:
-            pass  # everything cached
-        elif workers == 1:
-            # sequential fallback => no thread pool overhead
-            for index, filename in enumerate(movies):
-                if results[index] is not None:
-                    continue
-                results[index], error_messages[index] = process_movie(
-                    filename, root, config, compute_hash=compute_hash
-                )
-                progress.advance(task)
-        else:
-            if workers is None:
-                workers = min(8, (os.cpu_count() or 2))
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {
-                    executor.submit(
-                        process_movie, filename, root, config, compute_hash=compute_hash
-                    ): index
-                    for index, filename in enumerate(movies)
-                    if results[index] is None
-                }
-                for future, index in futures.items():
-                    results[index], error_messages[index] = future.result()
-                    progress.advance(task)
-
-    # collect in file order => deterministic output
-    error_list = [error for error in error_messages if error is not None]
-    for result in results:
-        if result is None:
-            continue
-        movies_by_category.setdefault(result["category"], []).append(result)
-
-    # write back to the database
-    if connection is not None:
-        for index, result in enumerate(results):
-            if result is None:
-                continue
-            record = movie_record_from_data(movies[index], result)
-            db.upsert_file(connection, record)
-        # remove files that are no longer on disk (only inside the scanned
-        # root: other roots in the database keep their history)
-        pruned = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
-        if pruned:
-            log(f"Removed {pruned} missing movies from the database.")
-
-    return movies_by_category, movies, error_list
+# re-exports for backwards compatibility (tests and third parties import
+# these from __main__)
+__all__ = [
+    "app",
+    "find_movies",
+    "get_category",
+    "get_name",
+    "print_summary",
+    "print_table",
+    "scan_movies",
+    "write_csv",
+    "write_output",
+]
 
 
 def write_output(
@@ -503,6 +198,25 @@ def print_summary(movies_by_category: dict, total_time, total_size: float):
     )
 
 
+def _totals(movies_by_category: dict) -> tuple:
+    """Calculates the total duration and size of the scanned movies.
+
+    Args:
+        movies_by_category (dict): Categories as keys and movie lists as values.
+
+    Returns:
+        tuple: Total duration as 'HH:MM:SS' string and total size in GB.
+    """
+    total_time = None
+    total_size = 0
+    for movies in movies_by_category.values():
+        for value in movies:
+            if value["duration"] is not None:
+                total_time = calc_time(total_time, value["duration"])
+            total_size += value["size"]
+    return total_time, total_size
+
+
 @app.command()
 def scan(
     path: Path = typer.Argument(
@@ -528,19 +242,18 @@ def scan(
     no_table: bool = typer.Option(
         False, "--no-table", help="Do not print the results as table to the console."
     ),
-    db_file: Path = typer.Option(
-        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
-    ),
     rescan: bool = typer.Option(
         False, "--rescan", help="Re-probe all files even if they are cached."
     ),
     hash_files: bool = typer.Option(
         False, "--hash", help="Compute a fast content hash for new/changed files."
     ),
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    ),
 ):
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
-
     connection = db.connect(db_file)
     try:
         movies_by_category, movies, error_messages = scan_movies(
@@ -553,6 +266,7 @@ def scan(
         )
     finally:
         connection.close()
+
     if movies:
         total_time, total_size = _totals(movies_by_category)
         write_output(movies_by_category, total_time, total_size, config.separator, output_file)
@@ -680,14 +394,7 @@ def _record_encodes(
     # => batch resume: an interrupted run skips everything it finished before
     encoded_paths: set[str] = set()
     if not overwrite and not dry_run:
-        for movie in movies:
-            file_row = db.get_file_by_path(connection, movie)
-            if file_row is None:
-                continue
-            if db.has_output_for_latest_encode(
-                connection, int(file_row["id"]), output_dir / movie.name
-            ):
-                encoded_paths.add(str(movie))
+        encoded_paths = finished_movies(connection, movies, output_dir)
 
     if not dry_run and quality:
         try:
@@ -711,20 +418,11 @@ def _record_encodes(
                         f"{result.output_size / (1024**3):.2f} GB ({change}) "
                         f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                     )
-                    _save_encode(
-                        connection,
-                        movie,
-                        f"VMAF>{target_vmaf}",
-                        config.handbrake_encoder,
-                        result.input_size,
-                        result.output_size,
-                        chosen_crf=result.chosen_crf,
-                        achieved_vmaf=result.achieved_vmaf,
-                    )
+                    record_quality_results(connection, movie, result, config, target_vmaf)
                 elif result.skipped_reason is not None:
                     # guardrail skip => record it so future runs do not re-probe
                     console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
-                    _save_skip(connection, movie, result.skipped_reason)
+                    record_quality_results(connection, movie, result, config, target_vmaf)
                 else:
                     log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except (RuntimeError, FileNotFoundError) as e:
@@ -748,17 +446,7 @@ def _record_encodes(
         raise typer.Exit(1) from e
 
     # record the encodes of this run in the database
-    for encode_result in results:
-        if not encode_result.success:
-            continue
-        _save_encode(
-            connection,
-            encode_result.input,
-            config.handbrake_preset,
-            config.handbrake_encoder,
-            encode_result.input_size,
-            encode_result.output_size,
-        )
+    record_fixed_results(connection, results, config)
 
 
 @app.command()
@@ -868,79 +556,6 @@ def plan(
         )
 
 
-def _save_encode(
-    connection,
-    movie: Path,
-    preset: str,
-    encoder: str,
-    input_size: int,
-    output_size: int,
-    chosen_crf: int | None = None,
-    achieved_vmaf: float | None = None,
-):
-    """Stores an encode record for the given movie in the database.
-
-    Args:
-        connection: The database connection.
-        movie (Path): The input movie file.
-        preset (str): The preset (or quality target) used.
-        encoder (str): The encoder used.
-        input_size (int): Input size in bytes.
-        output_size (int): Output size in bytes.
-        chosen_crf (int | None): The CRF chosen by the quality search, if any.
-        achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
-    """
-    file_id = _ensure_file_row(connection, movie)
-    saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
-    db.add_encode(
-        connection,
-        file_id,
-        preset,
-        encoder,
-        input_size,
-        output_size,
-        saved_percent,
-        chosen_crf=chosen_crf,
-        achieved_vmaf=achieved_vmaf,
-    )
-
-
-def _save_skip(connection, movie: Path, reason: str):
-    """Stores a skip record for the given movie in the database.
-
-    Args:
-        connection: The database connection.
-        movie (Path): The input movie file.
-        reason (str): Why the movie was skipped.
-    """
-    file_id = _ensure_file_row(connection, movie)
-    db.add_skip(connection, file_id, reason)
-
-
-def _ensure_file_row(connection, movie: Path) -> int:
-    """Returns the file id for the movie, storing a minimal row if needed.
-
-    Args:
-        connection: The database connection.
-        movie (Path): The movie file.
-
-    Returns:
-        int: The file id.
-    """
-    movie = movie.resolve()
-    file_row = db.get_file_by_path(connection, movie)
-    if file_row is not None:
-        return int(file_row["id"])
-    record = db.MovieRecord(
-        path=movie,
-        mtime=movie.stat().st_mtime,
-        size=movie.stat().st_size,
-        name=movie.stem,
-        category=movie.parent.name,
-    )
-    return db.upsert_file(connection, record)
-
-
 @app.command()
 def report(
     db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
@@ -949,8 +564,6 @@ def report(
     ),
 ):
     """Generates a self-contained HTML report from the database."""
-    from metadata_scrapper.report import generate_report
-
     if not db_file.is_file():
         log_error(f"Database '{db_file}' not found! Run a scan first.")
         raise typer.Exit(1)
@@ -1001,25 +614,6 @@ def watch_mode(
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
         raise typer.Exit(1) from e
-
-
-def _totals(movies_by_category: dict) -> tuple:
-    """Calculates the total duration and size of the scanned movies.
-
-    Args:
-        movies_by_category (dict): Categories as keys and movie lists as values.
-
-    Returns:
-        tuple: Total duration as 'HH:MM:SS' string and total size in GB.
-    """
-    total_time = None
-    total_size = 0
-    for movies in movies_by_category.values():
-        for value in movies:
-            if value["duration"] is not None:
-                total_time = calc_time(total_time, value["duration"])
-            total_size += value["size"]
-    return total_time, total_size
 
 
 if __name__ == "__main__":
