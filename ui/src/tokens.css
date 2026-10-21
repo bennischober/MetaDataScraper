@@ -1,11 +1,11 @@
 /*
- * The Drafting Table — design tokens of the dashboard.
+ * ShrinkRay console — design tokens.
  *
- * A technical drawing sheet: cool paper under a faint construction grid,
- * graphite ink, schematic teal for selection/active/primary, amber for the
- * figure in progress, red reserved for failure and destruction. Data is
- * annotated like dimensions: mono tabular values, tracked sans labels,
- * hairline rules, title block. State is density: solid = done, hatched =
+ * A home-lab operator console: one dark cinematic ground and one light
+ * working ground, switched by [data-theme] on <html> (default: dark).
+ * Color is meaning-first: teal = measured/confirmed/selected, amber =
+ * work in progress, red = failure/destruction only. Data is mono tabular,
+ * labels are tracked caps. State is density: solid = done, hatch =
  * in progress, empty = untouched.
  */
 
@@ -32,47 +32,83 @@
   font-display: swap;
 }
 
+/* ════════════════════════ dark (the cinema ground) ═══════════════════════ */
+:root,
+:root[data-theme='dark'] {
+  --ground: #101216;           /* page ground */
+  --panel: #16191e;            /* cards, sheets */
+  --panel-raised: #1b1f25;     /* hover/active cards */
+  --panel-active: #1c2a28;     /* the panel under work (teal-tinted) */
+  --row-alt: #14171b;          /* zebra rows */
+  --seam: #262c34;             /* hairline seams */
+  --row-line: #1f242b;         /* inner table rules */
+  --rail: #0b0d10;             /* the sidebar rail */
+
+  --ink: #e6e9ec;              /* primary text */
+  --ink-dim: #9aa3ad;          /* secondary text */
+  --ink-faint: #838b93;        /* disabled/ghost (contrast-floor safe) */
+
+  --teal: #2dd4bf;             /* accent (dark: brighter for contrast) */
+  --teal-ink: #2dd4bf;         /* teal as text on dark */
+  --teal-glow: rgba(45, 212, 191, 0.12);
+  --amber: #e0a45e;            /* work in progress */
+  --red: #f27265;              /* failure/destruction */
+  --ok: #57c98a;
+
+  --poster-ground: #1a1e24;    /* poster card ground */
+  --poster-line: #2a3138;
+
+  color-scheme: dark;
+}
+
+/* ════════════════════════ light (the working bench) ══════════════════════ */
+:root[data-theme='light'] {
+  --ground: #eef0f2;
+  --panel: #f8f9fa;
+  --panel-raised: #ffffff;
+  --panel-active: #e2f0ee;
+  --row-alt: #f1f3f5;
+  --seam: #c9ced3;
+  --row-line: #dde1e4;
+  --rail: #dfe3e7;
+
+  --ink: #1e2328;
+  --ink-dim: #5b6470;
+  --ink-faint: #6d757d;
+
+  --teal: #0f766e;
+  --teal-ink: #0b5952;
+  --teal-glow: rgba(15, 118, 110, 0.1);
+  --amber: #b45309;
+  --red: #b3382c;
+  --ok: #15803d;
+
+  --poster-ground: #ffffff;
+  --poster-line: #c9ced3;
+
+  color-scheme: light;
+}
+
+/* ════════════════════════ shared ─═══════════════════════ */
 :root {
-  /* ── paper ── */
-  --ground: #eceef0;            /* sheet ground */
-  --panel: #f4f5f6;             /* panels: slightly lighter sheet */
-  --panel-active: #e2f0ee;      /* the panel under work (teal-tinted) */
-  --row-alt: #e9ebed;           /* zebra rows on the sheet */
-  --seam: #c9ced3;              /* hairline seams */
-  --row-line: #dde1e4;          /* inner table rules */
-  --grid-line: rgba(30, 35, 40, 0.055); /* construction grid */
-
-  /* ── ink ── */
-  --ink: #1e2328;               /* graphite, primary text */
-  --ink-dim: #5b6470;           /* secondary text */
-  --ink-faint: #98a1ab;         /* disabled/ghost */
-
-  /* ── drawing accents (meaning only) ── */
-  --teal: #0f766e;              /* selection, active tab, primary action, measured */
-  --teal-ink: #0b5952;          /* teal text on paper (contrast-safe) */
-  --amber: #b45309;             /* the figure in progress */
-  --red: #b3382c;               /* failed, destructive only */
-
-  /* ── type ── */
   --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', Consolas, ui-monospace, monospace;
 
-  --fs-data: 12px;              /* tabular data */
-  --fs-legend: 10.5px;          /* tracked caps labels */
-  --fs-body: 13px;              /* general UI text */
-  --fs-title: 15px;             /* sheet titles */
+  --fs-data: 12px;
+  --fs-legend: 10.5px;
+  --fs-body: 13px;
+  --fs-title: 15px;
+  --fs-page: 19px;
 
-  --track-legend: 1.4px;        /* caps letter-spacing */
+  --track-legend: 1.4px;
 
-  /* ── density hatch patterns (state as density) ── */
-  --hatch-work: repeating-linear-gradient(
-    45deg, #d4d9dd 0 4px, transparent 4px 8px);
-  --hatch-progress: repeating-linear-gradient(
-    45deg, rgba(180, 83, 9, 0.28) 0 4px, transparent 4px 8px);
-  --hatch-skip: repeating-linear-gradient(
-    90deg, rgba(180, 83, 9, 0.18) 0 6px, transparent 6px 12px);
-  --hatch-select: repeating-linear-gradient(
-    45deg, rgba(15, 118, 110, 0.12) 0 4px, transparent 4px 8px);
+  --radius: 4px;               /* console chrome: small, consistent */
+
+  /* density hatch patterns (state as density) */
+  --hatch-work: repeating-linear-gradient(45deg, rgba(128, 140, 152, 0.18) 0 4px, transparent 4px 8px);
+  --hatch-progress: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.22) 0 4px, transparent 4px 8px);
+  --hatch-skip: repeating-linear-gradient(90deg, rgba(224, 164, 94, 0.18) 0 6px, transparent 6px 12px);
+  --hatch-select: repeating-linear-gradient(45deg, var(--teal-glow) 0 4px, transparent 4px 8px);
 }
 
 /* ── shared text voices ── */
@@ -89,7 +125,7 @@
   font-size: var(--fs-data);
 }
 
-/* ── density state chips (annotation squares) ── */
+/* ── density state chips ── */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -108,49 +144,18 @@
   height: 10px;
   border: 1px solid var(--ink-dim);
 }
-.chip.done .swatch { background: var(--teal); border-color: var(--teal); }
+.chip.done .swatch { background: var(--ok); border-color: var(--ok); }
 .chip.progress .swatch { background: var(--hatch-progress); }
 .chip.skip .swatch { background: var(--hatch-skip); }
 .chip.untouched .swatch { background: transparent; }
 .chip.failed .swatch { background: var(--red); border-color: var(--red); }
 .chip.neutral .swatch { background: var(--seam); border-color: var(--ink-dim); }
 .chip.planned .swatch { background: var(--hatch-select); border-color: var(--teal); }
+.chip.missing .swatch { background: transparent; border-style: dashed; border-color: var(--red); }
 
-/* ── the construction grid (the sheet's visible armature) ── */
-.sheet-grid {
-  background-image:
-    repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px 24px),
-    repeating-linear-gradient(to bottom, var(--grid-line) 0 1px, transparent 1px 24px);
-}
-
-/* ── L-corner ticks: the drawing sheet marks its active panel ── */
-.corner-ticks {
-  position: relative;
-}
-.corner-ticks::before,
-.corner-ticks::after {
-  content: '';
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  pointer-events: none;
-}
-.corner-ticks::before {
-  top: -1px;
-  left: -1px;
-  border-top: 2px solid var(--teal);
-  border-left: 2px solid var(--teal);
-}
-.corner-ticks::after {
-  bottom: -1px;
-  right: -1px;
-  border-bottom: 2px solid var(--teal);
-  border-right: 2px solid var(--teal);
-}
-
-/* ── browser surfaces: themed from the palette ── */
+/* ── browser surfaces, themed ── */
 ::selection {
-  background: rgba(15, 118, 110, 0.22);
+  background: var(--teal-glow);
 }
 input {
   caret-color: var(--teal);
@@ -164,23 +169,29 @@ input {
   scrollbar-color: var(--seam) transparent;
 }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
-*::-webkit-scrollbar-thumb { background: var(--seam); }
+*::-webkit-scrollbar-thumb { background: var(--seam); border-radius: 5px; }
 *::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
 *::-webkit-scrollbar-track { background: transparent; }
 
-/* ── focus: visible, teal, offset — keyboard operators are first-class ── */
 :focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 1px;
 }
 
-/* ── motion: one authored moment — annotations draw in with a leader line ── */
+/* ── motion: one authored moment (annotations draw in) ── */
 @media (prefers-reduced-motion: no-preference) {
   .leader-in {
     animation: leader-draw 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
   @keyframes leader-draw {
     from { opacity: 0; transform: translateX(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+  .page-in {
+    animation: page-fade 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes page-fade {
+    from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: none; }
   }
 }

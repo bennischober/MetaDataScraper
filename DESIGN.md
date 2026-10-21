@@ -1,39 +1,64 @@
 ---
-name: MetaDataScraper Dashboard
-description: The Drafting Table — a working drawing sheet for a measured movie-library workbench
+name: ShrinkRay Console
+description: A home-lab operator console for a measured movie library — dark cinema ground and light working bench on one shared structure
 colors:
-  ground: "#eceef0"
-  panel: "#f4f5f6"
-  panel-active: "#e2f0ee"
-  row-alt: "#e9ebed"
-  seam: "#c9ced3"
-  row-line: "#dde1e4"
-  grid-line: "rgba(30, 35, 40, 0.055)"
-  ink: "#1e2328"
-  ink-dim: "#5b6470"
-  ink-faint: "#98a1ab"
-  teal: "#0f766e"
-  teal-ink: "#0b5952"
-  amber: "#b45309"
-  red: "#b3382c"
+  # Dark (default) theme values below. Every token has a light-theme twin:
+  # the canonical source is ui/src/tokens.css ([data-theme] blocks); the
+  # light value for each token is carried in .impeccable/design.json
+  # (colorMeta.<key>.light) and named in the Colors section.
+  ground: "#101216"
+  rail: "#0b0d10"
+  panel: "#16191e"
+  panel-raised: "#1b1f25"
+  panel-active: "#1c2a28"
+  seam: "#262c34"
+  row-line: "#1f242b"
+  ink: "#e6e9ec"
+  ink-dim: "#9aa3ad"
+  ink-faint: "#838b93"
+  teal: "#2dd4bf"
+  teal-ink: "#2dd4bf"
+  teal-glow: "rgba(45, 212, 191, 0.12)"
+  amber: "#e0a45e"
+  red: "#f27265"
+  ok: "#57c98a"
+  poster-ground: "#1a1e24"
+  poster-line: "#2a3138"
 typography:
-  title-block:
+  brand:
+    fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
+    fontSize: "16px"
+    fontWeight: 700
+    lineHeight: 1.2
+    letterSpacing: "3px"
+  hero:
+    fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
+    fontSize: "22px"
+    fontWeight: 700
+    lineHeight: 1.2
+  page-title:
     fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
     fontSize: "19px"
     fontWeight: 700
     lineHeight: 1.2
-    letterSpacing: "3px"
-  title:
+  poster-title:
     fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
-    fontSize: "15px"
+    fontSize: "17px"
     fontWeight: 700
     lineHeight: 1.3
+    letterSpacing: "0.3px"
+  stat:
+    fontFamily: "IBM Plex Mono, Consolas, ui-monospace, monospace"
+    fontSize: "22px"
+    fontWeight: 600
+    lineHeight: 1.2
+    fontFeature: "'tnum' 1"
   body:
     fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.45
-  legend:
+  label:
     fontFamily: "IBM Plex Sans, Segoe UI, system-ui, sans-serif"
     fontSize: "10.5px"
     fontWeight: 400
@@ -44,39 +69,43 @@ typography:
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.45
+    fontFeature: "'tnum' 1"
   data-strong:
     fontFamily: "IBM Plex Mono, Consolas, ui-monospace, monospace"
     fontSize: "12px"
     fontWeight: 600
     lineHeight: 1.45
+    fontFeature: "'tnum' 1"
 rounded:
-  none: "0px"
   chip: "2px"
+  md: "4px"
+  pill: "5px"
 spacing:
-  sm: "8px"
+  xs: "6px"
+  sm: "10px"
   md: "14px"
   lg: "18px"
   xl: "26px"
 components:
   button-primary:
     backgroundColor: "{colors.teal}"
-    textColor: "#ffffff"
-    rounded: "{rounded.none}"
-    padding: "5px 14px"
-  button-primary-hover:
-    backgroundColor: "{colors.teal-ink}"
-    textColor: "#ffffff"
-    rounded: "{rounded.none}"
+    textColor: "{colors.ground}"
+    rounded: "{rounded.md}"
     padding: "5px 14px"
   button-secondary:
-    backgroundColor: "{colors.panel}"
+    backgroundColor: "{colors.panel-raised}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
+    rounded: "{rounded.md}"
     padding: "5px 14px"
   button-secondary-hover:
-    backgroundColor: "{colors.panel-active}"
+    backgroundColor: "{colors.panel}"
     textColor: "{colors.teal-ink}"
-    rounded: "{rounded.none}"
+    rounded: "{rounded.md}"
+    padding: "5px 14px"
+  button-quiet:
+    backgroundColor: "{colors.panel-raised}"
+    textColor: "{colors.ink-dim}"
+    rounded: "{rounded.md}"
     padding: "5px 14px"
   chip-state:
     backgroundColor: "{colors.panel}"
@@ -86,64 +115,84 @@ components:
   input-text:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.none}"
-    padding: "4px 6px"
+    rounded: "{rounded.md}"
+    padding: "6px 12px"
+  stat-card:
+    backgroundColor: "{colors.panel}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.md}"
+    padding: "12px 14px"
+  rail-item-active:
+    backgroundColor: "{colors.panel-active}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.md}"
+    padding: "7px 12px"
 ---
 
-# Design System: MetaDataScraper Dashboard
+# Design System: ShrinkRay Console
 
 ## Overview
 
-**Creative North Star: "The Drafting Table"**
+**Creative North Star: "The ShrinkRay Console"**
 
-The dashboard is a working drawing sheet, not a control panel. The library is surveyed, annotated and measured on cool paper under a faint construction grid; graphite ink carries the text, and a single schematic teal carries meaning — selection, the active tab, the primary action, the measured tick. Every value on the sheet is a measurement: mono figures with their units, labels in tracked caps like drawing annotations, hairline seams instead of card shadows. The world (locked 2026-10-21, seed `3241af8c9d381f2a`) deliberately refuses two clichés: the stacked-stat-panels dashboard arrangement and the costume of any operated instrument — no terminal chrome, no console glow, no poster wall.
+The console is a home-lab operator surface: Home Assistant's shell discipline meets Plex's library recognition, pointed at one measured movie library. Every domain is one click away in the sidebar rail; the overview answers "what needs me?" in five seconds (failures, missing files, duplicates, what the last runs reclaimed, where work stands); the library is *recognized* at a glance in the poster grid and *operated* in bulk through the table and selection. The world is a deliberate 180° from round 1 (the Drafting Table sheet): the rejected single-page document arrangement is replaced by a console shell, and the previously rejected costume clichés are re-aimed — this is a console by structure and restraint, never by gaming-RGB, glow, or terminal cosplay.
 
-State is expressed as **density**, the way a draftsman fills a region: solid fill means done, diagonal hatching means in progress, empty outline means untouched. Color participates in that system but never decorates it — teal, amber and red are budgeted for meaning only. The single allowed flourish is the annotation moment: selecting rows draws a leader-line note into the margin ("12 SELECTED → EST. −38.2 GB"), the sheet talking back to its surveyor.
+The system is **dual-theme by token, not by layout**: a dark cinema ground (`#101216`, the default) and a light working bench (`#eef0f2`), switched by `[data-theme]` on `<html>` and persisted. Both themes render the *same* structure — components never branch on theme; they only consume tokens. Color stays meaning-first: teal = measured/confirmed/selected, amber = work in progress, red = failure/destruction only. State is still expressed as **density** — solid fill means done, hatching means in progress, an empty swatch means untouched, a dashed outline means missing.
 
-The register is quiet, dense and honest. Numbers are never rounded into vagueness, absent values are an em-dash, and irreversible actions (bar cropping, duplicate deletion) interrupt with a drawn confirmation ceremony rather than a toast. The surface serves one expert user on localhost; the visual system optimizes for long, focused work sessions at readable density, not for marketing impressions.
+The register is quiet, dense and honest. Numbers carry units and fixed precision, absent values are an em-dash, an encode that made the file *larger* is reported as "+X% larger" in red rather than spun, and irreversible work (bar cropping, duplicate deletion) interrupts with a confirmation ceremony instead of a toast. The surface serves one expert user on localhost; it optimizes for long operating sessions at readable density, not for marketing impressions.
 
 **Key Characteristics:**
 
-- Cool paper ground (`#eceef0`) with a 24px construction grid as the sheet's visible armature
-- Graphite ink text, hairline seams, zero shadows — depth comes from tone, line weight and hatching
-- One meaning-carrying accent (schematic teal) plus amber (in progress) and red (failure/destruction only)
-- Two type voices: IBM Plex Sans speaks and labels, IBM Plex Mono measures (tabular numerals)
-- Density-state system: solid / hatched / empty swatches and row fills
-- Title-block header, domain sheet tabs, bulk action strip, margin-callout drill-down, L-corner ticks marking the active panel
-- Compact data density: 12px tabular data, 10.5px tracked caps labels, 13px body
+- Console shell: 190px sidebar rail (brand, nav with count badges, theme + watcher toggles) beside a capped content column
+- Dual theme via `[data-theme]` — dark cinema ground (default) and light working bench, one shared structure, token-switched only
+- Meaning-first accents: teal (measured/confirmed/selected), amber (in progress), red (failure/destruction), green (encoded/done)
+- Density-state system: solid / hatched / empty / dashed chips and row fills carry decision state
+- Overview stat band of button-cards; running-work band with progress trace; attention panels for failures, missing files and setup
+- Poster grid with typographic posters (no artwork exists — the title *is* the poster) beside a dense table view, toggled in place
+- Bulk bar with the leader-note estimate ("→ EST. −38.2 GB · 210.4 GB BASE") drawn in as the annotation moment
+- Movie provenance page carrying every schema-v5 encode metric (VMAF, CRF, presets, encode time, probes, toolchain)
+- IBM Plex Sans speaks, IBM Plex Mono measures (tabular numerals); 4px console chrome, hairline seams, no shadows
 
 ## Colors
 
-A cool, near-neutral paper palette where nearly everything is graphite-on-paper and three accent hues carry all the meaning.
+A two-ground palette where nearly everything is ink-on-console and four accent hues carry all the meaning; the dark values below are the defaults, with the light-theme twin named beside each.
 
 ### Primary
-- **Schematic Teal** (`#0f766e`): The system's one voice. Selection hatching, checkbox accents, the active tab underline, the primary action fill (white text on it), measured VMAF ticks on the evidence wall, corner ticks on the active panel, the callout's left rule, focus rings, text caret, and text selection background (at 22% alpha).
-- **Teal Ink** (`#0b5952`): The contrast-safe teal for text *on paper* — active tab labels, leader-note estimates, measured VMAF values, positive saved percentages. Use this, not `--teal`, whenever teal appears as text on the sheet.
+- **Console Teal** (`--teal`, dark `#2dd4bf` / light `#0f766e`): The system's voice of "confirmed". Selection hatch and borders, checkbox accents, the primary action fill, the active rail item tint, the overview's running-band hatch and trace fill, measured VMAF values, focus rings, text carets, and text selection (at 12%/10% alpha via `--teal-glow`). On dark it brightens to `#2dd4bf` so accent survives the low ground; on light it deepens to `#0f766e`.
+- **Teal Ink** (`--teal-ink`, dark `#2dd4bf` / light `#0b5952`): Teal as *text*. On dark it equals the fill teal; on light it is the darker, contrast-safe `#0b5952`. Always use this token for teal text — never the fill value directly.
+- **Teal Glow** (`--teal-glow`, dark `rgba(45, 212, 191, 0.12)` / light `rgba(15, 118, 110, 0.1)`): The wash layer — text selection, the selection hatch (`--hatch-select`), the running-band hatch.
 
 ### Secondary
-- **Alert Amber** (`#b45309`): The figure in progress. Running-row hatching and `IN WORK` chips, the progress trace's leading edge, the watcher/queue warning counts, the HDR tag, and the drawn warning mark on the irreversible bar-crop toggle. Amber is a status, never a decoration.
+- **Work Amber** (`--amber`, dark `#e0a45e` / light `#b45309`): The figure in progress. Running-row hatching, `IN WORK` chips and corner tags, the trace fill's leading edge, warning count badges on the rail, the HDR tag, and the warning toggles (`REMOVE BARS`, `hide missing` use red-accented checkboxes — see Tertiary). Amber is a status, never a decoration.
 
 ### Tertiary
-- **Alarm Red** (`#b3382c`): Failed and destructive only. Failed job bands and error strips (with a faint red hatch background), delete/confirm buttons, the irreversible-work confirmation strip border and hatch.
+- **Alarm Red** (`--red`, dark `#f27265` / light `#b3382c`): Failed and destructive only. Failure badges, error strips and red hatch backgrounds, the confirmation ceremony borders, destructive-outline buttons (hover fills red), the missing-file chip's dashed swatch, and the accent on irreversible toggles.
+
+### Confirmation Green
+- **Signal Green** (`--ok`, dark `#57c98a` / light `#15803d`): Encoded/done. The solid `done` swatch on decision chips and poster corner tags, `KEEP (BEST)` chips, and job states rendered as `done`. Green answers "is this title handled?"; teal answers "is it selected/measured?". They are not interchangeable.
 
 ### Neutral
-- **Sheet Ground** (`#eceef0`): The page itself; `body` background and the sheet surface.
-- **Panel** (`#f4f5f6`): Slightly lighter sheet stock — panels, bars, table background, chips, buttons at rest.
-- **Active Panel** (`#e2f0ee`): Teal-tinted paper for the panel under work — active filter chips, hovered cells, best-keep duplicate rows, open callout rows.
-- **Row Alt** (`#e9ebed`): Reserved zebra value, defined in `tokens.css` but currently unreferenced — tables separate rows with hairline rules instead.
-- **Seam** (`#c9ced3`): The hairline workhorse — panel borders, chip borders, inactive button borders, divider rules, scrollbar thumb.
-- **Row Line** (`#dde1e4`): Inner table rules between rows.
-- **Grid Line** (`rgba(30, 35, 40, 0.055)`): The 24px construction grid under panels and the table.
-- **Graphite Ink** (`#1e2328`): Primary text, structural 1–2px rules, the target arrow on the dimension line, overlay scrims (at 45–50% alpha).
-- **Dim Ink** (`#5b6470`): Secondary text, legend labels, quiet states.
-- **Faint Ink** (`#98a1ab`): Disabled/ghost text, placeholder, job IDs, removable-chip ✕ buttons.
+- **Cinema Ground / Working Bench** (`--ground`, dark `#101216` / light `#eef0f2`): The page itself; also the text color on the primary button (inverted per theme).
+- **Rail** (`--rail`, dark `#0b0d10` / light `#dfe3e7`): The sidebar rail's darker ground — one step below the page, so navigation reads as chrome.
+- **Panel** (`--panel`, dark `#16191e` / light `#f8f9fa`): Cards, sheets, tables, chips, buttons at rest.
+- **Raised Panel** (`--panel-raised`, dark `#1b1f25` / light `#ffffff`): Hover/active cards and the default button fill — one step up from panel.
+- **Active Panel** (`--panel-active`, dark `#1c2a28` / light `#e2f0ee`): Teal-tinted ground for "under work" — active rail items, the armed bulk bar, selected poster cards, best-keep duplicate rows.
+- **Seam** (`--seam`, dark `#262c34` / light `#c9ced3`): The hairline workhorse — container borders, control borders, dividers, scrollbar thumbs.
+- **Row Line** (`--row-line`, dark `#1f242b` / light `#dde1e4`): Inner rules between table rows and panel sections (lighter than seam, so structure reads inside a panel).
+- **Ink** (`--ink`, dark `#e6e9ec` / light `#1e2328`): Primary text.
+- **Dim Ink** (`--ink-dim`, dark `#9aa3ad` / light `#5b6470`): Secondary text, legend labels, quiet states, rail labels at rest.
+- **Faint Ink** (`--ink-faint`, dark `#838b93` / light `#6d757d`): Disabled/ghost text, placeholders, removable-chip ✕ buttons, job IDs. Chosen as the contrast floor in both themes.
+- **Poster Ground / Poster Line** (`--poster-ground` dark `#1a1e24` / light `#ffffff`; `--poster-line` dark `#2a3138` / light `#c9ced3`): The typographic poster area of library cards and its bottom rule.
+- **Row Alt** (`--row-alt`, dark `#14171b` / light `#f1f3f5`): Defined in `tokens.css` but currently unreferenced — tables separate rows with hairline rules, not zebra fills. Reserved; do not reach for it casually.
 
 ### Named Rules
-**The Meaning-Only Accent Rule.** Teal, amber and red encode state — selection, progress, failure. They never appear as decoration; if a color isn't telling the user something about their data or work, it isn't there.
+**The Meaning-Only Accent Rule.** Teal, amber, red and green encode state — selection/measurement, progress, failure, completion. They never appear as decoration; if a color isn't telling the user something about their data or work, it isn't there.
 
 **The Red Lock Rule.** Red is reserved for failure and irreversible destruction. Nothing else — not badges, not emphasis, not charts — may use it.
 
-**The Teal-Ink Rule.** Teal as text on paper is always the darker `--teal-ink` (`#0b5952`), never the fill teal, so accent text stays contrast-safe.
+**The Teal-Ink Rule.** Teal as text is always `--teal-ink`, never the raw fill token, so accent text stays contrast-safe in *both* themes.
+
+**The One Structure, Two Grounds Rule.** Themes switch token values and nothing else. A component must never branch on theme, hardcode a theme's hex, or change layout between `[data-theme='dark']` and `[data-theme='light']`.
 
 ## Typography
 
@@ -151,135 +200,161 @@ A cool, near-neutral paper palette where nearly everything is graphite-on-paper 
 **Body Font:** IBM Plex Sans (same family — there is no separate display face)
 **Label/Mono Font:** IBM Plex Mono (self-hosted woff2, 400 and 500–600; fallbacks `Consolas, ui-monospace, monospace`)
 
-**Character:** A drafting-office pairing. Plex Sans speaks — titles, labels, prose — in small, tightly tracked caps for annotations; Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like a dimension chain. Faces are self-hosted because a localhost tool must not depend on a CDN.
+**Character:** An operator-console pairing. Plex Sans speaks — page titles, labels, prose, poster titles — with labels in small tracked caps like equipment annotations; Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like an instrument readout. Faces are self-hosted because a localhost tool must not depend on a CDN.
 
 ### Hierarchy
-- **Title Block** (700, 19px, 3px letter-spacing, uppercase by content): The product name in the header title block — the drawing's stamp. The only large type on the sheet.
-- **Title** (700, 15px, ~1.3): Sheet titles inside callouts and detail views.
-- **Body** (400, 13px, 1.45): General UI text, callout facts, names, empty-state sentences.
-- **Legend** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, sheet labels (`SHEET 02 — DUPLICATE GROUPS`), column headers, button text, key/value keys, the colophon. Always dim or body ink, never accent-colored except where meaning applies.
-- **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF values, job IDs, elapsed times. Strong variant at 600 for emphasized values (title-block cell values, name cells).
-- **Micro** (10px, Plex Sans or Mono): tick names, axis marks, small button labels where legend would overflow.
+- **Hero** (700, 22px, ~1.2): The movie-detail page title and the stat values' scale mate — the largest type in the console, used once per view.
+- **Page Title** (700, 19px, `--fs-page`): The `h2` heading of every page (Overview, Library, Duplicates, Jobs, Config), over a legend annotation line.
+- **Stat** (600, 22px, mono, tabular): The big number in overview stat cards — count, GB, mean VMAF, hours.
+- **Brand** (700, 16px, 3px letter-spacing, uppercase by content): `SHRINKRAY` in the rail, over the `LIBRARY CONSOLE` legend line.
+- **Poster Title** (700, 17px, 0.3px tracking, 1.3 line-height, dim ink): The typographic poster — the movie name set large and centered on the card's 2:3 field, clamped to 4 lines.
+- **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
+- **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
+- **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
+- **Micro** (10px–9.5px): poster corner tags (9.5px, 1px tracking), in-table HDR tags and job action buttons (10px).
 
 ### Named Rules
 **The Two Voices Rule.** Plex Sans talks, Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is Plex Sans. Never set measurements in the sans.
 
-**The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "+64.3%"), and an absent value is an em-dash (`—`), never blank or zero.
+**The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "2h 14m"), and an absent value is an em-dash (`—`), never blank or zero. Growth is reported honestly: an encode that enlarged the file prints "+X.X% larger" in red, not a masked percentage.
 
 ## Layout
 
-The page is one full-width drawing sheet: a single flex column (`min-height: 100vh`, `padding: 18px 26px 30px`, `gap: 14px`) that reads top to bottom like a sheet is read:
+The console is a fixed shell plus a content column: `display: flex` on the root, a **190px sidebar rail** (sticky, full viewport height, `--rail` ground, 1px right seam, padding `18px 12px`, gap 20px) and a **main column** (`flex: 1`, `max-width: 1500px`, padding `20px 26px 40px`, gap 14px). The rail reads top to bottom: brand stamp, section nav, then (pinned to the foot) the theme toggle and watcher toggle.
 
-1. **Title block** — product name + annotation line on the left, a bordered cell strip on the right (SHEET · SAVED · WATCHER · QUEUE); closed by a 2px ink rule.
-2. **FIG. 1 — evidence wall** — the measured-quality dimension line.
-3. **Domain tabs** — LIBRARY / DUPLICATES / JOBS with mono counts, CONFIG pinned right; sheet-tab styling.
-4. **Bulk bar** — the action strip: selection controls and per-selection actions left (with the leader-note estimate), TARGET VMAF input and SCAN ALL / PLAN ALL / ENCODE ALL right.
-5. **Domain sheet** — the active table or panel; the library table is the primary work area.
-6. **Sources strip** — mono path chips (the drawing's source note) plus the bar-crop toggle.
-7. **Live job bands** — running/failed work bands (library domain only).
-8. **Colophon** — centered legend line pinned to the sheet foot.
+Pages are flex columns with a 12–14px gap sharing one anatomy: **page head** (19px title + legend annotation) → **toolbar/band** → **work area**. The two workhorse pages:
 
-Spacing clusters around the token steps (8/14/18/26px) plus a few in-context values: table cells `7px 12px`, header cells `8px 12px`, bars `8px 14px`, chips `2px 8px` to `3px 12px`. Density is compact but airy — hairlines do the separating, padding never crowds.
+- **Overview**: stat band (button-cards in an `auto-fit, minmax(150px, 1fr)` grid, gap 10px) → running-work band (or a dashed "no active work" quiet strip) → attention panels in an `auto-fit, minmax(320px, 1fr)` column grid (ATTENTION — FAILURES · MISSING FILES · SETUP).
+- **Library**: toolbar (search, category *select*, hide-missing toggle, grid/table toggle) → bulk bar → poster grid (`auto-fill, minmax(150px, 1fr)`, gap 12px) or data table. The bulk bar sits *above* the list — work is never below the fold of its own list.
 
-The library table: sticky header over a scroll area, checkbox column 34px, name column max 340px with ellipsis, numeric columns right-aligned, inner rules `--row-line`. The construction grid (24px, `--grid-line`) underlays the table wrap and is available via `.sheet-grid` for any panel that should read as drawing surface.
+The **table view**: wrapped in a seam-bordered scroll area, sticky header (`z-index: 1`, panel fill), header cells `8px 12px` in legend voice, body cells `7px 12px` separated by `--row-line`, checkbox column 34px, numeric columns right-aligned, name column max 340px with ellipsis. Selected rows fill with `--hatch-select`; the in-work row fills with `--hatch-progress`.
 
-Responsive: below **760px** the sheet padding drops to 12px, the title-block cells span full width, and the bulk bar stacks vertically with actions right-aligned. There are no other breakpoints — this is a desktop workbench.
+Spacing clusters on the token steps (6/10/14/18/26px) plus in-context values: bulk bar `8px 14px`, stat cards `12px 14px`, panel heads `9px 14px`, table cells `7–8px 12px`, chips `2px 8px`, poster meta `9px 10px 10px`. Density is compact but airy — hairlines separate, padding never crowds.
+
+Responsive: below **900px** the rail folds into a top bar (nav goes horizontal with scroll, the active item gains a 2px teal inset underline, main padding drops to 14px, the confirmation strip spans full width); the movie page's two-column fact panels stack below **820px**. There are no other breakpoints — this is a desktop console.
+
+### Named Rules
+**The One-Click-Away Rule.** Every domain lives in the rail and is reachable in one click from anywhere; the rail's badges surface counts (library size, duplicate groups, running jobs, failures) so navigation carries status, not just labels.
+
+**The Five-Second Rule.** The overview must answer "does anything need me?" — failures, missing files, duplicates, active work — in one viewport glance, without scrolling into the library.
 
 ## Elevation & Depth
 
 **No shadows — the system is flat and states it.** Depth is conveyed by four means only:
 
-- **Tonal layering**: ground → panel → active-panel, a two-step lightness ramp plus a teal tint for "under work".
-- **Line weight**: hairline 1px seams for containers, 2px ink rules for structural boundaries (title block, table head, active tab underline, callout edge).
+- **Tonal layering**: rail → ground → panel → panel-raised, plus the teal-tinted `--panel-active` for "under work" — a lightness ladder, not a lighting model.
+- **Line weight**: 1px hairline seams for containers and controls; heavier *meaning* borders in accent colors (teal on the armed bulk bar, amber on in-work cards, red on confirmations).
 - **Density hatching**: the four repeating-linear-gradient hatch patterns (see Shapes) fill regions to signal state.
-- **Overlay scrim**: modal layers sit on `rgba(30, 35, 40, 0.45–0.5)` — callout at `z-index: 40`, deletion confirm at `z-index: 60`, sticky table header at `z-index: 1`.
+- **Overlay scrim**: the deletion confirmation sits on `rgba(0, 0, 0, 0.5)` at `z-index: 60`; the sticky table header holds `z-index: 1`.
 
 ### Shadow Vocabulary
-None. Do not introduce box-shadows; a shadow would read as a foreign sticker on the sheet.
+None. Do not introduce box-shadows, glows or blur. The single sanctioned exception is the **inset rule**: below 900px the active rail item marks itself with `box-shadow: inset 0 -2px 0 var(--teal)` — an underline drawn as a rule, not a shadow cast.
 
 ### Named Rules
 **The Hairline Rule.** Separation is drawn, not lit. Any need for depth is answered with a seam, a tone step, or a heavier rule — never a shadow or glow.
 
 ## Shapes
 
-The form language is sharp-cornered technical drawing. Corners are square (0px) everywhere; the single exception is the state chip at 2px. Borders are 1px hairlines (`--seam`) for containers and controls, with 2px structural rules (ink or teal) reserved for boundaries that matter.
+The form language is small, consistent console chrome. Corners are **4px** (`--radius`) on every card, panel, button and input; the **2px** radius belongs to chips, poster corner tags and the HDR tag; the **5px** pill radius belongs to progress traces (a 10px-tall track fully rounded) and scrollbar thumbs. Nothing rounds further — no large radii, no circles except checkbox glyphs.
 
-- **Corner ticks** (`.corner-ticks`): 9px L-shapes in 2px teal drawn at the top-left and bottom-right of the active panel — the drawing marks the region being worked. Applied to the library panel frame.
 - **Hatch patterns** (45° stripes, 4px on / 4px off unless noted):
-  - `--hatch-work` — neutral grey hatch (`#d4d9dd`): the empty progress-trace track.
-  - `--hatch-progress` — amber at 28% alpha: running rows, `IN WORK` chips, the trace fill (terminated by a 2px amber right edge).
-  - `--hatch-skip` — amber at 18% alpha, vertical 90° 6px/6px: skipped-state chips (deliberately coarser so skip reads differently from progress).
-  - `--hatch-select` — teal at 12% alpha: selected rows and `PLANNED` chips.
-- **Drawn marks over glyphs**: the bar-crop warning is drawn with two 1.5px amber crossing strokes (a CSS X), not a unicode character — marks are constructed like linework.
-- **Path truncation**: long paths use `direction: rtl` so the *tail* of the path stays visible — the folder name is the information.
-- **Scrollbars**: thin, `--seam` thumb on transparent track (Webkit: 10px, darkening to faint ink on hover).
+  - `--hatch-work` — neutral grey at 18% alpha: the empty progress-trace track.
+  - `--hatch-progress` — amber at 22% alpha: running rows, `IN WORK` chips, the jobs-log trace fill (terminated by a 2px amber right edge).
+  - `--hatch-skip` — amber at 18% alpha, vertical 90°, 6px/6px: skipped-state chips (deliberately coarser so skip reads differently from progress).
+  - `--hatch-select` — teal glow: selected rows, `PLANNED` chips, selected poster cards.
+  - Low-alpha accent hatches (6–8%) also tint failure/error strips and the running overview band.
+- **Dashed borders mean "not finished / not available"**: the add-folder and add-extension inputs, empty states ("no titles match…", "no duplicates found"), and the missing chip's dashed swatch. A dashed seam is an invitation or an absence — never a style accent.
+- **Path truncation**: long paths use `direction: rtl` so the *tail* of the path stays visible — the folder and file name are the information.
+- **Scrollbars**: thin, `--seam` thumb on transparent track (10px, darkening to faint ink on hover).
+- **Toggles as glyphs**: the theme toggle prints `◐ DARK` / `◑ LIGHT`; the watcher prints `● WATCHER` / `○ WATCHER` — state as a typographic mark, not an icon font.
 
 ## Components
 
+For each component: character line, then shape, color assignment, states, and distinctive behavior.
+
+### Sidebar Rail
+The console's chrome spine. Width 190px, rail ground, right seam, sticky. **Brand**: `SHRINKRAY` (16px/700/3px tracking) over the `LIBRARY CONSOLE` legend. **Nav** (`aria-label="Sections"`): full-width items (13px/500, padding `7px 12px`, 4px radius, dim ink) — Overview, Library, Duplicates, Jobs, Config; hover raises to panel fill and ink; the active item sits on `--panel-active`. **Badges** ride right-aligned in mono 10.5px: Library always shows the title count (dim); Duplicates shows a group count in amber when non-zero; Jobs shows running jobs in amber; Overview shows failures in red. Badges are conditional — absent when zero, so the rail stays quiet when healthy. **Foot**: theme toggle (`◐ DARK` / `◑ LIGHT`) and watcher toggle (`● WATCHER` when running, teal border + teal-ink text; `○ WATCHER` when stopped).
+
 ### Buttons (`.act`)
-- **Shape:** sharp corners (0px), 1px border, legend voice (10.5px, 1.4px tracking, uppercase), padding `5px 14px` (`6px 16px` inside the callout).
-- **Secondary (default):** panel background, 1px ink border, ink text. Hover: active-panel background, teal-ink border and text.
-- **Primary:** solid teal fill, white text, teal border. Hover: teal-ink fill. This is the sheet's single loudest element — ENCODE ALL and the callout's ENCODE.
-- **Quiet:** seam border, dim ink text (CLEAR, CANCEL, DISMISS). In job rows, quiet hover turns red — cancellation and dismissal are destructive-adjacent.
+- **Shape:** 4px radius, 1px border, legend voice (10.5px, 1.4px tracking, uppercase). Three context sizes: compact `4px 12px` (overview strips), standard `5px 14px` (bulk bar, tables), roomy `6px 16px` (hero actions, config).
+- **Secondary (default):** raised-panel fill, 1px ink border, ink text. Hover: teal border, teal-ink text.
+- **Primary:** solid teal fill, ground-colored text (inverts per theme — dark ground text on bright teal, light ground text on deep teal). Hover: `brightness(1.08)`. This is the console's loudest element — ENCODE ALL, ENCODE SELECTED, ENCODE, SAVE CONFIG.
+- **Quiet:** seam border, dim ink (CLEAR, CANCEL, DISMISS, FOLDER). In job rows, quiet actions cancel or retry.
+- **Destructive outline (DELETE, CROP):** seam border with red text; hover fills red with ground text.
 - **Disabled:** 40% opacity, default cursor.
-- **Destructive outline (delete, confirm):** seam border with red text; hover fills red with white text.
 
-### State Chips (`.chip`)
-- **Style:** 2px-radius pill, panel background, 1px seam border, legend voice, padding `2px 8px`; a 10px square `.swatch` with 1px dim-ink border leads the label.
-- **State variants:** `done` (solid teal swatch), `progress` (amber hatch), `skip` (coarse amber hatch), `untouched` (empty swatch), `failed` (solid red), `neutral` (seam fill, for group reasons like "SAME HASH"), `planned` (teal hatch, teal border). The running row swaps its decision chip for a live `IN WORK {percent}%` chip.
-- **Filter chips (`.cat-chip`):** the category filter row — mono 12px, seam border, dim text; active state: teal border, active-panel fill, teal-ink text; `aria-pressed` carries the toggle state.
+### Density State Chips (`.chip`)
+- **Style:** 2px-radius pill, panel background, 1px seam border, legend voice, padding `2px 8px`; a 10px square `.swatch` with a 1px dim-ink border leads the label.
+- **State variants (the density system):** `done` — solid green swatch (encoded); `progress` — amber hatch (in progress); `skip` — coarse vertical amber hatch (skipped); `untouched` — empty swatch; `failed` — solid red; `neutral` — seam fill (group reasons like `SAME HASH`, categories); `planned` — teal hatch with teal border; `missing` — **dashed red border, transparent fill** (absent from disk, schema v6). The running row swaps its decision chip for a live `IN WORK {percent}%` variant.
+- **Poster corner tags** carry the same states in micro: 9.5px mono tags at the poster's bottom-right (`done` green text/border, `skip` amber, `planned` teal, `progress` amber with live percent, `missing` dashed red).
 
-### Title Block
-The header stamp. Left: product name in 19px/700/3px-tracking caps over a legend annotation line (library size, VMAF target). Right: a 1px-ink-bordered cell strip whose cells are separated by 1px seams — each cell is a key (9px tracked caps, dim) over a value (12px mono/sans, 600). The WATCHER cell is a live toggle button (● RUNNING in teal ink / ○ STOPPED) with an active-panel hover. The block closes with a 2px ink rule — the heaviest line on the sheet.
+### Overview Stat Band
+The overview's first answer. Button-cards (they navigate — TITLES and RECLAIMED go to the library, DUPLICATES to its page) on panel fill with seam borders, padding `12px 14px`; each is a legend label over a 22px mono value over a 10.5px mono dim sub-line ("184.2 GB of 512 GB source", "{n} measured"). Two stats are **conditional**: MISSING appears only when files are absent (red value), ENCODE TIME only when schema-v5 durations exist. Warning values colorize: duplicates > 0 in amber, missing in red. MEAN VMAF renders an em-dash until something is measured — the band never fakes a figure.
 
-### Sheet Tabs
-Domain tabs read as sheet tabs: transparent buttons in legend voice, dim ink; hover darkens to ink; the active tab gets panel fill, a 1px seam border (bottom hidden by a −1px margin overlap) and a 2px teal underline in teal-ink text. Counts ride along in mono; a non-zero duplicates or running-jobs count turns amber. CONFIG sits alone on the right after a flex spacer.
+### Running-Work Band & Trace
+The figure in progress, pinned between stat band and attention panels: teal-glow hatch over panel, seam border, padding `12px 16px`. Head: `IN WORK · {KIND}` in amber legend voice against a mono `3/12 · 41%` reading. Title (14px/600), then the **trace** — a 10px pill track on `--hatch-work` with a solid teal fill, `role="progressbar"` with live `aria-valuenow/min/max` — then the stage detail in dim mono. When nothing runs, the band is replaced by a **quiet strip**: dashed seam border, "no active work" in mono dim, and a GO TO LIBRARY action. Empty is honest, never decorative.
 
-### Bulk Bar
-The action strip above the work, always visible on the library domain: 1px ink border, panel fill, `8px 14px` padding, split left/right. Left: select-all checkbox (teal accent, 14px) with `{n} SELECTED` in mono, ENCODE SELECTED / PLAN SELECTED / CLEAR, then the **leader note** — `→ EST. −X.X GB · Y GB BASE` in teal-ink mono, entering with the leader-draw animation. Right: the TARGET input (58px mono number field, 70–100 step 0.5) and SCAN ALL / PLAN ALL / **ENCODE ALL** (primary). This strip is where bulk verbs live — never scatter actions into rows.
+### Attention Panels
+The overview's three-column row (min 320px panels): **ATTENTION — FAILURES** (`#{id} {kind}` in red mono, error text dim and ellipsized, a `dismiss` link; empty state "nothing failed — the last runs are clean"), **MISSING FILES** (name in red mono, "absent since {date}", a details link into the movie page, "{n} more →" beyond four), and **SETUP** (SCAN FROM / WRITE TO / DATABASE / WATCHER fact rows with legend keys and mono values). Panels share one pattern: seam border, panel fill, a `9px 14px` head with legend title and a teal-ink link (hover underline), rows separated by `--row-line`.
 
-### Detail Callout (signature component)
-The three-level drill-down rendered as a margin annotation, not a centered modal: a fixed right-anchored panel (`min(480px, 94vw)`), panel fill, **2px teal left rule**, over a graphite scrim. Level 1 is the row; level 2 is the callout's provenance facts (label/value pairs in legend + mono); level 3 is the raw measurement box — a seam-bordered sub-panel with a collapsible `LATEST ENCODE — MEASUREMENT ▲/▼` toggle. Actions (PLAN, ENCODE primary, FOLDER) sit mid-panel; the movie's job history runs as mono rows beneath. The callout is a dialog: focus moves in on open, Tab is trapped, Escape closes, focus returns to the opening row button.
+### Poster Card (signature component)
+A library card whose poster *is typography* — no artwork exists in the data model, so the card sets the title large on a quiet field. **Structure**: an `article` with a 2:3 poster area (gradient from `--poster-ground` to `--ground` at 160°, bottom `--row-line` rule) and a meta block below. On the poster: the title centered in 17px/700 dim ink (4-line clamp, `aria-hidden` — the meta block carries the real name), a 15px teal-accent selection checkbox top-left, and a state **corner tag** bottom-right (density chip states in micro; `IN WORK 34%` live). **Meta** (a button that opens the movie page): name 12.5px/600 (2-line clamp), then facts in 10.5px mono dim — `1920×1080 · 4.12 GB · VMAF 95.3` with the VMAF in teal-ink when measured, plus an amber HDR tag. **States**: hover raises the border to dim ink; selected gets a teal border on `--panel-active`; in-work gets an amber border; missing dims to 55% opacity with its dashed corner tag.
 
-### Evidence Wall (FIG. 1)
-The measured-quality dimension line in a seam-bordered panel: an ink axis line, scale marks at 45/55/65/75/85/95/100, each measured encode plotted as a 1px teal tick (22px tall; 12px when its name is suppressed by the alternate-label de-overlap rule; worst and best always labeled) with its VMAF value in teal-ink mono and the movie name in 10px dim sans, and the target as a taller ink line with a ▼ TARGET label. Empty state: only the target arrow (▲, below the axis, dim) and a legend note that nothing has been measured yet. The whole figure is `role="img"` with a complete text summary in its `aria-label`.
+### Grid/Table Toggle & Library Table
+The toolbar's segmented control (`role="group" aria-label="View"`): GRID and TABLE buttons in legend voice with `aria-pressed`, active side on `--panel-active` with teal-ink text, the pair clipped inside a 4px seam border. The toggle switches the work area in place — the poster grid for recognition, the table for operation — with filters, selection and the bulk bar persisting across the switch. The table (see Layout) adds a **Decision** chip column, right-aligned mono CRF/VMAF/Saved columns (measured VMAF in teal-ink 600; positive savings in green), row hatch fills for selected/in-work rows, and a `role="alert"`-free honest empty row.
 
-### Job Bands & Trace
-Running and failed work render as full-width bands (seam border, panel fill; failed gets a red border and red hatch). Each band: state tag (`IN WORK` amber / `FAILED #n` red) in tracked mono caps, the movie name in 600 sans, detail in dim mono, and a quiet action. The **trace** is the hatched progress bar: `--hatch-work` track, `--hatch-progress` fill with a 2px amber leading edge, and the mono reading (movie · stage · percent) overlaid right-aligned; it is `role="progressbar"` with live `aria-valuenow`.
+### Bulk Bar (the leader-note strip)
+The console's action strip, always above the list. **Idle**: seam border, panel fill — "{n} titles — tick checkboxes for bulk work, or", the REMOVE BARS toggle (red-accented checkbox, title explains irreversibility), PLAN ALL, ENCODE ALL (primary). **Armed** (any selection): teal border on `--panel-active`, entering with the leader-draw animation — the selection checkbox with `{n} SELECTED` in strong mono, then the **leader note** `→ EST. −X.X GB · Y GB BASE` in teal-ink mono (a 45% heuristic over untouched titles against their base size), then PLAN SELECTED, ENCODE SELECTED (primary), CLEAR. The estimate always precedes the verb: bulk work is never blind.
+
+### Movie Provenance Page (schema-v5 metrics)
+The full record for one title, opened from grid or table (replacing round 1's drawer) and closed with ← LIBRARY or Escape. **Hero**: the title at 22px, the full path in break-all mono, chips (category, HDR as `neutral`; `MISSING SINCE {date}` when absent), and actions right — PLAN, ENCODE (primary), FOLDER (opens the folder in the system explorer). **Two fact panels** side by side (stacking below 820px):
+- **SOURCE** — RESOLUTION (`1920×1080`), DURATION, CODEC, SIZE; legend keys over mono values, em-dash for absent.
+- **LATEST ENCODE — MEASURED** — every recorded schema-v5 metric: RESULT (15px/600, "{n}% saved" in teal-ink or "+{n}% larger" in red), SIZE (`5.55 GB → 2.04 GB`), VMAF (teal-ink 600), CRF, PRESET, ENCODER PRESET, ENCODE TIME (`fmtSeconds`: "2h 14m"), PROBES (`{count} · {probe time}`), TOOLCHAIN (versions, break-all). Not-encoded state: "not encoded yet — plan predicts, encode measures".
+- **JOB HISTORY** (full-width) — mono rows `#{id} {kind} {state}` with states colored done/failed/running and ellipsized errors.
+
+### Jobs Log
+The run log: one panel, entries separated by `--row-line`, each `10px 16px`. Head row: `#{id}` in faint ink, the kind (600; "encode · quality mode"), the state in mono (done teal-ink, failed red, running amber, queued dim) with live elapsed time ("1h05m", ticked per second), and a quiet CANCEL (running/queued) or RETRY (failed). **Running entries** tint amber-hatch and grow a 20px trace: `--hatch-work` track, `--hatch-progress` fill with a 2px amber leading edge, and the reading ("{movie} · {stage} · {percent}") overlaid right in mono — `role="progressbar"` with live values. Queued entries print their parameters as a dim note ("quality · VMAF>95 · bars removed"); failed entries print the error in break-word red.
+
+### Duplicates Groups
+Detection is read-only and says so in the page head ("{n} GROUPS · {GB} WASTED · DETECTION IS READ-ONLY"). Each group is a panel headed by a `neutral` reason chip (`SAME HASH`) and its wasted bytes in mono; file rows carry name (600), an rtl-truncated path, size, resolution, and a state chip — `KEEP (BEST)` (green) on the first file, `DUPLICATE` (neutral) on the rest, with the best row tinted `--panel-active`. DELETE (red outline, hover fills) exists only on non-best files and is **backend-pending**: its `aria-label` and `title` say it copies the path for manual deletion. Deletion confirms through a centered `role="alertdialog"` over a black scrim — red-bordered panel, the path in break-all mono, honest copy about the pending backend, KEEP / COPY PATH (delete manually).
+
+### Config Page
+Setup is configuration, not a footer strip — a 760px-capped column of three panels: **SCAN SOURCES** (mono path chips with ✕ removes — faint ink, hover red — plus a *dashed* add input that commits on Enter/blur, and the standing note "sources are never modified in place — encodes go to the output directory"), **OUTPUT** (full-width mono path input), and **TOOL SETTINGS** (groups under legend headings separated by `--row-line`: MOVIE EXTENSIONS as removable chips with a dashed add input, HANDBRAKE fixed-mode preset/encoder, BLACK BAR DETECTION min width/height, OUTPUT FILE separator/language; each field a 120px dim label over a mono input). The head shows `saved ✓` for two seconds after a successful save; SAVE CONFIG is the primary action; the foot notes "changes apply to the next job". Errors render as red-bordered strips.
 
 ### Inputs / Fields
-Hairline seam border, panel fill, mono text, sharp corners, teal caret, faint-ink placeholder. The "add" inputs (new folder, new extension) use a **dashed** seam border — an unfinished-entry affordance. Number input for the VMAF target. Config fields: 120px dim label + mono input; groups sit in seam-bordered boxes on ground fill.
+Seam border, panel or raised-panel fill, 4px radius, mono text (paths, numbers, extensions), teal caret, faint-ink placeholder (opacity forced to 1). Search inputs focus to a teal border. Add/delete-style entries use **dashed** borders — the unfinished-entry affordance. Number fields (VMAF target 70–100, bar-detection pixels) stay mono for alignment.
 
 ### Browser Surfaces
-The chrome itself is themed: `::selection` teal at 22% alpha; input carets teal; placeholders faint ink (opacity forced to 1); thin scrollbars with seam thumbs; `:focus-visible` a 2px teal outline at 1px offset — keyboard operators are first-class.
+The chrome itself is themed per `[data-theme]`: `color-scheme: dark|light` (native controls follow), `::selection` in `--teal-glow`, input carets teal, placeholders faint ink, thin scrollbars with seam thumbs (hover: faint ink), and a global `:focus-visible` — a 2px solid teal outline at 1px offset. Keyboard operators are first-class.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** set every measurement in mono tabular figures with its unit and an em-dash for absent values (`4.12 GB`, `95.25`, `—`).
+- **Do** set every measurement in mono tabular figures with its unit and an em-dash for absent values (`4.12 GB`, `95.25`, `2h 14m`, `—`).
 - **Do** use the legend voice for all labels: 10.5px, 1.4px tracking, uppercase, dim ink.
-- **Do** express state as density — solid teal = done, amber hatch = in progress, coarse amber hatch = skipped, teal hatch = selected/planned, empty swatch = untouched.
-- **Do** mark the active work area with L-corner ticks and the teal-tinted panel.
-- **Do** keep bulk verbs in the bulk bar and per-movie verbs in the callout.
-- **Do** gate irreversible work behind a per-run confirmation (`role="alertdialog"`, red hatch strip); the armed state must never persist.
-- **Do** move focus into dialogs and return it to the opener; keep every control keyboard-operable.
+- **Do** express state as density — solid green = done, amber hatch = in progress, coarse amber hatch = skipped, teal hatch = selected/planned, empty swatch = untouched, dashed red = missing.
+- **Do** keep every domain one click away in the rail, with badges that carry counts and turn amber/red only when attention is needed.
+- **Do** show the leader-note estimate before any bulk verb, and keep bulk verbs in the bulk bar, per-movie verbs on the provenance page.
+- **Do** make the overview answer failures, missing files, duplicates and active work in one glance — with honest empty states ("nothing failed", "no active work", "the library is clean").
+- **Do** theme through tokens only: both grounds must render the same structure, and `color-scheme` must follow `[data-theme]`.
+- **Do** gate irreversible work behind a per-run confirmation (`role="alertdialog"` ceremony); the armed state must never persist, and `--remove-bars` must never survive a run.
 
 ### Don't:
-- **Don't** use shadows, glows, or blur — depth is tone, line weight, and hatch only.
-- **Don't** apply red to anything but failure or irreversible destruction, or amber to anything but progress/warning states.
-- **Don't** round corners beyond the 2px chip radius or introduce filled/gradient surfaces beyond the four hatch patterns.
-- **Don't** color decoration: teal only marks selection, active tab, primary action, and measured values.
-- **Don't** dress the sheet as a terminal, console, or poster wall — no dark themes, no monospace-as-identity, no imagery.
-- **Don't** persist `--remove-bars` across runs or enable destructive actions without explicit ceremony.
+- **Don't** use shadows, glows, or blur — depth is tone, line weight, and hatch only (the 900px inset underline is the single documented exception).
+- **Don't** apply red to anything but failure/irreversible destruction, amber to anything but progress/warning, green to anything but done/keep.
+- **Don't** branch a component on theme or hardcode a theme's hex — one structure, two grounds.
+- **Don't** reintroduce the round-1 failures: no decorative empty figures (empty states are honest text in dashed panels), no exploding category-chip rows (filter with the select), no work area below its list, no settings buried off-page (config is a first-class page with a rail slot).
+- **Don't** dress the console in media-server or terminal costume — no poster artwork, no gaming-RGB, no CRT/scanline effects; recognition comes from the typographic poster grid, not imagery.
+- **Don't** round corners beyond the 4px chrome / 2px chip radii, or introduce gradients beyond the poster field and hatch patterns.
+- **Don't** round numbers into vagueness or spin a bad result — growth prints "+X% larger" in red.
 
 ## Accessibility
 
 Baseline commitments observed in the built components (single-user localhost, but keyboard operability and readable contrast are the product's stated floor):
 
-- **Focus**: global `:focus-visible` — 2px solid teal outline, 1px offset. Checkboxes use `accent-color: var(--teal)` at 13–14px.
-- **Dialogs**: the detail callout is `role="dialog"` + `aria-modal="true"` with `aria-label`, receives focus on open, traps Tab, closes on Escape, and restores focus to the triggering button. Destructive confirmations are `role="alertdialog"` with explicit `aria-label`s.
-- **Live status**: API errors use `role="alert"`; the job trace is `role="progressbar"` with `aria-valuenow/min/max` and a label; the evidence wall is `role="img"` whose `aria-label` narrates the full figure (count, worst, best, target) for non-visual reading.
-- **Sortable/filterable data**: table headers carry `aria-sort` (ascending/descending/none); sort controls are real buttons inside the headers; category filter chips use `aria-pressed`; the tab row is a `nav` with `aria-label="Data domains"`.
-- **Labeled controls**: every icon-only control (✕ dismiss/remove buttons) has an `aria-label`; the pending-backend DELETE button explains its actual behavior in both `aria-label` and `title` ("copies the path; deletion is manual for now").
-- **Contrast**: teal text on paper always uses the darker `--teal-ink` (`#0b5952`); secondary text is `--ink-dim` (`#5b6470`); accent hues (amber `#b45309`, red `#b3382c`) are deep enough for text use on paper.
-- **Motion**: the single animation (leader-draw, 240ms) is wrapped in `prefers-reduced-motion: no-preference` and degrades to an appearance with no transform.
+- **Focus**: global `:focus-visible` — 2px solid teal outline, 1px offset, in both themes. Checkboxes use `accent-color` (teal for selection; red for the irreversible `REMOVE BARS` and `hide missing` toggles). The movie page takes focus on open (`tabindex="-1"`) and closes on Escape.
+- **Dialogs & ceremonies**: the bar-crop confirmation strip and the duplicate-deletion overlay are `role="alertdialog"` with explicit `aria-label`s; the deletion dialog receives focus on open. Destructive-adjacent controls state their true behavior in `aria-label` and `title` (the backend-pending DELETE explains it copies the path).
+- **Live status**: API errors use `role="alert"` with a labeled dismiss; both traces are `role="progressbar"` with `aria-valuenow/min/max` and labels ("encode progress", "{kind} progress").
+- **Navigation & data**: the rail nav is `aria-label="Sections"`; the view toggle is `role="group" aria-label="View"` with `aria-pressed` on each side; search, category select, and every checkbox carry `aria-label`s (including "Select {movie}"); icon-only ✕ buttons are labeled ("Remove {path}").
+- **Contrast**: accent text always goes through `--teal-ink` (dark `#2dd4bf`, light `#0b5952`); secondary text is `--ink-dim`; `--ink-faint` is the contrast floor chosen per theme; accent hues are deepened on light (`#b45309`, `#b3382c`, `#15803d`) so they survive the bench.
+- **Motion**: both authored animations — `leader-draw` (240ms, the leader note) and `page-fade` (200ms, page entry) — are wrapped in `prefers-reduced-motion: no-preference` and degrade to plain appearance; card border transitions run 120ms ease.

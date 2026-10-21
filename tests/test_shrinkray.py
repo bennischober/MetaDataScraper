@@ -408,6 +408,61 @@ class TestDb(unittest.TestCase):
         self.assertEqual(row["chosen_crf"], 22)
         self.assertAlmostEqual(row["achieved_vmaf"], 95.4)
 
+    def test_library_api_exposes_benchmark_metrics(self):
+        """The /api/library payload carries the schema-v5 encode metrics."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        file_id = db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=Path("D:/x/metrics.mkv"),
+                mtime=100.0,
+                size=1000,
+                name="metrics",
+                category="Cat",
+            ),
+        )
+        db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>95",
+            "x265",
+            1000,
+            300,
+            70.0,
+            chosen_crf=22,
+            achieved_vmaf=95.4,
+            encoder_preset="slow",
+            encode_seconds=1234.5,
+            probe_count=3,
+            probe_seconds=30.0,
+            hdr=False,
+            tool_versions="hb=1.9 libvmaf=2.3.1",
+        )
+        self.connection.commit()
+
+        # AppState opens its own connection to the same database file the
+        # test connection wrote to (committed rows are visible through WAL)
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            response = client.get("/api/library")
+            self.assertEqual(response.status_code, 200)
+            movie = next(m for m in response.json() if m["name"] == "metrics")
+            encode = movie["encode"]
+            self.assertEqual(encode["encoder_preset"], "slow")
+            self.assertAlmostEqual(encode["encode_seconds"], 1234.5)
+            self.assertEqual(encode["probe_count"], 3)
+            self.assertAlmostEqual(encode["probe_seconds"], 30.0)
+            self.assertEqual(encode["tool_versions"], "hb=1.9 libvmaf=2.3.1")
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_add_skip_and_recognition(self):
         file_id = db.upsert_file(self.connection, self._record("b.mkv"))
         db.add_skip(self.connection, file_id, "no size gain")

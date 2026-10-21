@@ -1,0 +1,330 @@
+<script lang="ts">
+  import { api, type Config } from '../api'
+
+  /** SHEET: configuration — sources, output and the tool settings in one
+   * first-class page (setup is configuration, not a footer strip). */
+
+  let {
+    scanPaths,
+    outputDir,
+    onpathsChange,
+    onoutputChange,
+  }: {
+    scanPaths: string[]
+    outputDir: string
+    onpathsChange: (paths: string[]) => void
+    onoutputChange: (dir: string) => void
+  } = $props()
+
+  let newPath = $state('')
+  let config = $state<Config | null>(null)
+  let saveError = $state<string | null>(null)
+  let saved = $state(false)
+  let busy = $state(false)
+
+  $effect(() => {
+    api
+      .config()
+      .then((c) => (config = c))
+      .catch((e) => (saveError = e instanceof Error ? e.message : String(e)))
+  })
+
+  function addPath() {
+    const value = newPath.trim()
+    if (!value) return
+    if (!scanPaths.some((p) => p.toLowerCase() === value.toLowerCase())) {
+      onpathsChange([...scanPaths, value])
+    }
+    newPath = ''
+  }
+
+  function removePath(path: string) {
+    onpathsChange(scanPaths.filter((p) => p !== path))
+  }
+
+  async function save() {
+    if (!config) return
+    busy = true
+    saveError = null
+    try {
+      config = await api.saveConfig(config)
+      saved = true
+      setTimeout(() => (saved = false), 2000)
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e)
+    } finally {
+      busy = false
+    }
+  }
+
+  function addExtension(event: Event) {
+    if (!config) return
+    const input = event.target as HTMLInputElement
+    const value = input.value.trim().toLowerCase()
+    if (!value) return
+    const ext = value.startsWith('.') ? value : `.${value}`
+    const extensions = config.file?.extensions ?? []
+    if (!extensions.includes(ext)) {
+      config = { ...config, file: { ...config.file, extensions: [...extensions, ext] } }
+    }
+    input.value = ''
+  }
+
+  const dedupedExtensions = $derived([...new Set(config?.file?.extensions ?? [])])
+
+  function removeExtension(ext: string) {
+    if (!config) return
+    config = {
+      ...config,
+      file: { ...config.file, extensions: (config.file?.extensions ?? []).filter((e) => e !== ext) },
+    }
+  }
+</script>
+
+<div class="page page-in">
+  <header class="page-head">
+    <h2>Config</h2>
+    <p class="legend">SOURCES, OUTPUT AND TOOL SETTINGS</p>
+  </header>
+
+  <!-- ══ sources ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">SCAN SOURCES — WHERE THE LIBRARY LIVES</span>
+    </div>
+    <div class="pad">
+      <div class="path-list">
+        {#each scanPaths as path (path)}
+          <span class="path-chip mono">
+            {path}
+            <button class="x" onclick={() => removePath(path)} aria-label="Remove {path}">✕</button>
+          </span>
+        {/each}
+        <input
+          class="mono new-path"
+          bind:value={newPath}
+          placeholder="add folder + Enter"
+          aria-label="Add movie folder"
+          onkeydown={(e) => e.key === 'Enter' && addPath()}
+          onblur={addPath}
+        />
+      </div>
+      <p class="mono dim note">sources are never modified in place — encodes go to the output directory</p>
+    </div>
+  </section>
+
+  <!-- ══ output ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">OUTPUT — WHERE ENCODES ARE WRITTEN</span>
+    </div>
+    <div class="pad row">
+      <input
+        class="mono out"
+        bind:value={outputDir}
+        onchange={() => onoutputChange(outputDir)}
+        placeholder="output folder"
+        aria-label="Output folder path (encode)"
+      />
+    </div>
+  </section>
+
+  <!-- ══ tool settings ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">TOOL SETTINGS — CONFIG.JSON NEXT TO THE DATABASE</span>
+      <span class="mono dim">{saved ? 'saved ✓' : ''}</span>
+    </div>
+    {#if !config}
+      <div class="dim pad">loading…</div>
+    {:else}
+      {#if saveError}<div class="error mono">{saveError}</div>{/if}
+      <div class="pad groups">
+        <div class="group">
+          <div class="legend">MOVIE EXTENSIONS</div>
+          <div class="ext-list">
+            {#each dedupedExtensions as ext (ext)}
+              <span class="ext mono">
+                {ext}
+                <button class="x" onclick={() => removeExtension(ext)} aria-label="Remove {ext}">✕</button>
+              </span>
+            {/each}
+            <input
+              class="mono ext-input"
+              placeholder="add + Enter"
+              onkeydown={(e) => e.key === 'Enter' && addExtension(e)}
+            />
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="legend">HANDBRAKE (FIXED MODE)</div>
+          <label class="field">
+            <span class="dim">preset</span>
+            <input class="mono" bind:value={config.handbrake!.preset} />
+          </label>
+          <label class="field">
+            <span class="dim">encoder</span>
+            <input class="mono" bind:value={config.handbrake!.encoder} />
+          </label>
+        </div>
+
+        <div class="group">
+          <div class="legend">BLACK BAR DETECTION</div>
+          <label class="field">
+            <span class="dim">min width (px)</span>
+            <input class="mono" type="number" bind:value={config.ffmpeg!.black_bars!.MIN_WIDTH} />
+          </label>
+          <label class="field">
+            <span class="dim">min height (px)</span>
+            <input class="mono" type="number" bind:value={config.ffmpeg!.black_bars!.MIN_HEIGHT} />
+          </label>
+        </div>
+
+        <div class="group">
+          <div class="legend">OUTPUT FILE</div>
+          <label class="field">
+            <span class="dim">csv separator</span>
+            <input class="mono" maxlength="1" bind:value={config.file!.output!.seperator} />
+          </label>
+          <label class="field">
+            <span class="dim">language</span>
+            <input class="mono" bind:value={config.language} />
+          </label>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="mono dim">changes apply to the next job</span>
+        <button class="act primary" onclick={save} disabled={busy}>
+          {busy ? 'SAVING…' : 'SAVE CONFIG'}
+        </button>
+      </div>
+    {/if}
+  </section>
+</div>
+
+<style>
+  .page { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
+  .page-head .legend { margin-top: 2px; }
+  .dim { color: var(--ink-dim); }
+
+  .panel {
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--row-line);
+  }
+  .pad { padding: 14px; }
+  .pad.row { padding: 14px; }
+  .groups { display: flex; flex-direction: column; gap: 14px; }
+
+  .path-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .path-chip {
+    background: var(--panel-raised);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .x {
+    background: transparent;
+    border: none;
+    color: var(--ink-faint);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0;
+  }
+  .x:hover { color: var(--red); }
+  .new-path {
+    background: transparent;
+    border: 1px dashed var(--seam);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 4px 10px;
+    min-width: 220px;
+  }
+  .note { margin-top: 10px; font-size: 11px; }
+
+  .out {
+    width: 100%;
+    background: var(--panel-raised);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 6px 12px;
+  }
+
+  .group { padding: 12px 14px; border-top: 1px solid var(--row-line); }
+  .group:first-child { border-top: none; padding-top: 4px; }
+  .group .legend { display: block; margin-bottom: 10px; }
+  .ext-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .ext {
+    background: var(--panel-raised);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    padding: 2px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ext-input {
+    background: transparent;
+    border: 1px dashed var(--seam);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 3px 8px;
+    width: 130px;
+  }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .field:last-child { margin-bottom: 0; }
+  .field span { width: 120px; flex-shrink: 0; }
+  .field input {
+    background: var(--panel-raised);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 5px 9px;
+    flex: 1;
+  }
+  .foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 14px 14px;
+  }
+  .error {
+    color: var(--red);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    margin: 10px 14px 0;
+    word-break: break-word;
+  }
+
+  .act {
+    background: var(--panel-raised);
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    color: var(--ink);
+    padding: 6px 16px;
+    cursor: pointer;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-transform: uppercase;
+  }
+  .act.primary { background: var(--teal); border-color: var(--teal); color: var(--ground); }
+  .act:disabled { opacity: 0.5; cursor: default; }
+</style>

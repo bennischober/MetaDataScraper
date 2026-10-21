@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb } from './api'
+  import { fmtGb } from '../api'
 
   interface DuplicateFile {
     path: string
@@ -20,13 +20,14 @@
 
   let { duplicates = [], onrefresh }: { duplicates?: DuplicateGroup[]; onrefresh?: () => void } = $props()
 
-  let confirmPath = $state<string | null>(null) // delete confirmation
+  let confirmPath = $state<string | null>(null)
+  let confirmEl: HTMLDivElement | null = $state(null)
+
+  $effect(() => {
+    if (confirmPath) confirmEl?.focus()
+  })
 
   const totalWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_bytes, 0))
-
-  function bestLabel(file: DuplicateFile, group: DuplicateGroup): string {
-    return group.files[0].path === file.path ? 'KEEP (best)' : 'duplicate'
-  }
 
   async function copyPath(path: string) {
     await navigator.clipboard?.writeText(path)
@@ -34,26 +35,23 @@
   }
 </script>
 
-<div class="block">
-  <div class="head">
-    <span class="legend">SHEET 02 — DUPLICATE GROUPS</span>
-    <span class="mono dim">
-      {duplicates.length} groups · {fmtGb(totalWasted)} wasted
-    </span>
-    <button class="act" onclick={() => onrefresh?.()}>RESCAN</button>
-  </div>
+<div class="page page-in">
+  <header class="page-head">
+    <h2>Duplicates</h2>
+    <p class="legend">
+      {duplicates.length} GROUPS · {fmtGb(totalWasted)} WASTED
+      {#if duplicates.length > 0}· DETECTION IS READ-ONLY{/if}
+    </p>
+  </header>
 
   {#if duplicates.length === 0}
-    <div class="empty dim">
-      no duplicates found — the library is clean
-    </div>
+    <div class="empty dim">no duplicates found — the library is clean</div>
   {:else}
+    <button class="act rescan" onclick={() => onrefresh?.()}>RESCAN</button>
     {#each duplicates as group (group.files[0].path)}
       <div class="group">
         <div class="group-head">
-          <span class="chip neutral">
-            <span class="swatch"></span>{group.reason.toUpperCase()}
-          </span>
+          <span class="chip neutral"><span class="swatch"></span>{group.reason.toUpperCase()}</span>
           <span class="mono dim">{fmtGb(group.wasted_bytes)} wasted</span>
         </div>
         {#each group.files as file (file.path)}
@@ -65,7 +63,7 @@
             <span class="mono">{fmtGb(file.size)}</span>
             <span class="mono dim">{file.resolution?.join('×') ?? '—'}</span>
             <span class="chip {group.files[0].path === file.path ? 'done' : 'neutral'}">
-              <span class="swatch"></span>{bestLabel(file, group)}
+              <span class="swatch"></span>{group.files[0].path === file.path ? 'KEEP (BEST)' : 'DUPLICATE'}
             </span>
             {#if group.files[0].path !== file.path}
               <button
@@ -81,19 +79,16 @@
         {/each}
       </div>
     {/each}
-    <div class="note dim">
-      Detection is read-only. Deleting a duplicate is irreversible — confirm per
-      file; the source stays yours.
-    </div>
+    <p class="note dim mono">deleting a duplicate is irreversible — confirm per file; the source stays yours (deletion endpoint pending: the button copies the path)</p>
   {/if}
 </div>
 
 {#if confirmPath}
   <div class="confirm-overlay" role="presentation">
-    <div class="confirm" role="alertdialog" aria-label="Confirm deletion">
+    <div class="confirm" role="alertdialog" aria-label="Confirm deletion" tabindex="-1" bind:this={confirmEl}>
       <div class="legend">DELETE FILE?</div>
       <div class="mono confirm-path">{confirmPath}</div>
-      <div class="dim">This is irreversible. The file will be deleted from disk.</div>
+      <div class="dim">Deletion is not wired to the backend yet — this copies the path so you can delete it manually.</div>
       <div class="confirm-actions">
         <button class="mono" onclick={() => (confirmPath = null)}>KEEP</button>
         <button class="mono danger" onclick={() => copyPath(confirmPath!)}>
@@ -105,34 +100,27 @@
 {/if}
 
 <style>
-  .block {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    flex: 1;
-    min-height: 0;
-  }
-  .head {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-  .head .legend { flex: 0 0 auto; }
-  .head .mono.dim { flex: 1; }
+  .page { display: flex; flex-direction: column; gap: 12px; }
+  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
+  .page-head .legend { margin-top: 2px; }
+  .dim { color: var(--ink-dim); }
+  .empty { padding: 60px 20px; text-align: center; border: 1px dashed var(--seam); border-radius: var(--radius); }
+  .rescan { align-self: flex-start; }
   .act {
-    background: var(--panel);
+    background: var(--panel-raised);
     border: 1px solid var(--seam);
+    border-radius: var(--radius);
     color: var(--ink-dim);
-    padding: 3px 12px;
+    padding: 4px 12px;
     cursor: pointer;
     font-size: var(--fs-legend);
     letter-spacing: var(--track-legend);
     text-transform: uppercase;
   }
   .act:hover { color: var(--ink); border-color: var(--ink-dim); }
-  .empty { padding: 40px; text-align: center; }
   .group {
     border: 1px solid var(--seam);
+    border-radius: var(--radius);
     background: var(--panel);
     padding: 10px 14px;
   }
@@ -151,12 +139,7 @@
   }
   .file-row:last-child { border-bottom: none; }
   .file-row.best { background: var(--panel-active); }
-  .file-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
+  .file-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .path {
     overflow: hidden;
@@ -169,20 +152,20 @@
   .delete {
     background: transparent;
     border: 1px solid var(--seam);
+    border-radius: var(--radius);
     color: var(--red);
     padding: 3px 10px;
     cursor: pointer;
     font-size: var(--fs-legend);
     letter-spacing: var(--track-legend);
   }
-  .delete:hover { background: var(--red); color: #fff; border-color: var(--red); }
-  .note { font-size: 11px; padding: 4px 2px; }
-  .dim { color: var(--ink-dim); }
+  .delete:hover { background: var(--red); color: var(--ground); border-color: var(--red); }
+  .note { font-size: 11px; }
 
   .confirm-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(30, 35, 40, 0.5);
+    background: rgba(0, 0, 0, 0.5);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -191,6 +174,7 @@
   .confirm {
     background: var(--panel);
     border: 1px solid var(--red);
+    border-radius: var(--radius);
     padding: 16px 22px;
     max-width: 480px;
     display: flex;
@@ -202,6 +186,7 @@
   .confirm-actions button {
     background: transparent;
     border: 1px solid var(--seam);
+    border-radius: var(--radius);
     color: var(--ink);
     padding: 5px 12px;
     cursor: pointer;
@@ -209,5 +194,5 @@
     letter-spacing: var(--track-legend);
   }
   .confirm-actions .danger { border-color: var(--red); color: var(--red); }
-  .confirm-actions .danger:hover { background: var(--red); color: #fff; }
+  .confirm-actions .danger:hover { background: var(--red); color: var(--ground); }
 </style>

@@ -29,6 +29,12 @@ export interface EncodeInfo {
   input_size: number | null
   output_size: number | null
   saved_percent: number | null
+  /** schema v5 benchmark metrics */
+  encoder_preset?: string | null
+  encode_seconds?: number | null
+  probe_count?: number | null
+  probe_seconds?: number | null
+  tool_versions?: string | null
 }
 
 export interface Movie {
@@ -111,4 +117,25 @@ export function fmtGb(bytes: number | null | undefined): string {
 export function fmtSaved(percent: number | null | undefined): string {
   if (percent === null || percent === undefined) return '—'
   return percent <= 0 ? `+${Math.abs(percent).toFixed(1)}%` : `${percent.toFixed(1)}%`
+}
+
+/** Formats a duration in seconds as a human string ('—' for none). */
+export function fmtSeconds(seconds: number | null | undefined): string {
+  if (seconds == null || seconds <= 0) return '—'
+  if (seconds < 60) return `${seconds.toFixed(0)}s`
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds % 60)
+  if (m < 60) return `${m}m ${s}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
+}
+
+/** Formats a saved-percentage-like value honestly: growth is not a gain. */
+export function fmtSavedHonest(percent: number | null | undefined): {
+  text: string
+  grew: boolean
+} {
+  if (percent === null || percent === undefined) return { text: '—', grew: false }
+  if (percent <= 0) return { text: `+${Math.abs(percent).toFixed(1)}% larger`, grew: true }
+  return { text: `${percent.toFixed(1)}%`, grew: false }
 }

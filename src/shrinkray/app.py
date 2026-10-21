@@ -372,6 +372,16 @@ def _conf_to_dict(conf) -> dict:
     }
 
 
+@app.get("/api/config")
+def read_config():
+    """Returns the current configuration (as stored in config.json).
+
+    Returns:
+        dict: The configuration data.
+    """
+    return get_config()
+
+
 @app.put("/api/config")
 def update_config(data: dict):
     """Updates the configuration (writes config.json).
@@ -546,7 +556,8 @@ def library(conn=Depends(db_access)):
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
-                   e.saved_percent
+                   e.saved_percent, e.encoder_preset, e.encode_seconds,
+                   e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
                 SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
@@ -574,6 +585,11 @@ def library(conn=Depends(db_access)):
                 "input_size": r["input_size"],
                 "output_size": r["output_size"],
                 "saved_percent": r["saved_percent"],
+                "encoder_preset": r["encoder_preset"],
+                "encode_seconds": r["encode_seconds"],
+                "probe_count": r["probe_count"],
+                "probe_seconds": r["probe_seconds"],
+                "tool_versions": r["tool_versions"],
             }
             if r["preset"]
             else None,
