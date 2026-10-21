@@ -13,6 +13,8 @@
 !.devcontainer/devcontainer.json
 !.vscode/settings.json
 !src/metadata_scrapper/models/*.json
+# npm lockfile (npm ci requires it; it pins the dependency tree)
+!ui/package-lock.json
 
 ## uv / python
 .venv/
