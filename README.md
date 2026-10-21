@@ -46,14 +46,31 @@ movies that cannot profit (already efficient sources) are skipped — not
 wasted.
 
 > [!NOTE]
-> **HDR content is not yet supported by quality mode** — the VMAF model is
-> SDR-trained and HDR sources should not be re-encoded with measured CRF
-> until tone-mapping is implemented (see [TODO.md](TODO.md)).
+> **HDR10 content is supported** by quality mode (10-bit encoder + tone-mapped
+> VMAF measurement). Dolby Vision dual-layer files are not yet (see
+> [TODO.md](TODO.md)).
 
 ## Quickstart
 
+**Windows (PowerShell) — the one-liner install:**
+
+```powershell
+irm https://raw.githubusercontent.com/bennischober/ShrinkRay/main/install.ps1 | iex
+```
+
+Installs uv, the GPL ffmpeg build, HandBrake and the repository to
+`~\.shrinkray` (idempotent — safe to re-run). Then:
+
+```powershell
+cd ~\.shrinkray
+uv run shrinkray scan 'D:\Movies'
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
+uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
+```
+
+**Already have uv?** Run straight from GitHub without cloning:
+
 ```bash
-# scan a movie library
 uvx shrinkray scan 'D:\Movies'
 
 # shrink it (quality-measured, black bars removed)
@@ -66,7 +83,20 @@ uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
 ## Installation
 
 <details>
-<summary><strong>Option A — run directly from GitHub (no clone)</strong></summary>
+<summary><strong>Option A — the install script (recommended for Windows)</strong></summary>
+
+```powershell
+irm https://raw.githubusercontent.com/bennischober/ShrinkRay/main/install.ps1 | iex
+```
+
+Checks and installs everything (uv, ffmpeg GPL build with cropdetect/libvmaf,
+HandBrakeCLI), clones the repo to `~\.shrinkray`, syncs the environment and
+builds the dashboard (when Node is present). Re-running is safe.
+
+</details>
+
+<details>
+<summary><strong>Option B — run directly from GitHub (no clone, uv users)</strong></summary>
 
 ```bash
 uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray scan 'D:\Movies'
@@ -75,7 +105,7 @@ uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray scan 'D:\Movi
 </details>
 
 <details>
-<summary><strong>Option B — clone the repository</strong></summary>
+<summary><strong>Option C — clone the repository</strong></summary>
 
 ```bash
 git clone https://github.com/bennischober/ShrinkRay.git
