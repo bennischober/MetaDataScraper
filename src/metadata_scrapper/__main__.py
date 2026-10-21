@@ -198,6 +198,24 @@ def print_summary(movies_by_category: dict, total_time, total_size: float):
     )
 
 
+@app.command("app")
+def app_command(
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
+    port: int = typer.Option(8420, "--port", min=1, max=65535, help="Bind port."),
+):
+    """Runs the resident app: job queue, watch loop and the local HTTP API.
+
+    The app owns long-running work; terminal and web UI are just consumers
+    of the same engine and database. Stop with Ctrl+C.
+    """
+    from metadata_scrapper.app import run_app
+
+    run_app(db_file, host=host, port=port)
+
+
 def _totals(movies_by_category: dict) -> tuple:
     """Calculates the total duration and size of the scanned movies.
 

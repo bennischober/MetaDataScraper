@@ -48,3 +48,6 @@ venv/
 
 # test media (copyright, too large for git)
 testdata/
+
+# generated reports
+report.html

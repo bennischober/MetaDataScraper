@@ -219,14 +219,20 @@ class MovieRecord:
 def connect(db_path: Path) -> sqlite3.Connection:
     """Opens a connection to the database and ensures the schema.
 
+    The connection is usable from any thread (check_same_thread=False) and
+    the journal mode is WAL so that the resident app and CLI processes can
+    access the database concurrently. Writes stay short (single statements
+    with commit) so readers never block meaningfully.
+
     Args:
         db_path (Path): Path of the sqlite database file.
 
     Returns:
         sqlite3.Connection: The connection (row_factory set to sqlite3.Row).
     """
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(db_path, check_same_thread=False)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
     # ensure the version row exists
