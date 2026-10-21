@@ -571,6 +571,28 @@ def measure_vmaf(
         raise RuntimeError(f"libvmaf log could not be parsed: {e}") from e
 
 
+def is_hdr_file(movie: Path) -> bool:
+    """Checks whether a movie file is HDR.
+
+    Reuses the scan's detection (media.get_data computes the hdr flag from
+    the configured codec.hdr markers) so both paths always agree.
+
+    Args:
+        movie (Path): The movie file.
+
+    Returns:
+        bool: True if the video stream is detected as HDR.
+    """
+    from metadata_scrapper.config import load_config
+    from metadata_scrapper.media import get_data
+
+    try:
+        data = get_data(movie, load_config())
+    except (RuntimeError, OSError, ValueError):
+        return False
+    return bool(data.get("hdr"))
+
+
 def bisect_crf(check, lo: int, hi: int) -> int:
     """Finds the largest CRF whose probe still passes the quality check.
 
@@ -835,6 +857,16 @@ def plan_quality(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
+    if is_hdr_file(input_file):
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="skipped: HDR content (VMAF model is SDR-trained)",
+            skipped_reason="hdr unsupported",
+        )
+
     duration = probe_duration_seconds(input_file)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         return QualityResult(
@@ -1041,6 +1073,16 @@ def encode_with_quality(
     """
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
+
+    if is_hdr_file(input_file):
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="skipped: HDR content (VMAF model is SDR-trained)",
+            skipped_reason="hdr unsupported",
+        )
 
     duration = probe_duration_seconds(input_file)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
