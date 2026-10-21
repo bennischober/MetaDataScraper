@@ -655,12 +655,17 @@ def _record_encodes(
     from metadata_scrapper.encode import encode_movies
     from metadata_scrapper.quality import encode_with_quality
 
-    # already encoded? (unless --overwrite)
+    # already encoded AND output still present? (unless --overwrite)
+    # => batch resume: an interrupted run skips everything it finished before
     encoded_paths: set[str] = set()
     if not overwrite and not dry_run:
         for movie in movies:
             file_row = db.get_file_by_path(connection, movie)
-            if file_row is not None and db.get_encodes_for_file(connection, file_row["id"]):
+            if file_row is None:
+                continue
+            if db.has_output_for_latest_encode(
+                connection, int(file_row["id"]), output_dir / movie.name
+            ):
                 encoded_paths.add(str(movie))
 
     if not dry_run and quality:

@@ -359,6 +359,47 @@ def add_skip(
     )
 
 
+def get_latest_encode(connection: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    """Returns the most recent encode (or skip) row of a file.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        file_id (int): The file id.
+
+    Returns:
+        sqlite3.Row | None: The newest row, or None if never encoded.
+    """
+    rows = get_encodes_for_file(connection, file_id)
+    return rows[0] if rows else None
+
+
+def has_output_for_latest_encode(
+    connection: sqlite3.Connection,
+    file_id: int,
+    output_file: Path,
+) -> bool:
+    """Checks whether the latest encode entry produced a still-existing output.
+
+    Used for batch resume: a movie whose encode was recorded AND whose output
+    file still exists is considered finished; anything else (no record,
+    deleted output) must be (re-)encoded.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        file_id (int): The file id.
+        output_file (Path): The output path this run would write.
+
+    Returns:
+        bool: True if the movie can be considered already encoded.
+    """
+    latest = get_latest_encode(connection, file_id)
+    if latest is None:
+        return False
+    if latest["output_size"] <= 0:
+        return False  # a skip marker, not a real encode
+    return output_file.is_file() and output_file.stat().st_size > 0
+
+
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
     """Returns all encodes for a file, newest first.
 
@@ -370,7 +411,7 @@ def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[s
         list: The encode rows.
     """
     return connection.execute(
-        "SELECT * FROM encodes WHERE file_id = ? ORDER BY encoded_at DESC",
+        "SELECT * FROM encodes WHERE file_id = ? ORDER BY id DESC",
         (file_id,),
     ).fetchall()
 

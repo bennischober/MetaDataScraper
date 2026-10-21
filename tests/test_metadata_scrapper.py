@@ -378,6 +378,37 @@ class TestDb(unittest.TestCase):
         # encodes of surviving files are still there
         self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
 
+    def test_has_output_for_latest_encode(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            file_id = db.upsert_file(self.connection, self._record("c.mkv"))
+            # no record at all => not finished
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
+            # skip marker (zero output size) => not finished
+            db.add_skip(self.connection, file_id, "no size gain")
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
+            # real encode recorded but output missing => not finished (must re-encode)
+            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 100, 50, 50.0)
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
+            # output exists and is non-empty => finished
+            (out / "c.mkv").write_bytes(b"encoded data")
+            self.assertTrue(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
+            # empty output file => not finished
+            (out / "c.mkv").write_bytes(b"")
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
+
     def test_prune_missing_scoped(self):
         # a scan of one root must not wipe the history of files outside it
         id_inside = db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))

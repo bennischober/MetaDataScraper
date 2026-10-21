@@ -89,6 +89,31 @@ uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --dry-run
 ```
 Every successful encode is recorded in the sqlite database (preset, encoder, sizes, saved percentage). Movies that were already encoded are skipped on the next run (disable with ``--overwrite``).
 
+## Quality-driven re-encoding (`--quality`)
+The fixed preset uses the same quality setting for every movie. With ``--quality`` the tool instead measures each movie and picks the largest CRF that keeps the picture perceptually transparent (VMAF >= target, measured with Netflix's [VMAF](https://github.com/Netflix/vmaf) via ffmpeg):
+
+```
+uv run metadata-scrapper encode 'path:\to\movie-root' 'D:\encoded' --quality --remove-bars --target-vmaf 95
+```
+
+How it works per movie:
+1. Three 10-second samples are extracted and re-encoded by HandBrake at different CRF values (binary search).
+2. Each probe is scored against its source with VMAF; the largest CRF whose worst sample still meets the target wins.
+3. The whole movie is encoded once with that CRF; the output duration is verified against the source.
+
+Measured on real content (ffmpeg 9, x265 medium, target VMAF 95):
+
+| Movie | Content | Result | Savings |
+|---|---|---|---|
+| Django Unchained (PAL DVD rip) | grainy live action | CRF 19, VMAF 95.25, bars removed | 64% |
+| Bloodshot alternate ending | 1080p live action | CRF 20, VMAF 95.76 | 73% |
+| Rick & Morty S01E01 | already-efficient HEVC | skipped: target unreachable | 0% (correctly) |
+
+Notes:
+- Movies whose target is provably unreachable (even CRF 14 scores below the floor) or that would not shrink are skipped and remembered in the database, so future runs do not re-probe them.
+- ``--remove-bars`` detects stable baked-in black bars (letterbox) and crops them away (irreversible, opt-in): cropdetect runs on several segments and only bars present in all of them are removed.
+- Absolute VMAF scores differ between libvmaf versions (the same encode scored 95.76 on ffmpeg 5 and 94.40 on ffmpeg 9); decisions stay consistent because the probing measures and decides with the local toolchain.
+
 ## Configuration
 The [config.json](config.json) file controls the behaviour of the tool:
 - ``file.extensions``: the movie file extensions to search for (e.g. `.mkv`, `.mp4`, `.avi`)
