@@ -45,6 +45,11 @@ Nothing is guessed: every decision is measured, recorded in the database, and
 movies that cannot profit (already efficient sources) are skipped — not
 wasted.
 
+> [!NOTE]
+> **HDR content is not yet supported by quality mode** — the VMAF model is
+> SDR-trained and HDR sources should not be re-encoded with measured CRF
+> until tone-mapping is implemented (see [TODO.md](TODO.md)).
+
 ## Quickstart
 
 ```bash
@@ -145,6 +150,7 @@ uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded' \
 | `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
+| `--workers / -w N` | concurrent encodes, each capped to a CPU share (default: sequential — one x265 encode already uses all cores) |
 
 **Batch-safe:** every finished encode is recorded, so an interrupted run skips
 its completed work on the next start. Movies whose quality target is provably
@@ -162,6 +168,31 @@ detection) and prints the predicted outcome per movie — encode or skip, with
 CRF, VMAF and an estimated size — plus the estimated total savings. Use it to
 decide whether (and with which options) a real encode run is worth it. The
 size estimate comes from the short probe samples, so treat it as a ballpark.
+
+### `report` — the library as one page
+
+```bash
+uv run metadata-scrapper report --output report.html
+```
+
+Generates a self-contained HTML page (dark theme, no external assets) from
+the database: summary cards (movies, encoded, skipped, disk space saved) and
+a per-movie table with decision, sizes, CRF and VMAF. Read-only — regenerate
+any time to see the current state.
+
+### `watch` — automatic encoding on arrival
+
+```bash
+uv run metadata-scrapper watch 'D:\Downloads' 'D:\Encoded' --remove-bars
+```
+
+Polls the inbox folder for new movie files and encodes them automatically:
+files are waited on until they are stable (size unchanged + minimum age, so
+half-finished downloads are never touched), the same skip logic as the
+`encode` command applies, and **sources stay untouched** — outputs land in
+the output directory, so you stay in the loop for swapping library files.
+Single-instance lock, clean shutdown with Ctrl+C (the running encode
+finishes first).
 
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
