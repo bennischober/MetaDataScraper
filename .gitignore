@@ -19,8 +19,10 @@
 __pycache__/
 *.py[cod]
 
-# opencode
-.opencode
+# opencode: secrets and local state stay out, shared workflow files stay in
+.opencode/*
+!.opencode/commands/
+!.opencode/skills/git-commit-message-rules/
 
 # impeccable design workspace (local working state; decision history stays in git history)
 .impeccable/
