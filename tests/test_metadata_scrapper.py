@@ -1,5 +1,7 @@
 import json
+import shutil
 import sqlite3
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -681,6 +683,97 @@ class TestReport(unittest.TestCase):
             self.assertIn("95.40", html)
             # the skipped-preset rendering
             self.assertIn("quality mode (VMAF&gt;95.0)", html)
+
+
+class TestWatch(unittest.TestCase):
+    def test_find_new_movies(self):
+        import tempfile
+
+        from metadata_scrapper.watch import find_new_movies
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp)
+            (inbox / "a.mkv").write_bytes(b"x")
+            (inbox / "b.MKV").write_bytes(b"x")
+            (inbox / "c.txt").write_bytes(b"x")
+            (inbox / "sub").mkdir()
+            (inbox / "sub" / "d.mkv").write_bytes(b"x")  # not recursive
+
+            # nothing known => a and b (deduplicated), not c, not subdir
+            new = find_new_movies(inbox, [".mkv"], set())
+            names = {m.name for m in new}
+            self.assertEqual(names, {"a.mkv", "b.MKV"})
+
+            # everything known => empty
+            known = {str(m.resolve()) for m in new}
+            self.assertEqual(find_new_movies(inbox, [".mkv"], known), [])
+
+    def test_acquire_and_release_lock(self):
+        import tempfile
+
+        from metadata_scrapper.watch import acquire_lock, release_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "watch.lock"
+            self.assertTrue(acquire_lock(lock))
+            # second acquire fails (our own pid is alive)
+            self.assertFalse(acquire_lock(lock))
+            release_lock(lock)
+            self.assertFalse(lock.exists())
+            # stale lock (dead pid) => take over
+            lock.write_text("999999999", encoding="utf-8")
+            self.assertTrue(acquire_lock(lock))
+            release_lock(lock)
+
+    def test_is_stable_min_age(self):
+        import tempfile
+
+        from metadata_scrapper.watch import is_stable
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fresh = Path(tmp) / "fresh.mkv"
+            fresh.write_bytes(b"x")
+            # just created => below the minimum age => not stable (fast path,
+            # no sleep because the age check comes first)
+            self.assertFalse(is_stable(fresh))
+
+    def test_decide_too_short(self):
+        import tempfile
+
+        from metadata_scrapper.watch import decide
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # a real, very short movie file (valid media, below the minimum)
+            clip = Path(tmp) / "clip.mkv"
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                self.skipTest("ffmpeg not available")
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=duration=1:size=320x240:rate=10",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    str(clip),
+                ],
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(decide(clip, 95.0, False, "x265"), "too short")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # junk file (invalid media) => must not crash the decision
+            junk = Path(tmp) / "junk.mkv"
+            junk.write_bytes(b"not a movie")
+            self.assertEqual(decide(junk, 95.0, False, "x265"), "encode")
 
 
 if __name__ == "__main__":

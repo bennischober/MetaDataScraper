@@ -959,6 +959,50 @@ def report(
     console.print(f"[green]Report written to '{output}'.[/green]")
 
 
+@app.command()
+def watch_mode(
+    inbox: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Directory to watch for new movies.",
+    ),
+    output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
+    target_vmaf: float = typer.Option(
+        95.0,
+        "--target-vmaf",
+        min=1.0,
+        max=100.0,
+        help="VMAF quality floor.",
+    ),
+    remove_bars: bool = typer.Option(
+        False, "--remove-bars", help="Detect and crop stable black bars."
+    ),
+    poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
+):
+    """Watches a folder and encodes newly arrived movies automatically.
+
+    Sources stay untouched (outputs land in the output directory), so the
+    library only changes when you swap the files yourself. Stop with Ctrl+C;
+    the running encode finishes first.
+    """
+    from metadata_scrapper.watch import watch
+
+    try:
+        watch(
+            inbox,
+            output_dir,
+            target_vmaf=target_vmaf,
+            remove_bars=remove_bars,
+            encoder=load_config().handbrake_encoder,
+            poll_interval=float(poll),
+        )
+    except (RuntimeError, FileNotFoundError) as e:
+        log_error(str(e))
+        raise typer.Exit(1) from e
+
+
 def _totals(movies_by_category: dict) -> tuple:
     """Calculates the total duration and size of the scanned movies.
 
