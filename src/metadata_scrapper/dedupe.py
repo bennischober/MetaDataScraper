@@ -10,9 +10,15 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
+import rapidfuzz
+
 # duration tolerance in seconds for the same-title match (different encodes
 # of the same movie differ by a few seconds of container/padding differences)
 DURATION_TOLERANCE = 5.0
+
+# minimum rapidfuzz token_set_ratio for the 'similar title' grouping; high
+# enough to not group Alien with Aliens, low enough for typos/variants
+FUZZY_THRESHOLD = 92
 
 # release-tag noise stripped from names before matching
 _NAME_NOISE = re.compile(
@@ -138,10 +144,11 @@ def _duration_of(row: sqlite3.Row) -> float | None:
 def find_duplicates(connection: sqlite3.Connection) -> list[DuplicateGroup]:
     """Finds duplicate groups across the whole scanned library.
 
-    Two grouping passes: byte-identical files (same hash, computed by the
-    scan's --hash option) and same-title files (normalized name + duration
-    within tolerance). A file can appear in both passes; groups are merged
-    when they share members.
+    Three grouping passes: byte-identical files (same hash, computed by the
+    scan's --hash option), same-title files (normalized name + duration
+    within tolerance) and similar-title files (fuzzy match for typos and
+    variants; also duration-gated). A file can appear in several passes;
+    groups are merged when they share members.
 
     Args:
         connection (sqlite3.Connection): The database connection.
@@ -206,6 +213,25 @@ def find_duplicates(connection: sqlite3.Connection) -> list[DuplicateGroup]:
         ]
         if len(similar) >= 2:
             groups.append(DuplicateGroup(reason="same title", files=similar))
+
+    # pass 3: similar titles (fuzzy, for typos/variants the exact pass
+    # misses, e.g. 'Django Unchainedd' or roman-vs-digit numerals); same
+    # duration gate as pass 2
+    grouped_paths = {f.path for g in groups for f in g.files}
+    fuzzy_candidates = [f for f in files if normalize_name(f.name) and f.path not in grouped_paths]
+    for i, a in enumerate(fuzzy_candidates):
+        for b in fuzzy_candidates[i + 1 :]:
+            if a.path in grouped_paths or b.path in grouped_paths:
+                continue
+            score = rapidfuzz.fuzz.token_set_ratio(normalize_name(a.name), normalize_name(b.name))
+            if score < FUZZY_THRESHOLD:
+                continue
+            if a.duration is None or b.duration is None:
+                continue
+            if abs(a.duration - b.duration) > DURATION_TOLERANCE:
+                continue
+            groups.append(DuplicateGroup(reason="similar title", files=[a, b]))
+            grouped_paths.update((a.path, b.path))
 
     # merge groups sharing members (a file identical AND same-title)
     merged: list[DuplicateGroup] = []

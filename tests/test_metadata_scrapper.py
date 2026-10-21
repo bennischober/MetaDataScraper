@@ -1211,6 +1211,32 @@ class TestDedupe(unittest.TestCase):
             app_module.state.worker.stop()
             app_module.state = None
 
+    def test_similar_title_fuzzy(self):
+        from metadata_scrapper.dedupe import find_duplicates
+
+        # a typo variant the exact pass misses
+        self._add("D:/a/Django Unchained.mkv", "Django Unchained", 4000, 7200.0)
+        self._add("D:/b/Django Unchainedd.mkv", "Django Unchainedd", 2100, 7200.0)
+        groups = find_duplicates(self.connection)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].reason, "similar title")
+
+    def test_fuzzy_requires_duration_match(self):
+        from metadata_scrapper.dedupe import find_duplicates
+
+        # similar names, far-apart durations => different content
+        self._add("D:/a/Show Episode.mkv", "Show Episode", 4000, 2400.0)
+        self._add("D:/b/Show Episodex.mkv", "Show Episodex", 2100, 3900.0)
+        self.assertEqual(find_duplicates(self.connection), [])
+
+    def test_different_episodes_not_fuzzied(self):
+        from metadata_scrapper.dedupe import find_duplicates
+
+        # distinct episodes of one show share most tokens but differ in duration
+        self._add("D:/a/Show S01E01.mkv", "Show S01E01", 4000, 2400.0)
+        self._add("D:/b/Show S01E02.mkv", "Show S01E02", 2100, 2500.0)
+        self.assertEqual(find_duplicates(self.connection), [])
+
 
 if __name__ == "__main__":
     unittest.main()
