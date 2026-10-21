@@ -151,6 +151,18 @@ its completed work on the next start. Movies whose quality target is provably
 unreachable (e.g. already-efficient HEVC) or that would not shrink are skipped
 and remembered — future runs do not re-probe them.
 
+### `plan` — look before you leap
+
+```bash
+uv run metadata-scrapper plan 'D:\Movies' --remove-bars
+```
+
+Runs the same probing pipeline as a quality encode (samples, CRF search, bar
+detection) and prints the predicted outcome per movie — encode or skip, with
+CRF, VMAF and an estimated size — plus the estimated total savings. Use it to
+decide whether (and with which options) a real encode run is worth it. The
+size estimate comes from the short probe samples, so treat it as a ballpark.
+
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
 > encode scored 95.76 on ffmpeg 5 (libvmaf v2) and 94.40 on ffmpeg 9 (libvmaf v3).

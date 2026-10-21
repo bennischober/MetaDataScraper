@@ -819,7 +819,7 @@ def plan(
                 str(result.achieved_vmaf or ""),
                 "-",
                 "-",
-                result.error or result.skipped_reason,
+                result.skipped_reason,
             )
             total_input += result.input_size
             continue
@@ -835,7 +835,7 @@ def plan(
             f"{result.achieved_vmaf:.2f}" if result.achieved_vmaf else "",
             f"{est_gb:.2f} GB",
             f"{saved}%",
-            f"bars: {result.probes and ''}{'yes' if remove_bars else 'no'}",
+            "bars removed" if remove_bars else "",
         )
 
     console.print(table)
