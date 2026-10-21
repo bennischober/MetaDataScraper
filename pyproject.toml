@@ -23,8 +23,10 @@ metadata-scrapper = "metadata_scrapper.__main__:app"
 dev = [
     "httpx2>=2.13.1",
     "mypy>=2.4.0",
+    "playwright>=1.64.0",
     "pytest>=8.4",
     "pytest-cov>=7.1.0",
+    "requests>=2.34.2",
     "ruff>=0.14",
 ]
 
