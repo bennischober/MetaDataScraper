@@ -975,9 +975,7 @@ class TestJobs(unittest.TestCase):
         worker = jobs.JobWorker(self.connection, self.queue)
         worker._execute(job)
         reloaded = self.queue.get(job.id)
-        self.assertIn(
-            reloaded.state, (jobs.JobState.FAILED, jobs.JobState.DONE)
-        )
+        self.assertIn(reloaded.state, (jobs.JobState.FAILED, jobs.JobState.DONE))
         if reloaded.state == jobs.JobState.FAILED:
             self.assertIn("FileNotFoundError", reloaded.error)
 
