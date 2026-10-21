@@ -609,6 +609,16 @@ def encode(
             "crop them away (irreversible, opt-in)."
         ),
     ),
+    workers: int = typer.Option(
+        0,
+        "--workers",
+        "-w",
+        min=0,
+        help=(
+            "Number of concurrent encodes (fixed mode only; 0 = automatic, "
+            "1 = sequential). Each encode gets a share of the CPU threads."
+        ),
+    ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
@@ -631,13 +641,23 @@ def encode(
             quality,
             target_vmaf,
             remove_bars,
+            workers,
         )
     finally:
         connection.close()
 
 
 def _record_encodes(
-    connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf, remove_bars
+    connection,
+    movies,
+    output_dir,
+    config,
+    dry_run,
+    overwrite,
+    quality,
+    target_vmaf,
+    remove_bars,
+    workers,
 ):
     """Runs the encoding and records the results in the database.
 
@@ -651,6 +671,7 @@ def _record_encodes(
         quality (bool): Use VMAF-driven quality mode.
         target_vmaf (float): VMAF quality floor for quality mode.
         remove_bars (bool): Crop stable baked-in black bars (quality mode).
+        workers (int): Number of concurrent encodes (fixed mode).
     """
     from metadata_scrapper.encode import encode_movies
     from metadata_scrapper.quality import encode_with_quality
@@ -720,6 +741,7 @@ def _record_encodes(
             encoder=config.handbrake_encoder,
             dry_run=dry_run,
             overwrite=overwrite,
+            workers=workers if workers > 0 else None,
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
@@ -784,8 +806,7 @@ def plan(
         connection.close()
 
     table = Table(
-        title=f"Encode plan for {len(movies)} movies "
-        f"(target VMAF {target_vmaf})",
+        title=f"Encode plan for {len(movies)} movies (target VMAF {target_vmaf})",
         title_justify="left",
     )
     table.add_column("Movie", style="bold", max_width=32, overflow="ellipsis")
@@ -921,9 +942,7 @@ def _ensure_file_row(connection, movie: Path) -> int:
 
 @app.command()
 def report(
-    db_file: Path = typer.Option(
-        DB_FILE, "--db", help="Path of the sqlite database file."
-    ),
+    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
     output: Path = typer.Option(
         Path("report.html"), "--output", "-o", help="Path of the HTML report."
     ),

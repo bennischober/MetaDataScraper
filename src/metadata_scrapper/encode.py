@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -132,7 +133,12 @@ def durations_match(input_file: Path, output_file: Path) -> bool:
 
 
 def build_command(
-    binary: str, input_file: Path, output_file: Path, preset: str, encoder: str
+    binary: str,
+    input_file: Path,
+    output_file: Path,
+    preset: str,
+    encoder: str,
+    encoder_threads: int | None = None,
 ) -> list[str]:
     """Builds the HandBrakeCLI command for re-encoding a file.
 
@@ -142,11 +148,13 @@ def build_command(
         output_file (Path): The target file.
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
         encoder (str): The video encoder, e.g. 'x265'.
+        encoder_threads (int | None): Thread limit for the encoder
+            (for parallel encoding across multiple movies). None = no limit.
 
     Returns:
         list[str]: The command as argument list.
     """
-    return [
+    command = [
         binary,
         "--input",
         str(input_file),
@@ -163,6 +171,57 @@ def build_command(
         "copy",
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
+    if encoder_threads is not None:
+        command += ["--encoder-threads", str(encoder_threads)]
+    return command
+
+
+def _encode_with_command(input_file: Path, output_file: Path, command: list[str]) -> EncodeResult:
+    """Runs one HandBrake command and verifies its output.
+
+    Args:
+        input_file (Path): The source file.
+        output_file (Path): The target file.
+        command (list[str]): The full HandBrakeCLI command.
+
+    Returns:
+        EncodeResult: The result of the encode.
+    """
+    try:
+        proc = subprocess.run(command, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode(errors="replace").strip()
+        return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
+
+    # HandBrake may exit with 0 even if the encode failed => the output file
+    # must exist, be non-empty and have the full duration
+    if not output_file.is_file() or output_file.stat().st_size == 0:
+        stderr = proc.stderr.decode(errors="replace").strip()
+        return EncodeResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            error=stderr or "no output file was written",
+        )
+    if not durations_match(input_file, output_file):
+        return EncodeResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            error="output is truncated (duration mismatch)",
+        )
+
+    # encode succeeded => collect sizes
+    return EncodeResult(
+        input=input_file,
+        output=output_file,
+        success=True,
+        input_size=input_file.stat().st_size,
+        output_size=output_file.stat().st_size,
+    )
 
 
 def encode_file(
@@ -197,43 +256,7 @@ def encode_file(
         )
 
     command = build_command(handbrake, input_file, output_file, preset, encoder)
-    try:
-        proc = subprocess.run(command, capture_output=True)
-    except (OSError, subprocess.SubprocessError) as e:
-        return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
-
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode(errors="replace").strip()
-        return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
-
-    # HandBrake may exit with 0 even if the encode failed => the output file
-    # must exist, be non-empty and have the full duration
-    if not output_file.is_file() or output_file.stat().st_size == 0:
-        stderr = proc.stderr.decode(errors="replace").strip()
-        return EncodeResult(
-            input=input_file,
-            output=output_file,
-            success=False,
-            error=stderr or "no output file was written",
-        )
-    if not durations_match(input_file, output_file):
-        return EncodeResult(
-            input=input_file,
-            output=output_file,
-            success=False,
-            error="output is truncated (duration mismatch)",
-        )
-
-    # encode succeeded => collect sizes
-    input_size = input_file.stat().st_size
-    output_size = output_file.stat().st_size if output_file.is_file() else 0
-    return EncodeResult(
-        input=input_file,
-        output=output_file,
-        success=True,
-        input_size=input_size,
-        output_size=output_size,
-    )
+    return _encode_with_command(input_file, output_file, command)
 
 
 def encode_movies(
@@ -243,8 +266,13 @@ def encode_movies(
     encoder: str = "x265",
     dry_run: bool = False,
     overwrite: bool = False,
+    workers: int | None = None,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
+
+    With workers > 1, several HandBrake processes run concurrently, each
+    capped to a share of the CPU threads so the encodes do not oversubscribe
+    the machine. Results are collected by index => deterministic order.
 
     Args:
         movies (list[Path]): The movie files to re-encode.
@@ -253,6 +281,9 @@ def encode_movies(
         encoder (str): The video encoder, e.g. 'x265'.
         dry_run (bool): If True, only show what would be encoded.
         overwrite (bool): Whether existing output files may be replaced.
+        workers (int | None): Number of concurrent encodes (1 = sequential,
+            None = automatic: 1, since a single x265 encode already scales
+            across all cores).
 
     Returns:
         list[EncodeResult]: The results of the encodes.
@@ -268,33 +299,85 @@ def encode_movies(
             log(f"[dry-run] Would encode '{movie}' -> '{output_file}'")
         return results
 
+    if workers is None:
+        # a single x265 encode already uses all cores efficiently; parallel
+        # encodes only help when the per-encode thread count is capped lower
+        workers = 1
+    workers = max(1, workers)
+
+    # filter skipped movies first (deterministic, before any encoding)
+    pending: list[tuple[Path, Path]] = []
+    for movie in movies:
+        duration = probe_duration_seconds(movie)
+        if duration is not None and duration < MIN_ENCODE_SECONDS:
+            log(
+                f"Skipping '{movie.name}': duration {duration:.0f}s is below "
+                f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
+            )
+            continue
+        output_file = output_dir / movie.name
+        if output_file.exists() and not overwrite:
+            log(f"Skipping '{movie.name}': output file already exists.")
+            continue
+        pending.append((movie, output_file))
+
+    if not pending:
+        return results
+
+    # each concurrent encode gets a fair share of the CPU threads
+    cpu = os.cpu_count() or 8
+    threads_per_encode = max(1, cpu // workers)
+
+    def run_one(index: int, movie: Path, output_file: Path) -> EncodeResult:
+        handbrake = find_handbrake()
+        if handbrake is None:
+            raise RuntimeError(
+                f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
+                "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
+            )
+        command = build_command(
+            handbrake,
+            movie,
+            output_file,
+            preset,
+            encoder,
+            encoder_threads=threads_per_encode if workers > 1 else None,
+        )
+        return _encode_with_command(movie, output_file, command)
+
     with Progress() as progress:
-        task = progress.add_task("Encoding movies", total=len(movies))
-        for movie in movies:
-            duration = probe_duration_seconds(movie)
-            if duration is not None and duration < MIN_ENCODE_SECONDS:
-                log(
-                    f"Skipping '{movie.name}': duration {duration:.0f}s is below "
-                    f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
-                )
+        task = progress.add_task("Encoding movies", total=len(pending))
+        if workers == 1:
+            for movie, output_file in pending:
+                result = run_one(0, movie, output_file)
+                _report_encode(progress, result)
+                results.append(result)
                 progress.advance(task)
-                continue
-            output_file = output_dir / movie.name
-            if output_file.exists() and not overwrite:
-                log(f"Skipping '{movie.name}': output file already exists.")
-                progress.advance(task)
-                continue
-            result = encode_file(movie, output_file)
-            if result.success:
-                saved = result.saved_percent
-                change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
-                progress.console.print(
-                    f"Encoded '{movie.name}': {result.input_size / (1024**3):.2f} GB -> "
-                    f"{result.output_size / (1024**3):.2f} GB ({change})"
-                )
-            else:
-                log_error(f"Encoding '{movie.name}' failed: {result.error}")
-            results.append(result)
-            progress.advance(task)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(run_one, index, movie, output_file)
+                    for index, (movie, output_file) in enumerate(pending)
+                ]
+                for future in futures:
+                    result = future.result()
+                    _report_encode(progress, result)
+                    results.append(result)
+                    progress.advance(task)
 
     return results
+
+
+def _report_encode(progress: Progress, result: EncodeResult):
+    """Logs one finished encode to the progress console."""
+    if result.success:
+        saved = result.saved_percent
+        change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
+        progress.console.print(
+            f"Encoded '{result.input.name}': {result.input_size / (1024**3):.2f} GB -> "
+            f"{result.output_size / (1024**3):.2f} GB ({change})"
+        )
+    else:
+        log_error(f"Encoding '{result.input.name}' failed: {result.error}")
