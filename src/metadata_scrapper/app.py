@@ -11,7 +11,7 @@ import json
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,36 @@ from metadata_scrapper.report import generate_report
 from metadata_scrapper.watch import watch
 
 app = FastAPI(title="MetaDataScraper", version="0.3.0")
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    """Logs every request with duration and status (the app's access log).
+
+    Args:
+        request: The incoming request.
+        call_next: The next middleware/handler.
+
+    Returns:
+        The response.
+    """
+    import time as _time
+
+    start = _time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        duration = (_time.perf_counter() - start) * 1000
+        log_error(
+            f"{request.method} {request.url.path} crashed after {duration:.0f}ms: "
+            f"{type(e).__name__}: {e}"
+        )
+        raise
+    duration = (_time.perf_counter() - start) * 1000
+    if request.url.path.startswith("/api"):
+        log(f"{request.method} {request.url.path} -> {response.status_code} ({duration:.0f}ms)")
+    return response
+
 
 # paths the API may operate on. Requests can only address folders inside
 # these roots (plus the roots themselves) => the API cannot be tricked into
@@ -107,7 +137,14 @@ class JobRequest(BaseModel):
 
 
 class AppState:
-    """The shared state of the resident app (queue, worker, watcher)."""
+    """The shared state of the resident app (queue, worker, watcher).
+
+    The sqlite connection is shared across threads (FastAPI request threads,
+    the worker, the watcher). Access is serialized by a re-entrant lock:
+    every read/write of the database outside the worker's own job execution
+    goes through with_lock(). WAL mode keeps writers and readers from
+    blocking each other across processes.
+    """
 
     def __init__(self, db_file: Path):
         """Initializes the app state.
@@ -120,12 +157,26 @@ class AppState:
             db_file (Path): The sqlite database file.
         """
         self.db_file = db_file
+        self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
         self.queue = JobQueue(self.connection)
         self.worker = JobWorker(self.connection, self.queue)
-        self._recover_stale_jobs()
+        with self.db_lock:
+            self._recover_stale_jobs()
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
+
+    def with_lock(self, fn):
+        """Runs fn(connection) under the database lock.
+
+        Args:
+            fn (callable): Function receiving the connection.
+
+        Returns:
+            The function's return value.
+        """
+        with self.db_lock:
+            return fn(self.connection)
 
     def _recover_stale_jobs(self):
         """Marks jobs left running by a previous app instance as failed."""
@@ -163,6 +214,17 @@ def get_state() -> AppState:
     if state is None:
         raise HTTPException(status_code=503, detail="app not initialized")
     return state
+
+
+def db_access():
+    """FastAPI dependency serializing database access across request threads.
+
+    Yields:
+        sqlite3.Connection: The app's connection under the state lock.
+    """
+    s = get_state()
+    with s.db_lock:
+        yield s.connection
 
 
 @app.get("/")
@@ -322,8 +384,11 @@ def update_config(data: dict):
 
 
 @app.get("/api/status")
-def status():
+def status(conn=Depends(db_access)):
     """Returns the app status: queue depth, running job, watcher state.
+
+    Args:
+        conn: The database connection (db_access dependency).
 
     Returns:
         dict: The status summary.
@@ -338,11 +403,12 @@ def status():
 
 
 @app.get("/api/jobs")
-def list_jobs(limit: int = 50):
+def list_jobs(limit: int = 50, conn=Depends(db_access)):
     """Returns the recent job history, newest first.
 
     Args:
         limit (int): Maximum number of jobs.
+        conn: The database connection (db_access dependency).
 
     Returns:
         list[dict]: The jobs.
@@ -352,11 +418,12 @@ def list_jobs(limit: int = 50):
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: int):
+def get_job(job_id: int, conn=Depends(db_access)):
     """Returns one job by id.
 
     Args:
         job_id (int): The job id.
+        conn: The database connection (db_access dependency).
 
     Returns:
         dict: The job.
@@ -422,14 +489,16 @@ def cancel_job(job_id: int):
 
 
 @app.get("/api/library")
-def library():
+def library(conn=Depends(db_access)):
     """Returns the scanned library from the database.
+
+    Args:
+        conn: The database connection (db_access dependency).
 
     Returns:
         list[dict]: One entry per movie with its latest encode decision.
     """
-    s = get_state()
-    rows = s.connection.execute(
+    rows = conn.execute(
         """
         SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                f.size, f.hdr,
@@ -493,13 +562,22 @@ def report_page():
 
 
 @app.post("/api/watch/{action}")
-def watch_control(action: str, inbox: str | None = None, output_dir: str | None = None):
+def watch_control(
+    action: str,
+    inbox: str | None = None,
+    output_dir: str | None = None,
+    body: dict | None = None,
+):
     """Starts or stops the watch loop inside the app.
+
+    Accepts inbox/output_dir either as query parameters or as a JSON body
+    (the UI sends a body).
 
     Args:
         action (str): 'start' or 'stop'.
         inbox (str | None): The inbox folder (start only).
         output_dir (str | None): The output folder (start only).
+        body (dict | None): JSON body alternative to the query parameters.
 
     Returns:
         dict: The watcher state.
@@ -511,6 +589,9 @@ def watch_control(action: str, inbox: str | None = None, output_dir: str | None 
         return {"watcher": "stopping"}
 
     if action == "start":
+        body = body or {}
+        inbox = inbox or body.get("inbox")
+        output_dir = output_dir or body.get("output_dir")
         if s.watch_thread and s.watch_thread.is_alive():
             return {"watcher": "already running"}
         if not inbox or not output_dir:
@@ -537,6 +618,26 @@ def watch_control(action: str, inbox: str | None = None, output_dir: str | None 
     raise HTTPException(status_code=400, detail="action must be 'start' or 'stop'")
 
 
+def _default_roots() -> list[Path]:
+    """Computes the default allowed roots: all available drive roots.
+
+    A localhost-only single-user tool can safely operate on whole drives;
+    the strict default (database folder only) made every real library path
+    a 403. Explicit --allow roots still narrow this down.
+
+    Returns:
+        list[Path]: The drive roots that exist (e.g. C:/, D:/, G:/).
+    """
+    import string
+
+    roots = []
+    for letter in string.ascii_uppercase:
+        drive = Path(f"{letter}:/")
+        if drive.exists():
+            roots.append(drive)
+    return roots or [Path.cwd()]
+
+
 def run_app(
     db_file: Path,
     host: str = "127.0.0.1",
@@ -550,10 +651,10 @@ def run_app(
         host (str): The bind address (localhost by default).
         port (int): The bind port.
         allowed_roots (list[Path] | None): Folders the API may operate on.
-            Defaults to the database's parent folder.
+            Defaults to all available drive roots (localhost-only app).
     """
     global state
-    allow_roots(allowed_roots or [db_file.parent])
+    allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
     state.worker.start()
     log(f"MetaDataScraper app listening on http://{host}:{port}")
