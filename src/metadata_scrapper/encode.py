@@ -32,6 +32,10 @@ class EncodeResult:
     input_size: int = 0
     output_size: int = 0
     error: str | None = None
+    input_width: int | None = None
+    input_height: int | None = None
+    input_codec: str | None = None
+    input_duration: float | None = None
 
     @property
     def saved_percent(self) -> float:
@@ -254,14 +258,60 @@ def _encode_with_command(
             error="output is truncated (duration mismatch)",
         )
 
-    # encode succeeded => collect sizes
+    # encode succeeded => collect sizes + the source snapshot
+    snapshot = _source_snapshot(input_file)
     return EncodeResult(
         input=input_file,
         output=output_file,
         success=True,
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
+        input_width=snapshot["width"],
+        input_height=snapshot["height"],
+        input_codec=snapshot["codec"],
+        input_duration=snapshot["duration"],
     )
+
+
+def _source_snapshot(movie: Path) -> dict:
+    """Reads the source file's resolution/codec/duration for encode records.
+
+    The encode record must be self-contained: the files table row can change
+    on a later re-scan, so the benchmark data snapshots what was true at
+    encode time.
+
+    Args:
+        movie (Path): The source file.
+
+    Returns:
+        dict: width/height/codec/duration (None where unknown).
+    """
+    duration = probe_duration_seconds(movie)
+    width = height = None
+    codec = None
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(movie),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if proc.returncode == 0:
+            streams = json.loads(proc.stdout.decode()).get("streams", [])
+            video: dict = next((s for s in streams if s.get("codec_type") == "video"), {})
+            width = video.get("width")
+            height = video.get("height")
+            codec = video.get("codec_name")
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return {"width": width, "height": height, "codec": codec, "duration": duration}
 
 
 def encode_file(

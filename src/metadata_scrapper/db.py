@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS encodes (
     saved_percent REAL NOT NULL,
     chosen_crf INTEGER,
     achieved_vmaf REAL,
+    encoder_preset TEXT,
+    encode_seconds REAL,
+    probe_count INTEGER,
+    probe_seconds REAL,
+    hdr INTEGER,
+    source_width INTEGER,
+    source_height INTEGER,
+    source_codec TEXT,
+    source_duration REAL,
+    tool_versions TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -94,6 +104,19 @@ MIGRATIONS = {
     ],
     3: ["__absolute_paths__"],  # handled specially in _migrate (needs Path)
     4: ["__job_table__"],  # handled specially in _migrate (creates a table)
+    5: [
+        # benchmark-grade encode records (see TODO: library-wide data runs)
+        "ALTER TABLE encodes ADD COLUMN encoder_preset TEXT",
+        "ALTER TABLE encodes ADD COLUMN encode_seconds REAL",
+        "ALTER TABLE encodes ADD COLUMN probe_count INTEGER",
+        "ALTER TABLE encodes ADD COLUMN probe_seconds REAL",
+        "ALTER TABLE encodes ADD COLUMN hdr INTEGER",
+        "ALTER TABLE encodes ADD COLUMN source_width INTEGER",
+        "ALTER TABLE encodes ADD COLUMN source_height INTEGER",
+        "ALTER TABLE encodes ADD COLUMN source_codec TEXT",
+        "ALTER TABLE encodes ADD COLUMN source_duration REAL",
+        "ALTER TABLE encodes ADD COLUMN tool_versions TEXT",
+    ],
 }
 
 
@@ -355,6 +378,16 @@ def add_encode(
     saved_percent: float,
     chosen_crf: int | None = None,
     achieved_vmaf: float | None = None,
+    encoder_preset: str | None = None,
+    encode_seconds: float | None = None,
+    probe_count: int | None = None,
+    probe_seconds: float | None = None,
+    hdr: bool | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    source_codec: str | None = None,
+    source_duration: float | None = None,
+    tool_versions: str | None = None,
 ) -> int:
     """Records an encode in the history table.
 
@@ -376,9 +409,11 @@ def add_encode(
         """
         INSERT INTO encodes (
             file_id, preset, encoder, input_size, output_size, saved_percent,
-            chosen_crf, achieved_vmaf
+            chosen_crf, achieved_vmaf, encoder_preset, encode_seconds,
+            probe_count, probe_seconds, hdr, source_width, source_height,
+            source_codec, source_duration, tool_versions
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -389,6 +424,16 @@ def add_encode(
             saved_percent,
             chosen_crf,
             achieved_vmaf,
+            encoder_preset,
+            encode_seconds,
+            probe_count,
+            probe_seconds,
+            hdr,
+            source_width,
+            source_height,
+            source_codec,
+            source_duration,
+            tool_versions,
         ),
     )
     connection.commit()

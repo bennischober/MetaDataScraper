@@ -289,6 +289,15 @@ class QualityResult:
     output_size: int = 0
     error: str | None = None
     skipped_reason: str | None = None
+    encoder_preset: str | None = None
+    encode_seconds: float | None = None
+    probe_seconds: float | None = None
+    hdr: bool = False
+    tool_versions: str | None = None
+    input_width: int | None = None
+    input_height: int | None = None
+    input_codec: str | None = None
+    input_duration: float | None = None
 
     @property
     def saved_percent(self) -> float:
@@ -618,6 +627,74 @@ def is_hdr_file(movie: Path) -> bool:
     except (RuntimeError, OSError, ValueError):
         return False
     return bool(data.get("hdr"))
+
+
+def _tool_versions(handbrake: str) -> str:
+    """Reads the tool versions relevant for benchmark records.
+
+    Args:
+        handbrake (str): Path to the HandBrakeCLI binary.
+
+    Returns:
+        str: A compact version string, e.g. 'hb=1.11.2;libvmaf=v3'.
+    """
+    import re as _re
+    import subprocess as _subprocess
+
+    versions = []
+    try:
+        proc = _subprocess.run([handbrake, "--version"], capture_output=True, timeout=15)
+        match = _re.search(r"HandBrake\s+([0-9.]+)", proc.stdout.decode(errors="replace"))
+        if match:
+            versions.append(f"hb={match.group(1)}")
+    except (OSError, _subprocess.SubprocessError):
+        pass
+    style = detect_vmaf_style()
+    versions.append("libvmaf=v3" if style == VMAF_STYLE_MODERN else "libvmaf=v2")
+    return ";".join(versions)
+
+
+def _source_snapshot(movie: Path) -> dict:
+    """Reads the source file's resolution/codec/duration for encode records.
+
+    The encode record must be self-contained: the files table row can change
+    on a later re-scan, so the benchmark data snapshots what was true at
+    encode time.
+
+    Args:
+        movie (Path): The source file.
+
+    Returns:
+        dict: width/height/codec/duration (None where unknown).
+    """
+    from metadata_scrapper.encode import probe_duration_seconds
+
+    duration = probe_duration_seconds(movie)
+    width = height = None
+    codec = None
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(movie),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if proc.returncode == 0:
+            streams = json.loads(proc.stdout.decode()).get("streams", [])
+            video: dict = next((s for s in streams if s.get("codec_type") == "video"), {})
+            width = video.get("width")
+            height = video.get("height")
+            codec = video.get("codec_name")
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return {"width": width, "height": height, "codec": codec, "duration": duration}
 
 
 def bisect_crf(check, lo: int, hi: int) -> int:
@@ -1110,6 +1187,10 @@ def encode_with_quality(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
+    import time as _time
+
+    run_started = _time.perf_counter()
+    snapshot = _source_snapshot(input_file)
     hdr = is_hdr_file(input_file)
     if hdr:
         target_vmaf = DEFAULT_HDR_TARGET_VMAF
@@ -1148,6 +1229,7 @@ def encode_with_quality(
             skipped_reason=("target unreachable" if "unreachable" in str(e) else "no size gain"),
         )
 
+    probe_seconds = _time.perf_counter() - run_started
     log(f"Chosen CRF {crf} (VMAF {achieved})")
     handbrake = find_handbrake()
     if handbrake is None:  # already checked in _probe_movie, for mypy
@@ -1187,6 +1269,15 @@ def encode_with_quality(
             probes=probes,
             input_size=input_file.stat().st_size,
             output_size=output_file.stat().st_size,
+            encoder_preset=encoder_preset,
+            encode_seconds=_time.perf_counter() - run_started,
+            probe_seconds=probe_seconds,
+            hdr=hdr,
+            tool_versions=_tool_versions(handbrake),
+            input_width=snapshot["width"],
+            input_height=snapshot["height"],
+            input_codec=snapshot["codec"],
+            input_duration=snapshot["duration"],
         )
     if code != 0:
         return QualityResult(
@@ -1235,4 +1326,13 @@ def encode_with_quality(
         probes=probes,
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
+        encoder_preset=encoder_preset,
+        encode_seconds=_time.perf_counter() - run_started,
+        probe_seconds=probe_seconds,
+        hdr=hdr,
+        tool_versions=_tool_versions(handbrake),
+        input_width=snapshot["width"],
+        input_height=snapshot["height"],
+        input_codec=snapshot["codec"],
+        input_duration=snapshot["duration"],
     )

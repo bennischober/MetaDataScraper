@@ -61,6 +61,16 @@ def save_encode(
     output_size: int,
     chosen_crf: int | None = None,
     achieved_vmaf: float | None = None,
+    encoder_preset: str | None = None,
+    encode_seconds: float | None = None,
+    probe_count: int | None = None,
+    probe_seconds: float | None = None,
+    hdr: bool | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    source_codec: str | None = None,
+    source_duration: float | None = None,
+    tool_versions: str | None = None,
 ):
     """Stores an encode record for the given movie in the database.
 
@@ -73,6 +83,16 @@ def save_encode(
         output_size (int): Output size in bytes.
         chosen_crf (int | None): The CRF chosen by the quality search, if any.
         achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
+        encoder_preset (str | None): The speed preset used (benchmark data).
+        encode_seconds (float | None): Wall time of the encode (benchmark).
+        probe_count (int | None): Number of probes in the search (benchmark).
+        probe_seconds (float | None): Wall time of the probing (benchmark).
+        hdr (bool | None): Whether the source was HDR (benchmark).
+        source_width (int | None): Source resolution snapshot (benchmark).
+        source_height (int | None): Source resolution snapshot (benchmark).
+        source_codec (str | None): Source codec snapshot (benchmark).
+        source_duration (float | None): Source duration snapshot (benchmark).
+        tool_versions (str | None): Tool version string (benchmark).
     """
     file_id = ensure_file_row(connection, movie)
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
@@ -86,6 +106,16 @@ def save_encode(
         saved_percent,
         chosen_crf=chosen_crf,
         achieved_vmaf=achieved_vmaf,
+        encoder_preset=encoder_preset,
+        encode_seconds=encode_seconds,
+        probe_count=probe_count,
+        probe_seconds=probe_seconds,
+        hdr=hdr,
+        source_width=source_width,
+        source_height=source_height,
+        source_codec=source_codec,
+        source_duration=source_duration,
+        tool_versions=tool_versions,
     )
 
 
@@ -150,6 +180,16 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
             result.output_size,
             chosen_crf=result.chosen_crf,
             achieved_vmaf=result.achieved_vmaf,
+            encoder_preset=result.encoder_preset,
+            encode_seconds=result.encode_seconds,
+            probe_count=len(result.probes),
+            probe_seconds=result.probe_seconds,
+            hdr=result.hdr,
+            source_width=result.input_width,
+            source_height=result.input_height,
+            source_codec=result.input_codec,
+            source_duration=result.input_duration,
+            tool_versions=result.tool_versions,
         )
         return EncodeOutcome(movie=str(movie), encoded=True)
     if result.skipped_reason is not None:
@@ -187,6 +227,11 @@ def record_fixed_results(connection, results: list, config) -> list[EncodeOutcom
                 config.handbrake_encoder,
                 encode_result.input_size,
                 encode_result.output_size,
+                encoder_preset=config.handbrake_preset,
+                source_width=encode_result.input_width,
+                source_height=encode_result.input_height,
+                source_codec=encode_result.input_codec,
+                source_duration=encode_result.input_duration,
             )
             outcomes.append(EncodeOutcome(movie=str(encode_result.input), encoded=True))
         else:
