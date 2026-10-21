@@ -39,6 +39,9 @@ Changelog = "https://github.com/bennischober/MetaDataScraper/releases"
 # Supply-chain hardening: skip packages published in the last 7 days so freshly
 # poisoned releases don't enter resolution before they are detected and yanked.
 exclude-newer = "7 days"
+# security fixes are exempt from the cooldown (the audit gate fails otherwise,
+# and a known-fixed vulnerability is the exact case the cooldown may delay)
+exclude-newer-package = { certifi = false }
 
 [tool.uv.audit]
 # Refuse to sync packages with a published malware advisory (OSV MAL database).
