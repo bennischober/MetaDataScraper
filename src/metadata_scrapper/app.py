@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from metadata_scrapper import db
+from metadata_scrapper.dedupe import find_duplicates
 from metadata_scrapper.jobs import Job, JobKind, JobQueue, JobWorker
 from metadata_scrapper.logger import log, log_error
 from metadata_scrapper.report import generate_report
@@ -291,7 +292,22 @@ def ui_asset(asset_path: str):
     return FileResponse(normalized)
 
 
-@app.get("/api/config")
+@app.get("/api/duplicates")
+def duplicates():
+    """Returns duplicate groups across the whole scanned library.
+
+    Grouping: byte-identical files (content hash) and same-title files
+    (normalized name + duration tolerance). Read-only — resolving a group
+    is a manual, explicit user action.
+
+    Returns:
+        list[dict]: The duplicate groups, best candidate first.
+    """
+    s = get_state()
+    groups = s.with_lock(lambda c: find_duplicates(c))
+    return [g.to_dict() for g in groups]
+
+
 def get_config():
     """Returns the current configuration (as stored in config.json).
 
