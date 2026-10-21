@@ -220,14 +220,18 @@ def get_state() -> AppState:
 
 
 def db_access():
-    """FastAPI dependency serializing database access across request threads.
+    """FastAPI dependency providing the app's database connection.
+
+    Locking happens in the handlers (s.with_lock) so that acquire, work and
+    release run on the same worker thread — a generator-yielded lock here
+    would be released by a different threadpool thread than it was acquired
+    on (the 'cannot release un-acquired lock' crash).
 
     Yields:
-        sqlite3.Connection: The app's connection under the state lock.
+        sqlite3.Connection: The app's connection (unlocked).
     """
     s = get_state()
-    with s.db_lock:
-        yield s.connection
+    yield s.connection
 
 
 @app.get("/")
@@ -397,7 +401,9 @@ def status(conn=Depends(db_access)):
         dict: The status summary.
     """
     s = get_state()
-    running = [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
+    running = s.with_lock(
+        lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
+    )
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
@@ -417,7 +423,7 @@ def list_jobs(limit: int = 50, conn=Depends(db_access)):
         list[dict]: The jobs.
     """
     s = get_state()
-    return [j.to_dict() for j in s.queue.all_jobs(limit=limit)]
+    return s.with_lock(lambda c: [j.to_dict() for j in s.queue.all_jobs(limit=limit)])
 
 
 @app.get("/api/jobs/{job_id}")
@@ -432,7 +438,7 @@ def get_job(job_id: int, conn=Depends(db_access)):
         dict: The job.
     """
     s = get_state()
-    job = s.queue.get(job_id)
+    job = s.with_lock(lambda c: s.queue.get(job_id))
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.to_dict()
@@ -516,19 +522,22 @@ def library(conn=Depends(db_access)):
     Returns:
         list[dict]: One entry per movie with its latest encode decision.
     """
-    rows = conn.execute(
-        """
-        SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
-               f.size, f.hdr,
-               e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
-               e.saved_percent
-        FROM files f
-        LEFT JOIN encodes e ON e.id = (
-            SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
-        )
-        ORDER BY f.category, f.name
-        """
-    ).fetchall()
+    s = get_state()
+    rows = s.with_lock(
+        lambda c: c.execute(
+            """
+            SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
+                   f.size, f.hdr,
+                   e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
+                   e.saved_percent
+            FROM files f
+            LEFT JOIN encodes e ON e.id = (
+                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+            )
+            ORDER BY f.category, f.name
+            """
+        ).fetchall()
+    )
     return [
         {
             "path": r["path"],
