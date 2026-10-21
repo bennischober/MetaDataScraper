@@ -8,6 +8,8 @@ Run with `metadata-scrapper app`.
 """
 
 import json
+import os
+import os.path
 import threading
 from pathlib import Path
 
@@ -90,18 +92,19 @@ def validate_path(path_str: str, what: str = "path") -> Path:
     if not path_str or not path_str.strip():
         raise HTTPException(status_code=400, detail=f"{what} is empty")
     try:
-        path = Path(path_str).resolve()
+        # realpath normalizes away '..' segments and symlinks
+        normalized = os.path.realpath(path_str)
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"invalid {what}: {e}") from e
 
     for root in _allowed_roots:
-        # containment proof via relative_to: any '..' escape or drive change
-        # makes the path not a relative child of the root
-        try:
-            path.relative_to(root)
-        except ValueError:
-            continue
-        return path
+        # CodeQL-recognized containment: the realpath must be the root
+        # itself or a child of it (root with trailing separator)
+        # strip the trailing separator: a drive root ('D:\\') already ends
+        # in one, and appending os.sep would require a double separator
+        root_str = os.path.realpath(str(root)).rstrip(os.sep)
+        if normalized == root_str or normalized.startswith(root_str + os.sep):
+            return Path(normalized)
     raise HTTPException(
         status_code=403,
         detail=f"{what} is outside the allowed roots: {_allowed_roots}",
@@ -277,17 +280,15 @@ def ui_asset(asset_path: str):
     Returns:
         FileResponse: The asset file.
     """
-    dist = _ui_dist().resolve()
-    # the URL prefixes /assets/ but the files live in dist/assets/
-    asset = (dist / "assets" / asset_path).resolve()
-    try:
-        asset.relative_to(dist)
-    except ValueError as e:
-        # the path escapes the build output => never serve it
-        raise HTTPException(status_code=404, detail="asset not found") from e
-    if not asset.is_file():
+    dist = os.path.realpath(str(_ui_dist() / "assets"))
+    # realpath normalizes away '..' segments => the result must stay a child
+    # of the assets directory, otherwise the path escapes the build output
+    normalized = os.path.realpath(os.path.join(dist, asset_path))
+    if not (normalized == dist or normalized.startswith(dist + os.sep)):
         raise HTTPException(status_code=404, detail="asset not found")
-    return FileResponse(asset)
+    if not os.path.isfile(normalized):
+        raise HTTPException(status_code=404, detail="asset not found")
+    return FileResponse(normalized)
 
 
 @app.get("/api/config")
@@ -574,18 +575,18 @@ def report_page():
         FileResponse: The report file.
     """
     s = get_state()
-    report_dir = s.db_file.resolve().parent
-    report_path = report_dir / "report.html"
+    report_dir = os.path.realpath(str(s.db_file.parent))
+    report_path = os.path.join(report_dir, "report.html")
     try:
-        generate_report(s.db_file, report_path)
+        generate_report(s.db_file, Path(report_path))
     except Exception as e:
         log_error(f"report generation failed: {e}")
         raise HTTPException(status_code=500, detail="report generation failed") from e
-    try:
-        report_path.resolve().relative_to(report_dir)
-    except ValueError as e:  # pragma: no cover - cannot happen by construction
-        raise HTTPException(status_code=500, detail="report path invalid") from e
-    return FileResponse(report_path, media_type="text/html")
+    # CodeQL-recognized containment: realpath must stay inside report_dir
+    normalized = os.path.realpath(report_path)
+    if not (normalized.startswith(report_dir + os.sep)):
+        raise HTTPException(status_code=500, detail="report path invalid")
+    return FileResponse(normalized, media_type="text/html")
 
 
 @app.post("/api/watch/{action}")
