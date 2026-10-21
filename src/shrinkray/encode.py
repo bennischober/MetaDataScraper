@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,8 @@ class EncodeResult:
         input_size (int): Size of the input file in bytes.
         output_size (int): Size of the output file in bytes.
         error (str | None): The error message if the encode failed.
+        cancelled (bool): True when the encode was aborted by the job's
+            cancel event (the output is partial and was removed).
     """
 
     input: Path
@@ -32,6 +35,7 @@ class EncodeResult:
     input_size: int = 0
     output_size: int = 0
     error: str | None = None
+    cancelled: bool = False
     input_width: int | None = None
     input_height: int | None = None
     input_codec: str | None = None
@@ -187,12 +191,14 @@ def _encode_with_command(
     output_file: Path,
     command: list[str],
     progress=None,
+    cancel: threading.Event | None = None,
 ) -> EncodeResult:
     """Runs one HandBrake command and verifies its output.
 
     With a progress callback, HandBrake's stdout is streamed and its
     percentage lines ('Encoding: task 1 of 1, 42.31 %') are reported live
-    as {'stage': 'encode', 'percent': 42.31, 'movie': name}.
+    as {'stage': 'encode', 'percent': 42.31, 'movie': name}. With a cancel
+    event, the streamed loop aborts and the process is terminated.
 
     Args:
         input_file (Path): The source file.
@@ -206,6 +212,7 @@ def _encode_with_command(
     stderr = ""
     returncode: int
     stderr_bytes: bytes | None = None
+    cancelled = False
     try:
         if progress is None:
             proc = subprocess.run(command, capture_output=True)
@@ -219,6 +226,17 @@ def _encode_with_command(
             )
             assert popen.stdout is not None  # stdout=PIPE guarantees it
             for raw in iter(popen.stdout.readline, b""):
+                if cancel is not None and cancel.is_set():
+                    popen.terminate()
+                    try:
+                        popen.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        popen.kill()
+                        popen.wait(timeout=5)
+                    cancelled = True
+                    returncode = -1
+                    stderr_bytes = b"cancelled by user"
+                    break
                 line = raw.decode(errors="replace").strip()
                 match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
                 if match:
@@ -229,12 +247,18 @@ def _encode_with_command(
                             "movie": input_file.name,
                         }
                     )
-            popen.stdout.close()
-            _, stderr_raw = popen.communicate()
-            stderr_bytes = stderr_raw
-            returncode = popen.returncode
+            if not cancelled:
+                popen.stdout.close()
+                _, stderr_raw = popen.communicate()
+                stderr_bytes = stderr_raw
+                returncode = popen.returncode
     except (OSError, subprocess.SubprocessError) as e:
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
+
+    if cancelled:
+        return EncodeResult(
+            input=input_file, output=output_file, success=False, cancelled=True, error="cancelled"
+        )
 
     stderr = (stderr_bytes or b"").decode(errors="replace").strip()
     if returncode != 0:

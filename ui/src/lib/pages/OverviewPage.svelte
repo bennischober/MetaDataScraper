@@ -19,6 +19,8 @@
     ondismiss,
     ongoto,
     onopenmovie,
+    oncancel,
+    cancelling = false,
   }: {
     movies: Movie[]
     history: Job[]
@@ -36,6 +38,8 @@
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'duplicates' | 'jobs' | 'config') => void
     onopenmovie: (movie: Movie) => void
+    oncancel?: (id: number | null) => void
+    cancelling?: boolean
   } = $props()
 
   const encodedCount = $derived(movies.filter((m) => m.encode && !m.encode.preset?.startsWith('skipped')).length)
@@ -162,12 +166,15 @@
       <div class="running-head">
         <span class="legend amber">IN WORK · {runningJob.kind.toUpperCase()}</span>
         <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
+        <button class="act cancel" onclick={() => oncancel?.(runningJob.id)} disabled={cancelling}>
+          {cancelling ? 'CANCELLING…' : 'CANCEL'}
+        </button>
       </div>
       <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
       <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? 0} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
-      <div class="mono dim detail">{runningProgress?.detail ?? 'working…'}</div>
+      <div class="mono dim detail">{runningProgress?.detail ?? 'working…'} — cancel stops after the current step; the in-flight process is terminated</div>
     </div>
   {:else}
     <div class="quiet-strip">
@@ -475,4 +482,7 @@
     text-transform: uppercase;
   }
   .act:hover { border-color: var(--teal); color: var(--teal-ink); }
+  .act.cancel { border-color: var(--red); color: var(--red); }
+  .act.cancel:hover:not(:disabled) { background: var(--red); color: var(--ground); }
+  .act:disabled { opacity: 0.4; cursor: default; }
 </style>

@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -1057,6 +1058,44 @@ class TestJobs(unittest.TestCase):
     def tearDown(self):
         self.connection.close()
         self.tmp.cleanup()
+
+    def test_cancel_terminates_running_subprocess(self):
+        """The cancel event terminates an in-flight subprocess (regression:
+        cancel was only checked between movies, so a long probe or encode
+        ran to completion despite the user cancelling)."""
+        from shrinkray.quality import _run
+
+        cancel = threading.Event()
+        # a process that runs until killed (long enough to cancel mid-flight)
+        command = ["ping", "-n", "30", "127.0.0.1"] if os.name == "nt" else ["sleep", "30"]
+        result: list = []
+
+        def runner():
+            result.append(_run(command, cancel=cancel))
+
+        thread = threading.Thread(target=runner)
+        thread.start()
+        threading.Event().wait(0)  # yield
+        import time as _time
+
+        _time.sleep(0.5)  # let the process start
+        cancel.set()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive(), "_run did not return after cancel")
+        code, err = result[0]
+        self.assertEqual(code, -1)
+        self.assertIn("cancelled", err)
+
+    def test_check_cancel_raises(self):
+        """_check_cancel raises Cancelled when the event is set."""
+        from shrinkray.quality import Cancelled, _check_cancel
+
+        _check_cancel(None)  # disabled check never raises
+        event = threading.Event()
+        _check_cancel(event)  # not set: fine
+        event.set()
+        with self.assertRaises(Cancelled):
+            _check_cancel(event)
 
     def test_dedupe_job_execution(self):
         """A dedupe job analyzes the library and records its summary."""

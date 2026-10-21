@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from shrinkray.quality import Cancelled
+
 
 class JobState(str, Enum):
     """The lifecycle states of a job."""
@@ -217,6 +219,19 @@ class JobQueue:
         )
         self._connection.commit()
 
+    def mark_cancelled(self, job: Job):
+        """Marks a job as cancelled (user request, not a failure).
+
+        Args:
+            job (Job): The cancelled job.
+        """
+        job.state = JobState.CANCELLED
+        self._connection.execute(
+            "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
+            (JobState.CANCELLED.value, job.id),
+        )
+        self._connection.commit()
+
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
 
@@ -335,16 +350,17 @@ def payload_paths(payload: dict) -> list[Path]:
     return [Path(payload["path"])]
 
 
-def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list:
+def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list[Path]:
     """Resolves the payload's movies: scan directories, pass files through.
 
     A payload path may be a directory (scanned recursively, per the scan
-    engine) or a single movie file (per-movie action from the UI; scanned
-    directly without directory discovery).
+    engine) or a single movie file (per-movie action from the UI; passed
+    through directly). The return type is always a list of paths - the
+    engines (plan_quality, encode_with_quality) take Path objects.
 
     Args:
         payload (dict): The job payload (paths list or legacy path string).
-        config (Conf): The config settings.
+        config (Conf): The config settings (directory scans only).
         connection (sqlite3.Connection | None): Database connection for the
             scan cache.
         exclude (Path | None): Directory to exclude from the scan.
@@ -352,16 +368,13 @@ def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list
     Returns:
         list[Path]: The movie files.
     """
-    from shrinkray.scanner import process_movie, scan_movies
+    from shrinkray.scanner import scan_movies
 
-    movies: list = []
+    movies: list[Path] = []
     for path in payload_paths(payload):
         if path.is_file():
-            # single movie file (per-movie action) => process directly,
-            # without scanning the whole parent folder
-            data, _error = process_movie(path, path.parent, config)
-            if data is not None:
-                movies.append(data)
+            # single movie file (per-movie action) => pass through directly
+            movies.append(path)
         else:
             _, part_movies, _ = scan_movies(path, config, connection=connection, exclude=exclude)
             movies.extend(part_movies)
@@ -488,6 +501,7 @@ def execute_plan(
                 target_vmaf=payload.get("target_vmaf", 95.0),
                 encoder=config.handbrake_encoder,
                 remove_bars=payload.get("remove_bars", False),
+                cancel=cancel,
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -569,6 +583,7 @@ def execute_encode(
                 encoder=config.handbrake_encoder,
                 remove_bars=payload.get("remove_bars", False),
                 progress=progress,
+                cancel=cancel,
             )
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
@@ -729,9 +744,13 @@ class JobWorker:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return
             if result.get("cancelled"):
-                self.queue.fail(job, "cancelled")
+                self.queue.mark_cancelled(job)
             else:
                 self.queue.finish(job, result)
+        except Cancelled:
+            # the engine raised between checkpoints (subprocess terminated);
+            # partial probe/output artifacts are cleaned by the engine
+            self.queue.mark_cancelled(job)
         except Exception as e:
             self.queue.fail(job, f"{type(e).__name__}: {e}")
         finally:

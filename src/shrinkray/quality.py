@@ -22,6 +22,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -307,10 +309,46 @@ class QualityResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
-def _run(command: list[str], cwd: Path | None = None) -> tuple[int, str]:
-    """Runs a subprocess and returns (returncode, stderr as text)."""
-    proc = subprocess.run(command, capture_output=True, cwd=cwd)
-    return proc.returncode, proc.stderr.decode(errors="replace").strip()
+def _run(
+    command: list[str],
+    cwd: Path | None = None,
+    cancel: threading.Event | None = None,
+) -> tuple[int, str]:
+    """Runs a subprocess and returns (returncode, stderr as text).
+
+    With a cancel event, the process is polled and terminated when the
+    event fires; the returncode -1 signals the cancellation to the caller.
+
+    Args:
+        command (list[str]): The command to run.
+        cwd (Path | None): Working directory.
+        cancel (threading.Event | None): Cooperative cancellation.
+
+    Returns:
+        tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
+    """
+    if cancel is None:
+        proc = subprocess.run(command, capture_output=True, cwd=cwd)
+        return proc.returncode, proc.stderr.decode(errors="replace").strip()
+    popen = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+    try:
+        while popen.poll() is None:
+            if cancel.is_set():
+                popen.terminate()
+                try:
+                    popen.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    popen.kill()
+                    popen.wait(timeout=5)
+                return -1, "cancelled by user"
+            time.sleep(0.2)
+        stderr_bytes = popen.stderr.read() if popen.stderr else b""
+        return popen.returncode, stderr_bytes.decode(errors="replace").strip()
+    finally:
+        if popen.stdout:
+            popen.stdout.close()
+        if popen.stderr:
+            popen.stderr.close()
 
 
 def sample_offsets(duration: float, count: int) -> list[float]:
@@ -335,7 +373,13 @@ def sample_offsets(duration: float, count: int) -> list[float]:
     return [start + i * step for i in range(count)]
 
 
-def extract_samples(movie: Path, workdir: Path, count: int, seconds: float) -> list[Path]:
+def extract_samples(
+    movie: Path,
+    workdir: Path,
+    count: int,
+    seconds: float,
+    cancel: threading.Event | None = None,
+) -> list[Path]:
     """Extracts short near-lossless sample clips for probing.
 
     Args:
@@ -343,13 +387,16 @@ def extract_samples(movie: Path, workdir: Path, count: int, seconds: float) -> l
         workdir (Path): Directory for the sample files.
         count (int): The number of samples.
         seconds (float): The length of each sample in seconds.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         list[Path]: The sample files.
 
     Raises:
         RuntimeError: If a sample could not be extracted.
+        Cancelled: When the cancel event fires.
     """
+    _check_cancel(cancel)
     proc = subprocess.run(
         [
             "ffprobe",
@@ -368,6 +415,7 @@ def extract_samples(movie: Path, workdir: Path, count: int, seconds: float) -> l
 
     samples: list[Path] = []
     for index, offset in enumerate(sample_offsets(duration, count)):
+        _check_cancel(cancel)
         sample = workdir / f"sample_{index}.mkv"
         code, err = _run(
             [
@@ -391,7 +439,8 @@ def extract_samples(movie: Path, workdir: Path, count: int, seconds: float) -> l
                 "12",
                 "-an",
                 str(sample),
-            ]
+            ],
+            cancel=cancel,
         )
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
@@ -565,6 +614,7 @@ def measure_vmaf(
     workdir: Path,
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
@@ -578,12 +628,15 @@ def measure_vmaf(
         workdir (Path): Working directory for the model and log files.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             the reference so it matches the distorted geometry.
+        hdr (bool): Tone-map both sides for the measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         float: The mean VMAF score.
 
     Raises:
         RuntimeError: If ffmpeg/libvmaf failed or produced no score.
+        Cancelled: When the cancel event fires.
     """
     distorted = distorted.resolve()
     reference = reference.resolve()
@@ -595,8 +648,12 @@ def measure_vmaf(
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
     code, err = _run(
-        build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr), cwd=workdir
+        build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr),
+        cwd=workdir,
+        cancel=cancel,
     )
+    if code == -1:
+        raise Cancelled("cancelled during vmaf measurement")
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")
@@ -731,6 +788,7 @@ def probe_crf(
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
@@ -747,22 +805,28 @@ def probe_crf(
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
 
     Raises:
         RuntimeError: If a sample encode or VMAF measurement failed.
+        Cancelled: When the cancel event fires.
     """
     scores: list[float] = []
     for index, sample in enumerate(samples):
+        _check_cancel(cancel)
         encoded = workdir / f"probe_crf{crf}_{index}.mkv"
         command = build_encode_command(
             handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
         )
-        code, err = _run(command)
+        code, err = _run(command, cancel=cancel)
+        if code == -1:
+            raise Cancelled("cancelled during probe encode")
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
+        _check_cancel(cancel)
         scores.append(measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr))
         encoded.unlink()
     return min(scores)
@@ -777,6 +841,7 @@ def estimate_size_factor(
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -792,23 +857,29 @@ def estimate_size_factor(
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars applied to the probe encode.
+        hdr (bool): Tone-map for the measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         float: The size ratio of the probe encode (encoded / sample source).
 
     Raises:
         RuntimeError: If the probe encode failed.
+        Cancelled: When the cancel event fires.
     """
+    _check_cancel(cancel)
     sample = samples[0]
     encoded = workdir / f"size_probe_crf{crf}.mkv"
     command = build_encode_command(
         handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
     )
-    code, err = _run(command)
+    code, err = _run(command, cancel=cancel)
+    if code == -1:
+        raise Cancelled("cancelled during size probe")
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
     try:
-        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr)
+        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel)
         factor = encoded.stat().st_size / sample.stat().st_size
     finally:
         encoded.unlink()
@@ -827,6 +898,7 @@ def find_optimal_crf(
     encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -842,19 +914,28 @@ def find_optimal_crf(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
+        hdr (bool): Tone-map both sides for the VMAF measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         tuple: The chosen CRF, the VMAF measured at that CRF and all probes.
 
     Raises:
         RuntimeError: If sampling or probing failed.
+        Cancelled: When the cancel event fires.
     """
-    samples = [s.resolve() for s in extract_samples(movie, workdir, sample_count, sample_seconds)]
+    samples = [
+        s.resolve()
+        for s in extract_samples(movie, workdir, sample_count, sample_seconds, cancel=cancel)
+    ]
 
     probes: list[SampleProbe] = []
 
     def check(crf: int) -> bool:
-        vmaf = probe_crf(samples, crf, workdir, handbrake, encoder, encoder_preset, crop=crop)
+        _check_cancel(cancel)
+        vmaf = probe_crf(
+            samples, crf, workdir, handbrake, encoder, encoder_preset, crop=crop, cancel=cancel
+        )
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
         return vmaf >= target_vmaf
 
@@ -876,6 +957,7 @@ def find_optimal_crf_and_skip(
     encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -900,11 +982,14 @@ def find_optimal_crf_and_skip(
         tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
             that is True when the movie should NOT be re-encoded.
     """
-    samples = [s.resolve() for s in extract_samples(movie, workdir, sample_count, sample_seconds)]
+    samples = [
+        s.resolve()
+        for s in extract_samples(movie, workdir, sample_count, sample_seconds, cancel=cancel)
+    ]
 
     # cheapest CRF (largest size) of the search range as the pessimistic bound
     factor = estimate_size_factor(
-        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset, crop=crop
+        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset, crop=crop, cancel=cancel
     )
     if factor >= 1.0:
         log(
@@ -925,6 +1010,7 @@ def find_optimal_crf_and_skip(
         encoder_preset=encoder_preset,
         crop=crop,
         hdr=hdr,
+        cancel=cancel,
     )
     return chosen, achieved, probes, False
 
@@ -938,6 +1024,7 @@ def plan_quality(
     encoder: str = "x265",
     encoder_preset: str = "medium",
     remove_bars: bool = False,
+    cancel: threading.Event | None = None,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -955,6 +1042,7 @@ def plan_quality(
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars (opt-in).
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -964,6 +1052,7 @@ def plan_quality(
     Raises:
         FileNotFoundError: If the input file does not exist.
         RuntimeError: If HandBrakeCLI is not installed or probing failed.
+        Cancelled: When the cancel event fires.
     """
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
@@ -1009,17 +1098,19 @@ def plan_quality(
             encoder_preset=encoder_preset,
             crop=crop,
             hdr=hdr,
+            cancel=cancel,
         )
 
         input_size = input_file.stat().st_size
         factor = estimate_size_factor(
-            extract_samples(input_file, workdir, sample_count, sample_seconds),
+            extract_samples(input_file, workdir, sample_count, sample_seconds, cancel=cancel),
             workdir,
             handbrake,
             crf,
             "x265_10bit" if hdr else encoder,
             encoder_preset,
             crop=crop,
+            cancel=cancel,
         )
 
         if skip:
@@ -1080,6 +1171,7 @@ def _probe_movie(
     encoder_preset: str,
     remove_bars: bool,
     hdr: bool = False,
+    cancel: threading.Event | None = None,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -1093,6 +1185,7 @@ def _probe_movie(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars.
         hdr (bool): Tone-map both sides for the VMAF measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
         tuple: The chosen CRF, its VMAF, all probes and the crop bars
@@ -1100,7 +1193,9 @@ def _probe_movie(
 
     Raises:
         RuntimeError: If HandBrakeCLI is not installed or probing failed.
+        Cancelled: When the cancel event fires.
     """
+    _check_cancel(cancel)
     handbrake = find_handbrake()
     if handbrake is None:
         raise RuntimeError(
@@ -1129,6 +1224,7 @@ def _probe_movie(
             encoder_preset=encoder_preset,
             crop=crop,
             hdr=hdr,
+            cancel=cancel,
         )
         if skip:
             raise SkipEncode("re-encode would not shrink the file")
@@ -1145,6 +1241,29 @@ class SkipEncode(Exception):
     """Raised when the probing decides a movie should not be encoded."""
 
 
+class Cancelled(Exception):
+    """Raised inside the engine when the job's cancel event fires.
+
+    The worker turns this into a proper CANCELLED job state; partial
+    artifacts (probe files, half-written output) are the caller's to
+    clean up (the sample workdir is removed by its own finally).
+    """
+
+
+def _check_cancel(cancel: threading.Event | None):
+    """Raises Cancelled when the cancel event is set.
+
+    Args:
+        cancel (threading.Event | None): The job's cancel event (None
+            disables the check, e.g. for CLI one-shots).
+
+    Raises:
+        Cancelled: When the event is set.
+    """
+    if cancel is not None and cancel.is_set():
+        raise Cancelled("cancelled by user")
+
+
 def encode_with_quality(
     input_file: Path,
     output_file: Path,
@@ -1156,6 +1275,7 @@ def encode_with_quality(
     encoder_preset: str = "medium",
     remove_bars: bool = False,
     progress=None,
+    cancel: threading.Event | None = None,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1176,6 +1296,8 @@ def encode_with_quality(
             crop is irreversible).
         progress (callable | None): Callback progress(dict) for live updates
             of the running encode's percentage.
+        cancel (threading.Event | None): Cooperative cancellation (checked
+            between probe steps; the final encode aborts by termination).
 
     Returns:
         QualityResult: The result of the encode.
@@ -1183,6 +1305,7 @@ def encode_with_quality(
     Raises:
         FileNotFoundError: If the input file does not exist.
         RuntimeError: If HandBrakeCLI is not installed.
+        Cancelled: When the cancel event fires.
     """
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
@@ -1218,6 +1341,7 @@ def encode_with_quality(
             encoder_preset,
             remove_bars,
             hdr=hdr,
+            cancel=cancel,
         )
     except SkipEncode as e:
         return QualityResult(
@@ -1244,9 +1368,18 @@ def encode_with_quality(
         crop=crop,
     )
     if progress is None:
-        code, err = _run(command)
+        code, err = _run(command, cancel=cancel)
+        if code == -1:
+            # terminated mid-encode: clean the partial output
+            output_file.unlink(missing_ok=True)
+            raise Cancelled("cancelled during final encode")
     else:
-        encode_result = _encode_with_command(input_file, output_file, command, progress=progress)
+        encode_result = _encode_with_command(
+            input_file, output_file, command, progress=progress, cancel=cancel
+        )
+        if encode_result.cancelled:
+            output_file.unlink(missing_ok=True)
+            raise Cancelled("cancelled during final encode")
         if not encode_result.success:
             return QualityResult(
                 input=input_file,

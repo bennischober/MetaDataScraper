@@ -1,6 +1,8 @@
 <script lang="ts">
   import { fmtGb, fmtSaved, type Movie } from '../api'
   import PosterCard from './PosterCard.svelte'
+  import HintButton from './HintButton.svelte'
+  import HintMark from './HintMark.svelte'
 
   let {
     movies,
@@ -103,7 +105,7 @@
       <button class="vt" class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-pressed={view === 'grid'}>GRID</button>
       <button class="vt" class:active={view === 'table'} onclick={() => (view = 'table')} aria-pressed={view === 'table'}>TABLE</button>
     </div>
-    <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning || pending}>
+    <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning || pending} title="Re-read every source folder: new files are added, changed files re-read, missing files flagged after a grace period">
       {scanning ? 'SCANNING…' : 'RESCAN ALL'}
     </button>
   </div>
@@ -122,10 +124,10 @@
       </span>
       <span class="leader-note mono">→ EST. −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE</span>
       <span class="spacer"></span>
-      <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending}>
+      <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything">
         PLAN SELECTED
       </button>
-      <button class="act primary" onclick={() => onenqueue('encode', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending}>
+      <button class="act primary" onclick={() => onenqueue('encode', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Re-encode the selected titles at their measured best CRF (sources untouched, output to the configured folder)">
         ENCODE SELECTED
       </button>
       <button class="act quiet" onclick={onclear}>CLEAR</button>
@@ -133,9 +135,10 @@
   {:else}
     <div class="bulk-bar idle">
       <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work, or</span>
+      <HintMark text="PLAN predicts what an encode would achieve per movie (CRF, VMAF, size) by probing short samples — nothing is written. ENCODE actually re-encodes: every movie is measured (VMAF) and written to the output folder." />
       <span class="spacer"></span>
-      <button class="act" onclick={() => onenqueue('plan')} disabled={pending}>PLAN ALL</button>
-      <button class="act primary" onclick={() => onenqueue('encode')} disabled={pending}>ENCODE ALL</button>
+      <HintButton label="PLAN ALL" hint="Probe every title and predict the outcome: which movies are worth encoding, at which CRF, saving how much. Nothing is written — a dry measurement pass." onclick={() => onenqueue('plan')} disabled={pending} />
+      <HintButton label="ENCODE ALL" hint="Re-encode every title with the largest CRF that still meets the VMAF target. Sources are never touched; results land in the output folder." variant="primary" onclick={() => onenqueue('encode')} disabled={pending} />
     </div>
   {/if}
 

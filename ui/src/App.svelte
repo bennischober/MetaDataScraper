@@ -110,7 +110,7 @@
 
   // pending: global click-guard + per-kind queue guard (no job spam: a kind
   // already queued/running disables its enqueue buttons)
-  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'dedupe' | null>(null)
+  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'dedupe' | 'cancel' | null>(null)
   const kindQueued = $derived(
     (kind: 'scan' | 'plan' | 'encode' | 'dedupe') =>
       history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
@@ -161,9 +161,16 @@
   }
 
   async function cancelJob(id: number | null) {
-    if (id === null) return
-    await api.cancel(id)
-    await refresh()
+    if (id === null || pendingKind !== null) return
+    pendingKind = 'cancel'
+    try {
+      await api.cancel(id)
+      await refresh()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    } finally {
+      pendingKind = null
+    }
   }
 
   async function toggleWatcher() {
@@ -317,6 +324,8 @@
           ondismiss={dismissFailed}
           ongoto={(p) => (page = p)}
           onopenmovie={openDetail}
+          oncancel={cancelJob}
+          cancelling={pendingKind === 'cancel'}
         />
       </div>
       <div class="pages" class:hidden={page !== 'library'}>
