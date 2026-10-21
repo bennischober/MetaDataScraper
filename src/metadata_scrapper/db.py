@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -43,11 +43,41 @@ CREATE TABLE IF NOT EXISTS encodes (
     input_size INTEGER NOT NULL,
     output_size INTEGER NOT NULL,
     saved_percent REAL NOT NULL,
+    chosen_crf INTEGER,
+    achieved_vmaf REAL,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
 """
+
+# migration v1 -> v2: record quality-mode decisions (chosen CRF, measured
+# VMAF) and skipped movies so subsequent runs do not re-probe them
+MIGRATIONS = {
+    2: [
+        "ALTER TABLE encodes ADD COLUMN chosen_crf INTEGER",
+        "ALTER TABLE encodes ADD COLUMN achieved_vmaf REAL",
+    ],
+}
+
+
+def _migrate(connection: sqlite3.Connection):
+    """Applies pending schema migrations and records the new version.
+
+    Args:
+        connection: The database connection.
+    """
+    stored = connection.execute("SELECT version FROM schema_version").fetchone()
+    if stored is None:
+        return
+    current = int(stored[0])
+    while current < SCHEMA_VERSION:
+        current += 1
+        for statement in MIGRATIONS.get(current, []):
+            connection.execute(statement)
+        connection.execute("DELETE FROM schema_version")
+        connection.execute("INSERT INTO schema_version (version) VALUES (?)", (current,))
+    connection.commit()
 
 
 def compute_hash(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -136,6 +166,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     # ensure the version row exists
     if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
         connection.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+    _migrate(connection)
     connection.commit()
     return connection
 
@@ -250,30 +281,82 @@ def add_encode(
     input_size: int,
     output_size: int,
     saved_percent: float,
+    chosen_crf: int | None = None,
+    achieved_vmaf: float | None = None,
 ) -> int:
     """Records an encode in the history table.
 
     Args:
         connection (sqlite3.Connection): The database connection.
         file_id (int): The file id of the input movie.
-        preset (str): The HandBrake preset used.
-        encoder (str): The video encoder used.
+        preset (str): The HandBrake preset used (or the quality target label).
+        encoder (str): The encoder used.
         input_size (int): Input size in bytes.
         output_size (int): Output size in bytes.
         saved_percent (float): Saved percentage.
+        chosen_crf (int | None): The CRF chosen by the quality search, if any.
+        achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
 
     Returns:
         int: The encode id.
     """
     cursor = connection.execute(
         """
-        INSERT INTO encodes (file_id, preset, encoder, input_size, output_size, saved_percent)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO encodes (
+            file_id, preset, encoder, input_size, output_size, saved_percent,
+            chosen_crf, achieved_vmaf
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (file_id, preset, encoder, input_size, output_size, saved_percent),
+        (
+            file_id,
+            preset,
+            encoder,
+            input_size,
+            output_size,
+            saved_percent,
+            chosen_crf,
+            achieved_vmaf,
+        ),
     )
     connection.commit()
     return int(cursor.lastrowid or 0)
+
+
+def add_skip(
+    connection: sqlite3.Connection,
+    file_id: int,
+    reason: str,
+    chosen_crf: int | None = None,
+    achieved_vmaf: float | None = None,
+) -> int:
+    """Records a skipped movie in the encode history.
+
+    A skip is stored as an encode row with zero sizes and a 'skipped (...)'
+    preset label so subsequent runs can recognize it (and e.g. not re-probe
+    a movie known not to shrink).
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        file_id (int): The file id of the input movie.
+        reason (str): Why the movie was skipped, e.g. 'no size gain'.
+        chosen_crf (int | None): The CRF used in the probe, if any.
+        achieved_vmaf (float | None): The VMAF measured in the probe, if any.
+
+    Returns:
+        int: The encode row id.
+    """
+    return add_encode(
+        connection,
+        file_id,
+        f"skipped ({reason})",
+        "none",
+        0,
+        0,
+        0.0,
+        chosen_crf=chosen_crf,
+        achieved_vmaf=achieved_vmaf,
+    )
 
 
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:

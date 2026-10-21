@@ -658,7 +658,13 @@ def _record_encodes(
                         config.handbrake_encoder,
                         result.input_size,
                         result.output_size,
+                        chosen_crf=result.chosen_crf,
+                        achieved_vmaf=result.achieved_vmaf,
                     )
+                elif result.error and "skipped" in result.error:
+                    # size-probe skip => record it so future runs do not re-probe
+                    console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
+                    _save_skip(connection, movie, "no size gain")
                 else:
                     log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except (RuntimeError, FileNotFoundError) as e:
@@ -695,7 +701,14 @@ def _record_encodes(
 
 
 def _save_encode(
-    connection, movie: Path, preset: str, encoder: str, input_size: int, output_size: int
+    connection,
+    movie: Path,
+    preset: str,
+    encoder: str,
+    input_size: int,
+    output_size: int,
+    chosen_crf: int | None = None,
+    achieved_vmaf: float | None = None,
 ):
     """Stores an encode record for the given movie in the database.
 
@@ -706,23 +719,57 @@ def _save_encode(
         encoder (str): The encoder used.
         input_size (int): Input size in bytes.
         output_size (int): Output size in bytes.
+        chosen_crf (int | None): The CRF chosen by the quality search, if any.
+        achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
+    """
+    file_id = _ensure_file_row(connection, movie)
+    saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
+    db.add_encode(
+        connection,
+        file_id,
+        preset,
+        encoder,
+        input_size,
+        output_size,
+        saved_percent,
+        chosen_crf=chosen_crf,
+        achieved_vmaf=achieved_vmaf,
+    )
+
+
+def _save_skip(connection, movie: Path, reason: str):
+    """Stores a skip record for the given movie in the database.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The input movie file.
+        reason (str): Why the movie was skipped.
+    """
+    file_id = _ensure_file_row(connection, movie)
+    db.add_skip(connection, file_id, reason)
+
+
+def _ensure_file_row(connection, movie: Path) -> int:
+    """Returns the file id for the movie, storing a minimal row if needed.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The movie file.
+
+    Returns:
+        int: The file id.
     """
     file_row = db.get_file_by_path(connection, movie)
-    if file_row is None:
-        # file not in the scan cache => store it first
-        record = db.MovieRecord(
-            path=movie,
-            mtime=movie.stat().st_mtime,
-            size=movie.stat().st_size,
-            name=movie.stem,
-            category=movie.parent.name,
-        )
-        file_id = db.upsert_file(connection, record)
-    else:
-        file_id = file_row["id"]
-
-    saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
-    db.add_encode(connection, file_id, preset, encoder, input_size, output_size, saved_percent)
+    if file_row is not None:
+        return int(file_row["id"])
+    record = db.MovieRecord(
+        path=movie,
+        mtime=movie.stat().st_mtime,
+        size=movie.stat().st_size,
+        name=movie.stem,
+        category=movie.parent.name,
+    )
+    return db.upsert_file(connection, record)
 
 
 def _totals(movies_by_category: dict) -> tuple:
