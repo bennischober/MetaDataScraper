@@ -10,9 +10,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from metadata_scrapper import db
-from metadata_scrapper.db import MovieRecord
-from metadata_scrapper.helpers import (
+from shrinkray import db
+from shrinkray.db import MovieRecord
+from shrinkray.helpers import (
     SIZE_UNIT,
     check_black_bars,
     convert_unit,
@@ -20,8 +20,8 @@ from metadata_scrapper.helpers import (
     get_other_codecs,
     timestr_to_int,
 )
-from metadata_scrapper.logger import log, log_warning
-from metadata_scrapper.media import get_data
+from shrinkray.logger import log, log_warning
+from shrinkray.media import get_data
 
 UNCATEGORIZED = "Uncategorized"
 

@@ -4,7 +4,7 @@ import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from metadata_scrapper.config import Conf, load_config
+from shrinkray.config import Conf, load_config
 
 FFPROBE_TIMEOUT = 60  # seconds
 

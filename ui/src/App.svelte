@@ -297,7 +297,7 @@
   <!-- ══ title block ══ -->
   <header class="title-block">
     <div class="tb-main">
-      <h1>METADATASCRAPER</h1>
+      <h1>SHRINKRAY</h1>
       <p class="legend">LIBRARY SURVEY · 219 TITLES · VMAF TARGET {targetVmaf}</p>
     </div>
     <div class="tb-cells">
@@ -468,7 +468,7 @@
   {/if}
 
   <footer class="colophon legend">
-    METADATASCRAPPER · SOURCES NEVER MODIFIED IN PLACE · ENCODES VERIFIED AGAINST TARGET BEFORE A PLAN ENTRY CLOSES
+    SHRINKRAY · SOURCES NEVER MODIFIED IN PLACE · ENCODES VERIFIED AGAINST TARGET BEFORE A PLAN ENTRY CLOSES
   </footer>
 </div>
 

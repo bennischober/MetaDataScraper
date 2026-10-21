@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from metadata_scrapper.logger import log_warning
+from shrinkray.logger import log_warning
 
 # fallback values if the config file is missing or a value is not set
 DEFAULT_EXTENSIONS = [".mkv"]

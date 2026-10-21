@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-Lightweight framework (Preact/Svelte/Vite/Astro) served by the resident app; chosen by the user over plain HTML because the dashboard will grow interactive (live task status, actions). No build-step-heavy SPA framework. Backend: Python (FastAPI or stdlib HTTP) inside the `metadata-scrapper app` command.
+Lightweight framework (Preact/Svelte/Vite/Astro) served by the resident app; chosen by the user over plain HTML because the dashboard will grow interactive (live task status, actions). No build-step-heavy SPA framework. Backend: Python (FastAPI or stdlib HTTP) inside the `shrinkray app` command.
 
 ## Users
 
@@ -16,7 +16,7 @@ The primary and only user is Benjamin — a self-hosting enthusiast managing a p
 
 ## Product Purpose
 
-MetaDataScraper catalogs a personal movie library and shrinks it with measured, quality-preserving re-encoding. It answers three questions: what do I have (scan), what would optimizing achieve (plan), and how do I do it safely (encode with VMAF-verified quality targets, guardrails that skip hopeless movies, and full audit history in sqlite). Success = smaller library at perceptually transparent quality, with every decision recorded and reversible-by-rerun.
+ShrinkRay catalogs a personal movie library and shrinks it with measured, quality-preserving re-encoding. It answers three questions: what do I have (scan), what would optimizing achieve (plan), and how do I do it safely (encode with VMAF-verified quality targets, guardrails that skip hopeless movies, and full audit history in sqlite). Success = smaller library at perceptually transparent quality, with every decision recorded and reversible-by-rerun.
 
 ## Positioning
 
@@ -41,13 +41,13 @@ The storage-efficiency layer of a personal media stack: per-title, *measured* co
 
 ## Brand Commitments
 
-Name: MetaDataScraper (historical, kept). Voice: precise, honest about limitations, no marketing fluff; documentation tone like the current README (professional, no emoji decoration per user preference).
+Name: ShrinkRay (historical, kept). Voice: precise, honest about limitations, no marketing fluff; documentation tone like the current README (professional, no emoji decoration per user preference).
 
 ## Evidence on Hand
 
 - Measured results on real content: Django Unchained 5.55→1.98 GB (64.3%) at VMAF 95.25; Bloodshot 0.42→0.07 GB (82.7%); parallel run 3 movies/34.3 min
 - Working HTML report (report.html, dark theme) and full test suite (49 tests) as implementation evidence
-- Existing probe/plan/encode engine modules: src/metadata_scrapper/{quality,encode,watch,db}.py
+- Existing probe/plan/encode engine modules: src/shrinkray/{quality,encode,watch,db}.py
 
 ## Product Principles
 

@@ -351,7 +351,7 @@ def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list
     Returns:
         list[Path]: The movie files.
     """
-    from metadata_scrapper.scanner import process_movie, scan_movies
+    from shrinkray.scanner import process_movie, scan_movies
 
     movies: list = []
     for path in payload_paths(payload):
@@ -381,8 +381,8 @@ def execute_scan(
     Returns:
         dict: The scan summary.
     """
-    from metadata_scrapper.config import load_config
-    from metadata_scrapper.scanner import scan_movies
+    from shrinkray.config import load_config
+    from shrinkray.scanner import scan_movies
 
     payload = job.payload
     if cancel.is_set():
@@ -411,7 +411,7 @@ def execute_scan(
     for path in payload_paths(payload):
         if path.is_file():
             # single movie file (per-movie action)
-            from metadata_scrapper.scanner import process_movie
+            from shrinkray.scanner import process_movie
 
             data, error = process_movie(path, path.parent, config)
             if data is not None:
@@ -458,8 +458,8 @@ def execute_plan(
     Returns:
         dict: The per-movie plan summary.
     """
-    from metadata_scrapper.config import load_config
-    from metadata_scrapper.quality import plan_quality
+    from shrinkray.config import load_config
+    from shrinkray.quality import plan_quality
 
     payload = job.payload
     config = load_config()
@@ -520,11 +520,11 @@ def execute_encode(
     Returns:
         dict: The per-movie outcome summary.
     """
-    from metadata_scrapper.config import load_config
-    from metadata_scrapper.encode import encode_movies
-    from metadata_scrapper.quality import encode_with_quality
-    from metadata_scrapper.scanner import scan_movies
-    from metadata_scrapper.service import (
+    from shrinkray.config import load_config
+    from shrinkray.encode import encode_movies
+    from shrinkray.quality import encode_with_quality
+    from shrinkray.scanner import scan_movies
+    from shrinkray.service import (
         finished_movies,
         record_fixed_results,
         record_quality_results,

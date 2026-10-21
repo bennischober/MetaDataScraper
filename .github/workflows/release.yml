@@ -36,7 +36,7 @@ jobs:
         run: |
           # use the git tag annotation as release notes, fallback to generic text
           {
-            echo "## MetaDataScraper ${{ github.ref_name }}"
+            echo "## ShrinkRay ${{ github.ref_name }}"
             echo ""
             echo "See [README](https://github.com/${{ github.repository }}#readme) for install and usage instructions."
           } > RELEASE_NOTES.md

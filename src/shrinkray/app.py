@@ -4,7 +4,7 @@ The app owns long-running work (the job queue and the watch loop); the CLI
 stays fully functional without it. Consumers (web UI, curl, scripts) talk
 to the local HTTP API — same engine, same database, same guardrails.
 
-Run with `metadata-scrapper app`.
+Run with `shrinkray app`.
 """
 
 import json
@@ -17,14 +17,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from metadata_scrapper import db
-from metadata_scrapper.dedupe import find_duplicates
-from metadata_scrapper.jobs import Job, JobKind, JobQueue, JobWorker
-from metadata_scrapper.logger import log, log_error
-from metadata_scrapper.report import generate_report
-from metadata_scrapper.watch import watch
+from shrinkray import db
+from shrinkray.dedupe import find_duplicates
+from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker
+from shrinkray.logger import log, log_error
+from shrinkray.report import generate_report
+from shrinkray.watch import watch
 
-app = FastAPI(title="MetaDataScraper", version="0.3.0")
+app = FastAPI(title="ShrinkRay", version="0.3.0")
 
 
 @app.middleware("http")
@@ -318,7 +318,7 @@ def get_config():
     config_path = _config_path(s)
     if not config_path.is_file():
         # return the effective defaults so the UI can edit them
-        from metadata_scrapper.config import Conf
+        from shrinkray.config import Conf
 
         conf = Conf()
         return _conf_to_dict(conf)
@@ -395,7 +395,7 @@ def update_config(data: dict):
     try:
         config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         # validate: reset the cached config and load it fresh
-        import metadata_scrapper.config as config_module
+        import shrinkray.config as config_module
 
         config_module._config = None
         config_module.load_config(s.db_file.parent)
@@ -701,7 +701,7 @@ def run_app(
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
     state.worker.start()
-    log(f"MetaDataScraper app listening on http://{host}:{port}")
+    log(f"ShrinkRay app listening on http://{host}:{port}")
 
     import uvicorn
 

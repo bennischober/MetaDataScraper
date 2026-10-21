@@ -7,8 +7,8 @@ presentation logic — the CLI prints, this module decides and records.
 
 from dataclasses import dataclass
 
-from metadata_scrapper import db
-from metadata_scrapper.db import MovieRecord
+from shrinkray import db
+from shrinkray.db import MovieRecord
 
 
 @dataclass

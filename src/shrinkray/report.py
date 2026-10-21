@@ -218,15 +218,15 @@ def generate_report(db_path: Path, output: Path):
     html = (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>MetaDataScraper Report</title>"
+        "<title>ShrinkRay Report</title>"
         f'<style>{_CSS}</style></head><body><div class="wrap">'
-        "<h1>MetaDataScraper Report</h1>"
+        "<h1>ShrinkRay Report</h1>"
         f'<div class="sub">Generated {generated} from {_esc(db_path.name)}</div>'
         f"{_summary_cards(enriched)}"
         f"{_category_table(enriched)}"
         f"{_movie_table(enriched)}"
-        f"<footer>MetaDataScraper · quality-measured re-encoding · "
-        f'<a style="color:var(--blue)" href="https://github.com/bennischober/MetaDataScraper">GitHub</a></footer>'
+        f"<footer>ShrinkRay · quality-measured re-encoding · "
+        f'<a style="color:var(--blue)" href="https://github.com/bennischober/ShrinkRay">GitHub</a></footer>'
         "</div></body></html>"
     )
     output.write_text(html, encoding="utf-8")

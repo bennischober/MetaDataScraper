@@ -8,7 +8,7 @@ from pathlib import Path
 
 from rich.progress import Progress
 
-from metadata_scrapper.logger import log, log_error
+from shrinkray.logger import log, log_error
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
 

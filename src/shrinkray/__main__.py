@@ -12,13 +12,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from metadata_scrapper import db
-from metadata_scrapper.config import load_config
-from metadata_scrapper.helpers import calc_time, generate_string, sanitize_number
-from metadata_scrapper.logger import log, log_error
-from metadata_scrapper.report import generate_report
-from metadata_scrapper.scanner import find_movies, get_category, get_name, scan_movies
-from metadata_scrapper.service import (
+from shrinkray import db
+from shrinkray.config import load_config
+from shrinkray.helpers import calc_time, generate_string, sanitize_number
+from shrinkray.logger import log, log_error
+from shrinkray.report import generate_report
+from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
+from shrinkray.service import (
     finished_movies,
     record_fixed_results,
     record_quality_results,
@@ -217,7 +217,7 @@ def app_command(
     The app owns long-running work; terminal and web UI are just consumers
     of the same engine and database. Stop with Ctrl+C.
     """
-    from metadata_scrapper.app import run_app
+    from shrinkray.app import run_app
 
     # empty list = run_app computes its default (all drive roots); only an
     # explicit --root narrows the allowlist down
@@ -414,8 +414,8 @@ def _record_encodes(
         remove_bars (bool): Crop stable baked-in black bars (quality mode).
         workers (int): Number of concurrent encodes (fixed mode).
     """
-    from metadata_scrapper.encode import encode_movies
-    from metadata_scrapper.quality import encode_with_quality
+    from shrinkray.encode import encode_movies
+    from shrinkray.quality import encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
     # => batch resume: an interrupted run skips everything it finished before
@@ -511,7 +511,7 @@ def plan(
     full probing pipeline, so it takes roughly as long as the probing part
     of a real encode run.
     """
-    from metadata_scrapper.quality import plan_quality
+    from shrinkray.quality import plan_quality
 
     config = load_config()
     connection = db.connect(db_file)
@@ -627,7 +627,7 @@ def watch_mode(
     library only changes when you swap the files yourself. Stop with Ctrl+C;
     the running encode finishes first.
     """
-    from metadata_scrapper.watch import watch
+    from shrinkray.watch import watch
 
     try:
         watch(

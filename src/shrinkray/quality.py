@@ -25,7 +25,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from metadata_scrapper.encode import (
+from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
     _encode_with_command,
@@ -33,7 +33,7 @@ from metadata_scrapper.encode import (
     find_handbrake,
     probe_duration_seconds,
 )
-from metadata_scrapper.logger import log
+from shrinkray.logger import log
 
 FFMPEG_BINARY = "ffmpeg"
 
@@ -196,7 +196,7 @@ def detect_crop_rect(
         tuple | None: The (top, bottom, left, right) bars to crop, or None
             if no stable bars were detected.
     """
-    from metadata_scrapper.encode import probe_duration_seconds
+    from shrinkray.encode import probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     if duration is None:
@@ -619,8 +619,8 @@ def is_hdr_file(movie: Path) -> bool:
     Returns:
         bool: True if the video stream is detected as HDR.
     """
-    from metadata_scrapper.config import load_config
-    from metadata_scrapper.media import get_data
+    from shrinkray.config import load_config
+    from shrinkray.media import get_data
 
     try:
         data = get_data(movie, load_config())
@@ -667,7 +667,7 @@ def _source_snapshot(movie: Path) -> dict:
     Returns:
         dict: width/height/codec/duration (None where unknown).
     """
-    from metadata_scrapper.encode import probe_duration_seconds
+    from shrinkray.encode import probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     width = height = None

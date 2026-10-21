@@ -1,6 +1,6 @@
 <div align="center">
 
-# MetaDataScraper
+# ShrinkRay
 
 **Scan your movie library — then shrink it without losing quality.**
 
@@ -8,10 +8,10 @@ A Python CLI that catalogs video metadata and re-encodes your library with
 Netflix-style, quality-measured encoding: smallest files that are still
 perceptually transparent.
 
-[![CI](https://github.com/bennischober/MetaDataScraper/actions/workflows/ci.yml/badge.svg)](https://github.com/bennischober/MetaDataScraper/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/bennischober/MetaDataScraper/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/bennischober/MetaDataScraper/actions/workflows/codeql-analysis.yml)
+[![CI](https://github.com/bennischober/ShrinkRay/actions/workflows/ci.yml/badge.svg)](https://github.com/bennischober/ShrinkRay/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/bennischober/ShrinkRay/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/bennischober/ShrinkRay/actions/workflows/codeql-analysis.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://docs.astral.sh/uv/)
-[![GitHub release](https://img.shields.io/github/v/release/bennischober/MetaDataScraper)](https://github.com/bennischober/MetaDataScraper/releases)
+[![GitHub release](https://img.shields.io/github/v/release/bennischober/ShrinkRay)](https://github.com/bennischober/ShrinkRay/releases)
 
 </div>
 
@@ -54,10 +54,10 @@ wasted.
 
 ```bash
 # scan a movie library
-uvx metadata-scrapper scan 'D:\Movies'
+uvx shrinkray scan 'D:\Movies'
 
 # shrink it (quality-measured, black bars removed)
-uvx metadata-scrapper encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
+uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
 ```
 
 > [!TIP]
@@ -69,7 +69,7 @@ uvx metadata-scrapper encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
 <summary><strong>Option A — run directly from GitHub (no clone)</strong></summary>
 
 ```bash
-uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper scan 'D:\Movies'
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray scan 'D:\Movies'
 ```
 
 </details>
@@ -78,10 +78,10 @@ uvx --from git+https://github.com/bennischober/MetaDataScraper metadata-scrapper
 <summary><strong>Option B — clone the repository</strong></summary>
 
 ```bash
-git clone https://github.com/bennischober/MetaDataScraper.git
-cd MetaDataScraper
+git clone https://github.com/bennischober/ShrinkRay.git
+cd ShrinkRay
 uv sync
-uv run metadata-scrapper scan 'D:\Movies'
+uv run shrinkray scan 'D:\Movies'
 ```
 
 </details>
@@ -114,7 +114,7 @@ uv run metadata-scrapper scan 'D:\Movies'
 ### `scan` — catalog your library
 
 ```bash
-uv run metadata-scrapper scan 'D:\Movies' --csv
+uv run shrinkray scan 'D:\Movies' --csv
 ```
 
 | Option | Effect |
@@ -133,13 +133,13 @@ size) are not probed again — repeated scans are much faster.
 
 ```bash
 # fixed preset (fast, predictable)
-uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded'
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded'
 
 # quality-measured (smaller, transparent, slower)
-uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded' --quality
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 
 # with options
-uv run metadata-scrapper encode 'D:\Movies' 'D:\Encoded' \
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
     --quality --remove-bars --target-vmaf 95 --encoder x265
 ```
 
@@ -160,7 +160,7 @@ and remembered — future runs do not re-probe them.
 ### `plan` — look before you leap
 
 ```bash
-uv run metadata-scrapper plan 'D:\Movies' --remove-bars
+uv run shrinkray plan 'D:\Movies' --remove-bars
 ```
 
 Runs the same probing pipeline as a quality encode (samples, CRF search, bar
@@ -174,7 +174,7 @@ can differ by ±1 between runs.
 ### `report` — the library as one page
 
 ```bash
-uv run metadata-scrapper report --output report.html
+uv run shrinkray report --output report.html
 ```
 
 Generates a self-contained HTML page (dark theme, no external assets) from
@@ -184,7 +184,7 @@ with decision, sizes, CRF and VMAF. Read-only — regenerate any time.
 ### `app` — the resident application
 
 ```bash
-uv run metadata-scrapper app            # http://127.0.0.1:8420
+uv run shrinkray app            # http://127.0.0.1:8420
 ```
 
 Starts the resident application: a local server owning the job queue and the
@@ -208,7 +208,7 @@ recovered on the next start.
 ### `watch` — one-shot folder watcher
 
 ```bash
-uv run metadata-scrapper watch 'D:\Downloads' 'D:\Encoded' --remove-bars
+uv run shrinkray watch 'D:\Downloads' 'D:\Encoded' --remove-bars
 ```
 
 The standalone variant of the app's watch loop: polls the inbox folder for

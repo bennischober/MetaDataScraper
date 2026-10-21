@@ -41,15 +41,15 @@ is sacred — source files are never modified in place.
   edit `uv.lock` by hand. `requirements.txt` does not exist anymore — do
   not create one.
 - **Python 3.15** (`.python-version`), minimum supported 3.10 (`pyproject.toml`).
-- **src layout**: code lives in `src/metadata_scrapper/`, tests in `tests/`.
-  Entry point: `metadata-scrapper` (typer app) or `python -m metadata_scrapper`.
+- **src layout**: code lives in `src/shrinkray/`, tests in `tests/`.
+  Entry point: `shrinkray` (typer app) or `python -m shrinkray`.
 - **Formatting is ruff's job, not yours.** After writing or restructuring
   code, run `uv run ruff format` on the touched files before committing.
   The CI format check is strict.
 - **Type hints are checked by mypy** with `check_untyped_defs` and
   `no_implicit_optional`. New public functions get full type hints and a
   docstring in Google style (see existing modules for the pattern).
-- **Tests live in `tests/test_metadata_scrapper.py`**, plain `unittest`
+- **Tests live in `tests/test_shrinkray.py`**, plain `unittest`
   classes run by pytest. New features need tests; bug fixes need a test
   that would have caught the bug. Tests must not require ffmpeg/HandBrake
   binaries or network access — mock or use `tmp_path` fixtures.

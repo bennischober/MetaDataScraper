@@ -6,9 +6,9 @@ import threading
 import unittest
 from pathlib import Path
 
-from metadata_scrapper import config as config_helper
-from metadata_scrapper import db, encode, helpers, jobs, quality
-from metadata_scrapper import media as read_media
+from shrinkray import config as config_helper
+from shrinkray import db, encode, helpers, jobs, quality
+from shrinkray import media as read_media
 
 
 class TestHelpers(unittest.TestCase):
@@ -493,7 +493,7 @@ class TestDb(unittest.TestCase):
 
 class TestMain(unittest.TestCase):
     def test_get_category(self):
-        from metadata_scrapper.__main__ import get_category
+        from shrinkray.__main__ import get_category
 
         root = Path("D:/Movies")
         # normal: root/Category/MovieFolder/file.mkv
@@ -506,7 +506,7 @@ class TestMain(unittest.TestCase):
         self.assertEqual(get_category(Path("D:/Movies/Action/Sub/movie.mkv"), root), "Action")
 
     def test_get_name(self):
-        from metadata_scrapper.__main__ import get_name
+        from shrinkray.__main__ import get_name
 
         self.assertEqual(get_name(Path("D:/Movies/Action/Movie.mkv")), "Movie")
         # multi-file folder => folder name
@@ -515,7 +515,7 @@ class TestMain(unittest.TestCase):
     def test_find_movies_exclude(self):
         import tempfile
 
-        from metadata_scrapper.__main__ import find_movies
+        from shrinkray.__main__ import find_movies
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -534,7 +534,7 @@ class TestMain(unittest.TestCase):
     def test_scan_movies_parallel_deterministic(self):
         import tempfile
 
-        from metadata_scrapper.__main__ import scan_movies
+        from shrinkray.__main__ import scan_movies
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -657,7 +657,7 @@ class TestReport(unittest.TestCase):
     def test_generate_report(self):
         import tempfile
 
-        from metadata_scrapper.report import generate_report
+        from shrinkray.report import generate_report
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
@@ -679,7 +679,7 @@ class TestReport(unittest.TestCase):
             out = Path(tmp) / "report.html"
             generate_report(db_path, out)
             html = out.read_text(encoding="utf-8")
-            self.assertIn("MetaDataScraper Report", html)
+            self.assertIn("ShrinkRay Report", html)
             self.assertIn("a.mkv", html)
             self.assertIn("95.40", html)
             # the skipped-preset rendering
@@ -690,7 +690,7 @@ class TestWatch(unittest.TestCase):
     def test_find_new_movies(self):
         import tempfile
 
-        from metadata_scrapper.watch import find_new_movies
+        from shrinkray.watch import find_new_movies
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp)
@@ -712,7 +712,7 @@ class TestWatch(unittest.TestCase):
     def test_acquire_and_release_lock(self):
         import tempfile
 
-        from metadata_scrapper.watch import acquire_lock, release_lock
+        from shrinkray.watch import acquire_lock, release_lock
 
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "watch.lock"
@@ -729,7 +729,7 @@ class TestWatch(unittest.TestCase):
     def test_is_stable_min_age(self):
         import tempfile
 
-        from metadata_scrapper.watch import is_stable
+        from shrinkray.watch import is_stable
 
         with tempfile.TemporaryDirectory() as tmp:
             fresh = Path(tmp) / "fresh.mkv"
@@ -741,7 +741,7 @@ class TestWatch(unittest.TestCase):
     def test_decide_too_short(self):
         import tempfile
 
-        from metadata_scrapper.watch import decide
+        from shrinkray.watch import decide
 
         with tempfile.TemporaryDirectory() as tmp:
             # a real, very short movie file (valid media, below the minimum)
@@ -779,7 +779,7 @@ class TestWatch(unittest.TestCase):
 
 class TestAdaptivePoll(unittest.TestCase):
     def test_idle_growth_caps_at_max(self):
-        from metadata_scrapper.watch import next_poll_interval
+        from shrinkray.watch import next_poll_interval
 
         # idle polls double the interval up to 4x the base: 60 -> 120 -> 240 -> 240
         interval = 60.0
@@ -793,14 +793,14 @@ class TestAdaptivePoll(unittest.TestCase):
         self.assertEqual(interval, 240.0)
 
     def test_activity_resets_to_base(self):
-        from metadata_scrapper.watch import next_poll_interval
+        from shrinkray.watch import next_poll_interval
 
         # any new candidate (even skipped/unstable ones) resets to the base
         self.assertEqual(next_poll_interval(240.0, 60.0, True), 60.0)
         self.assertEqual(next_poll_interval(60.0, 60.0, True), 60.0)
 
     def test_non_default_base(self):
-        from metadata_scrapper.watch import next_poll_interval
+        from shrinkray.watch import next_poll_interval
 
         # growth is capped relative to the given base, not the default
         interval = 5.0
@@ -818,7 +818,7 @@ class TestReportCategory(unittest.TestCase):
     def test_generate_report_category_breakdown(self):
         import tempfile
 
-        from metadata_scrapper.report import generate_report
+        from shrinkray.report import generate_report
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "test.db"
@@ -990,33 +990,33 @@ class TestApiPathValidation(unittest.TestCase):
     def setUp(self):
         import tempfile
 
-        from metadata_scrapper import app as app_module
+        from shrinkray import app as app_module
 
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
         app_module.allow_roots([self.root])
 
     def tearDown(self):
-        from metadata_scrapper import app as app_module
+        from shrinkray import app as app_module
 
         app_module._allowed_roots = []
         self.tmp.cleanup()
 
     def test_validate_path_accepts_inside_root(self):
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         path = validate_path(str(self.root / "movies"))
         self.assertEqual(path, self.root / "movies")
 
     def test_validate_path_accepts_root_itself(self):
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         self.assertEqual(validate_path(str(self.root)), self.root)
 
     def test_validate_path_rejects_outside_root(self):
         from fastapi import HTTPException
 
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         with self.assertRaises(HTTPException) as ctx:
             validate_path("C:/Windows/System32")
@@ -1025,7 +1025,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_escape_via_dotdot(self):
         from fastapi import HTTPException
 
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         # .. inside the root resolves outside => must be rejected
         with self.assertRaises(HTTPException) as ctx:
@@ -1035,7 +1035,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_empty(self):
         from fastapi import HTTPException
 
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         with self.assertRaises(HTTPException) as ctx:
             validate_path("   ")
@@ -1044,7 +1044,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_relative(self):
         from fastapi import HTTPException
 
-        from metadata_scrapper.app import validate_path
+        from shrinkray.app import validate_path
 
         # relative paths resolve against the CWD, which is not an allowed root
         with self.assertRaises(HTTPException) as ctx:
@@ -1054,7 +1054,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_accepts_root_itself_and_children(self):
         import tempfile
 
-        from metadata_scrapper.app import allow_roots, validate_path
+        from shrinkray.app import allow_roots, validate_path
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1074,9 +1074,9 @@ class TestApiPathValidation(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        import metadata_scrapper.app as app_module
-        from metadata_scrapper.app import AppState
-        from metadata_scrapper.app import app as fast_app
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
 
         with tempfile.TemporaryDirectory() as tmp:
             app_module.state = AppState(Path(tmp) / "test.db")
@@ -1118,7 +1118,7 @@ class TestDedupe(unittest.TestCase):
         self.connection.commit()
 
     def test_normalize_name(self):
-        from metadata_scrapper.dedupe import normalize_name
+        from shrinkray.dedupe import normalize_name
 
         self.assertEqual(
             normalize_name("The.Mandalorian.S01E02.1080p.WEB-DL.DDP5.1"),
@@ -1133,7 +1133,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(normalize_name("1080p x264"), "")
 
     def test_identical_by_hash(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         self._add("D:/a/movie.mkv", "movie", 1000, 100.0, hash="abc")
         self._add("D:/b/movie.mkv", "movie", 1000, 100.0, hash="abc")
@@ -1144,7 +1144,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(groups[0].wasted_bytes, 1000)
 
     def test_same_title_duration_match(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         self._add("D:/a/The Witcher S01E07.mkv", "The Witcher S01E07", 9800, 3600.0)
         self._add("D:/b/The.Witcher.S01E07.1080p.mkv", "The.Witcher.S01E07.1080p", 2100, 3601.0)
@@ -1155,7 +1155,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(groups[0].files[0].size, 9800)
 
     def test_same_name_different_episode_not_grouped(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         # same normalized name key but durations far apart => different content
         self._add("D:/a/Show S01E01.mkv", "Show S01E01", 5000, 2400.0)
@@ -1164,7 +1164,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(len(groups), 0)
 
     def test_mixed_groups_merged(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         # two files identical by hash AND same title => one merged group
         self._add("D:/a/x.mkv", "Some Movie", 4000, 500.0, hash="h1")
@@ -1175,7 +1175,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(len(groups[0].files), 2)
 
     def test_no_duplicates(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         self._add("D:/a/one.mkv", "One", 1000, 100.0, hash="h1")
         self._add("D:/a/two.mkv", "Two", 2000, 200.0, hash="h2")
@@ -1184,9 +1184,9 @@ class TestDedupe(unittest.TestCase):
     def test_api_duplicates_endpoint(self):
         from fastapi.testclient import TestClient
 
-        import metadata_scrapper.app as app_module
-        from metadata_scrapper.app import AppState
-        from metadata_scrapper.app import app as fast_app
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
 
         self._add("D:/a/dup.mkv", "Dup Movie", 1000, 100.0, hash="zz")
         self._add("D:/b/dup.mkv", "Dup.Movie", 1500, 100.0, hash="zz")
@@ -1195,9 +1195,9 @@ class TestDedupe(unittest.TestCase):
         # reuse the same connection's data: point the app state at this db
         app_module.state.connection.close()
         app_module.state.connection = self.connection
-        app_module.state.queue = __import__(
-            "metadata_scrapper.jobs", fromlist=["JobQueue"]
-        ).JobQueue(self.connection)
+        app_module.state.queue = __import__("shrinkray.jobs", fromlist=["JobQueue"]).JobQueue(
+            self.connection
+        )
         try:
             client = TestClient(fast_app)
             response = client.get("/api/duplicates")
@@ -1212,7 +1212,7 @@ class TestDedupe(unittest.TestCase):
             app_module.state = None
 
     def test_similar_title_fuzzy(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         # a typo variant the exact pass misses
         self._add("D:/a/Django Unchained.mkv", "Django Unchained", 4000, 7200.0)
@@ -1222,7 +1222,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(groups[0].reason, "similar title")
 
     def test_fuzzy_requires_duration_match(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         # similar names, far-apart durations => different content
         self._add("D:/a/Show Episode.mkv", "Show Episode", 4000, 2400.0)
@@ -1230,7 +1230,7 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual(find_duplicates(self.connection), [])
 
     def test_different_episodes_not_fuzzied(self):
-        from metadata_scrapper.dedupe import find_duplicates
+        from shrinkray.dedupe import find_duplicates
 
         # distinct episodes of one show share most tokens but differ in duration
         self._add("D:/a/Show S01E01.mkv", "Show S01E01", 4000, 2400.0)

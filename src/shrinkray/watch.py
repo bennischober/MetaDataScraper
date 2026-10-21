@@ -11,15 +11,15 @@ import tempfile
 import time
 from pathlib import Path
 
-from metadata_scrapper.encode import (
+from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
     encode_movies,
     find_handbrake,
     probe_duration_seconds,
 )
-from metadata_scrapper.logger import log, log_error
-from metadata_scrapper.quality import (
+from shrinkray.logger import log, log_error
+from shrinkray.quality import (
     DEFAULT_CRF_RANGE,
     DEFAULT_TARGET_VMAF,
     SkipEncode,
@@ -219,7 +219,7 @@ def watch(
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
-    lock_file = Path(tempfile.gettempdir()) / "metadata_scrapper_watch.lock"
+    lock_file = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
     sleep_interval = poll_interval
 
     if not acquire_lock(lock_file):
