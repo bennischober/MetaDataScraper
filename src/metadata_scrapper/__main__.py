@@ -205,6 +205,12 @@ def app_command(
     ),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
     port: int = typer.Option(8420, "--port", min=1, max=65535, help="Bind port."),
+    root: list[Path] = typer.Option(
+        [],
+        "--root",
+        help="Folder the API may operate on (repeatable). Defaults to the "
+        "database's parent folder.",
+    ),
 ):
     """Runs the resident app: job queue, watch loop and the local HTTP API.
 
@@ -213,7 +219,8 @@ def app_command(
     """
     from metadata_scrapper.app import run_app
 
-    run_app(db_file, host=host, port=port)
+    roots = [Path(r) for r in root] or [db_file.parent]
+    run_app(db_file, host=host, port=port, allowed_roots=roots)
 
 
 def _totals(movies_by_category: dict) -> tuple:

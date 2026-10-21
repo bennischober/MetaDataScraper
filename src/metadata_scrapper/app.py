@@ -22,6 +22,55 @@ from metadata_scrapper.watch import watch
 
 app = FastAPI(title="MetaDataScraper", version="0.3.0")
 
+# paths the API may operate on. Requests can only address folders inside
+# these roots (plus the roots themselves) => the API cannot be tricked into
+# scanning, writing or exposing arbitrary filesystem locations. Set via
+# allow_roots() at startup, derived from the database location by default.
+_allowed_roots: list[Path] = []
+
+
+def allow_roots(roots: list[Path]):
+    """Sets the folder roots the API may operate on.
+
+    Args:
+        roots (list[Path]): The allowed root folders (absolute paths).
+    """
+    global _allowed_roots
+    _allowed_roots = [root.resolve() for root in roots]
+
+
+def validate_path(path_str: str, what: str = "path") -> Path:
+    """Validates a user-provided path against the allowed roots.
+
+    A path is allowed when it is inside one of the allowed roots (or equal
+    to one). Relative paths and paths that escape a root via '..' are
+    rejected.
+
+    Args:
+        path_str (str): The user-provided path.
+        what (str): Name of the parameter (for the error message).
+
+    Returns:
+        Path: The resolved absolute path.
+
+    Raises:
+        HTTPException: If the path is not inside an allowed root.
+    """
+    if not path_str or not path_str.strip():
+        raise HTTPException(status_code=400, detail=f"{what} is empty")
+    try:
+        path = Path(path_str).resolve()
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"invalid {what}: {e}") from e
+
+    for root in _allowed_roots:
+        if path == root or root in path.parents:
+            return path
+    raise HTTPException(
+        status_code=403,
+        detail=f"{what} is outside the allowed roots: {_allowed_roots}",
+    )
+
 
 class JobRequest(BaseModel):
     """Request body for creating a job.
@@ -151,7 +200,7 @@ def create_job(request: JobRequest):
         dict: The created job.
     """
     s = get_state()
-    path = Path(request.path)
+    path = validate_path(request.path, "path")
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
 
@@ -159,7 +208,7 @@ def create_job(request: JobRequest):
     if request.kind == JobKind.ENCODE:
         if not request.output_dir:
             raise HTTPException(status_code=400, detail="encode requires output_dir")
-        payload["output_dir"] = request.output_dir
+        payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))
         payload["quality"] = request.quality
         payload["target_vmaf"] = request.target_vmaf
         payload["remove_bars"] = request.remove_bars
@@ -279,12 +328,14 @@ def watch_control(action: str, inbox: str | None = None, output_dir: str | None 
             return {"watcher": "already running"}
         if not inbox or not output_dir:
             raise HTTPException(status_code=400, detail="start requires inbox and output_dir")
+        inbox_path = validate_path(inbox, "inbox")
+        output_path = validate_path(output_dir, "output_dir")
 
         def run_watch():
             try:
                 watch(
-                    Path(inbox),
-                    Path(output_dir),
+                    inbox_path,
+                    output_path,
                     once=False,
                     poll_interval=60.0,
                 )
@@ -299,15 +350,23 @@ def watch_control(action: str, inbox: str | None = None, output_dir: str | None 
     raise HTTPException(status_code=400, detail="action must be 'start' or 'stop'")
 
 
-def run_app(db_file: Path, host: str = "127.0.0.1", port: int = 8420):
+def run_app(
+    db_file: Path,
+    host: str = "127.0.0.1",
+    port: int = 8420,
+    allowed_roots: list[Path] | None = None,
+):
     """Boots the resident app (blocking; the server owns the process).
 
     Args:
         db_file (Path): The sqlite database file.
         host (str): The bind address (localhost by default).
         port (int): The bind port.
+        allowed_roots (list[Path] | None): Folders the API may operate on.
+            Defaults to the database's parent folder.
     """
     global state
+    allow_roots(allowed_roots or [db_file.parent])
     state = AppState(db_file)
     state.worker.start()
     log(f"MetaDataScraper app listening on http://{host}:{port}")

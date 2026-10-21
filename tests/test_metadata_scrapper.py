@@ -984,5 +984,73 @@ class TestJobs(unittest.TestCase):
         self.assertTrue(callable(jobs.JobQueue.wait_for_work))
 
 
+class TestApiPathValidation(unittest.TestCase):
+    """Tests for the path allowlist of the resident app API."""
+
+    def setUp(self):
+        import tempfile
+
+        from metadata_scrapper import app as app_module
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        app_module.allow_roots([self.root])
+
+    def tearDown(self):
+        from metadata_scrapper import app as app_module
+
+        app_module._allowed_roots = []
+        self.tmp.cleanup()
+
+    def test_validate_path_accepts_inside_root(self):
+        from metadata_scrapper.app import validate_path
+
+        path = validate_path(str(self.root / "movies"))
+        self.assertEqual(path, self.root / "movies")
+
+    def test_validate_path_accepts_root_itself(self):
+        from metadata_scrapper.app import validate_path
+
+        self.assertEqual(validate_path(str(self.root)), self.root)
+
+    def test_validate_path_rejects_outside_root(self):
+        from fastapi import HTTPException
+
+        from metadata_scrapper.app import validate_path
+
+        with self.assertRaises(HTTPException) as ctx:
+            validate_path("C:/Windows/System32")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_validate_path_rejects_escape_via_dotdot(self):
+        from fastapi import HTTPException
+
+        from metadata_scrapper.app import validate_path
+
+        # .. inside the root resolves outside => must be rejected
+        with self.assertRaises(HTTPException) as ctx:
+            validate_path(str(self.root / ".." / "elsewhere"))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_validate_path_rejects_empty(self):
+        from fastapi import HTTPException
+
+        from metadata_scrapper.app import validate_path
+
+        with self.assertRaises(HTTPException) as ctx:
+            validate_path("   ")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_validate_path_rejects_relative(self):
+        from fastapi import HTTPException
+
+        from metadata_scrapper.app import validate_path
+
+        # relative paths resolve against the CWD, which is not an allowed root
+        with self.assertRaises(HTTPException) as ctx:
+            validate_path("movies")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()
