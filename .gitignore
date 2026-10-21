@@ -13,8 +13,13 @@
 !.devcontainer/devcontainer.json
 !.vscode/settings.json
 !src/metadata_scrapper/models/*.json
-# npm lockfile (npm ci requires it; it pins the dependency tree)
+# ui manifests (npm ci requires package.json + lockfile together; the
+# tsconfigs are needed by svelte-check)
+!ui/package.json
 !ui/package-lock.json
+!ui/tsconfig.json
+!ui/tsconfig.app.json
+!ui/tsconfig.node.json
 
 ## uv / python
 .venv/
