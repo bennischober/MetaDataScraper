@@ -1,0 +1,24 @@
+# Local-only state of the .opencode folder.
+#
+# Everything else in this folder is shared with every clone of the repo:
+# commands/ and authored skills define the agent workflow, and committing
+# them keeps OpenCode, Codex, Claude Code and human collaborators on the
+# same working rules.
+#
+# NOT committed:
+# - the provider API key and the config referencing it
+# - installed third-party skills (re-installable, large binaries,
+#   upstream-owned — e.g. the impeccable skill ships a 19 MB exe)
+# - tool working state
+
+# provider credentials / local configuration
+orthos-key
+opencode.json
+opencode.jsonc
+
+# installed (not authored) skills — re-install them instead of committing
+skills/claude-frontend-design/
+skills/impeccable/
+
+# tool working state
+.impeccable/
