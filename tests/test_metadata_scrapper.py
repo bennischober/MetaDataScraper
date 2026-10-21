@@ -2,11 +2,12 @@ import json
 import shutil
 import sqlite3
 import subprocess
+import threading
 import unittest
 from pathlib import Path
 
 from metadata_scrapper import config as config_helper
-from metadata_scrapper import db, encode, helpers, quality
+from metadata_scrapper import db, encode, helpers, jobs, quality
 from metadata_scrapper import media as read_media
 
 
@@ -332,7 +333,7 @@ class TestDb(unittest.TestCase):
 
                 migrated = db.connect(db_path)
                 version = migrated.execute("SELECT version FROM schema_version").fetchone()
-                self.assertEqual(version["version"], 3)
+                self.assertEqual(version["version"], db.SCHEMA_VERSION)
                 paths = {r["path"] for r in migrated.execute("SELECT path FROM files")}
                 # existing file => absolute; deleted file => dropped
                 self.assertEqual(len(paths), 1)
@@ -827,7 +828,17 @@ class TestReportCategory(unittest.TestCase):
                 return connection.execute(
                     "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (f"D:/Movies/{name}", 1.0, 1000, name, category, "01:00:00", "h264", 1920, 1080),
+                    (
+                        f"D:/Movies/{name}",
+                        1.0,
+                        1000,
+                        name,
+                        category,
+                        "01:00:00",
+                        "h264",
+                        1920,
+                        1080,
+                    ),
                 ).lastrowid
 
             gb = 1024**3
@@ -878,6 +889,94 @@ class TestReportCategory(unittest.TestCase):
                 "<td class='num'>1.00 GB</td><td class='num'>—</td>",
                 html,
             )
+
+
+class TestJobs(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+        self.queue = jobs.JobQueue(self.connection)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_enqueue_and_persist(self):
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": "D:/Movies"}))
+        self.assertIsNotNone(job.id)
+        self.assertEqual(job.state, jobs.JobState.QUEUED)
+        # persisted => a fresh queue loads it as pending
+        fresh = jobs.JobQueue(self.connection)
+        self.assertEqual(len(fresh.all_jobs()), 1)
+        loaded = fresh.take_next()
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.kind, jobs.JobKind.SCAN)
+        self.assertEqual(loaded.payload["path"], "D:/Movies")
+
+    def test_take_next_marks_running_and_finish_stores_result(self):
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={}))
+        taken = self.queue.take_next()
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.queue.finish(taken, {"plans": []})
+        reloaded = self.queue.get(taken.id)
+        self.assertEqual(reloaded.state, jobs.JobState.DONE)
+        self.assertEqual(reloaded.result, {"plans": []})
+
+    def test_fail_stores_error(self):
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = self.queue.take_next()
+        self.queue.fail(taken, "boom")
+        reloaded = self.queue.get(taken.id)
+        self.assertEqual(reloaded.state, jobs.JobState.FAILED)
+        self.assertEqual(reloaded.error, "boom")
+
+    def test_cancel_queued_job(self):
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        self.assertTrue(self.queue.cancel(job.id))
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+        # the queue no longer hands it out
+        self.assertIsNone(self.queue.take_next())
+
+    def test_cancel_running_job_signals_event(self):
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        event = threading.Event()
+        self.queue.register_cancel_event(taken.id, event)
+        self.assertTrue(self.queue.cancel(taken.id))
+        self.assertTrue(event.is_set())
+        self.queue.unregister_cancel_event(taken.id)
+
+    def test_worker_executes_job(self):
+        payload = {"path": str(Path(self.tmp.name) / "movies")}
+        (Path(self.tmp.name) / "movies").mkdir()
+        # a junk file: the scan handles it as an error, but the job succeeds
+        (Path(self.tmp.name) / "movies" / "x.mkv").write_bytes(b"junk")
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload=payload))
+        worker = jobs.JobWorker(self.connection, self.queue)
+        worker._execute(job)  # direct execution => deterministic, no thread wait
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.DONE)
+        self.assertEqual(reloaded.result["movies"], 1)
+        self.assertGreaterEqual(len(reloaded.result["errors"]), 1)
+
+    def test_worker_captures_engine_crash_as_failure(self):
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE, payload={"path": "Z:/nowhere", "output_dir": "Z:/out"}
+            )
+        )
+        worker = jobs.JobWorker(self.connection, self.queue)
+        worker._execute(job)
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.FAILED)
+        self.assertIn("FileNotFoundError", reloaded.error)
+
+    def test_next_poll_interval_helper_exists(self):
+        # guard the cross-module dependency used by watch mode
+        self.assertTrue(callable(jobs.JobQueue.wait_for_work))
 
 
 if __name__ == "__main__":

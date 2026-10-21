@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -49,18 +49,51 @@ CREATE TABLE IF NOT EXISTS encodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    state TEXT NOT NULL,
+    result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at TEXT,
+    finished_at TEXT
+);
 """
+
 
 # migration v1 -> v2: record quality-mode decisions (chosen CRF, measured
 # VMAF) and skipped movies so subsequent runs do not re-probe them
 # migration v2 -> v3: stored paths must be absolute (relative paths created
 # phantom duplicates when runs happened from different working directories)
+def job_table_migration(connection: sqlite3.Connection):
+    """Migration v3 -> v4: create the jobs table for the resident app."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            state TEXT NOT NULL,
+            result TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            started_at TEXT,
+            finished_at TEXT
+        );
+        """
+    )
+
+
 MIGRATIONS = {
     2: [
         "ALTER TABLE encodes ADD COLUMN chosen_crf INTEGER",
         "ALTER TABLE encodes ADD COLUMN achieved_vmaf REAL",
     ],
     3: ["__absolute_paths__"],  # handled specially in _migrate (needs Path)
+    4: ["__job_table__"],  # handled specially in _migrate (creates a table)
 }
 
 
@@ -104,6 +137,8 @@ def _migrate(connection: sqlite3.Connection):
                         )
                     else:
                         connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+            elif statement == "__job_table__":
+                job_table_migration(connection)
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")

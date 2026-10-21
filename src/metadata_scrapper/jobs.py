@@ -1,0 +1,538 @@
+"""The job layer of the resident app: queue, states and persistence.
+
+A job is one unit of work the resident app executes (a scan, a plan, an
+encode run, a watch pass). Jobs are persisted in the database so their
+history and state survive restarts; the worker thread executes one job at
+a time (heavy encodes do not profit from queueing more in parallel — the
+work-queue scheduler inside encode_movies parallelizes within a job).
+
+Thread discipline: the worker thread owns the database connection while a
+job runs; the queue itself is protected by a lock and both the API layer
+and the worker talk to it through JobQueue's methods only.
+"""
+
+import json
+import sqlite3
+import threading
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+
+class JobState(str, Enum):
+    """The lifecycle states of a job."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class JobKind(str, Enum):
+    """The kinds of work a job can represent."""
+
+    SCAN = "scan"
+    PLAN = "plan"
+    ENCODE = "encode"
+
+
+@dataclass
+class Job:
+    """One unit of work in the queue.
+
+    Attributes:
+        id (int | None): The database id (None until persisted).
+        kind (JobKind): What kind of work this is.
+        payload (dict): The parameters (paths, options) as JSON-able dict.
+        state (JobState): The current lifecycle state.
+        result (dict | None): The engine summary after completion.
+        error (str | None): The failure message if the job failed.
+    """
+
+    kind: JobKind
+    payload: dict
+    id: int | None = None
+    state: JobState = JobState.QUEUED
+    result: dict | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict:
+        """Returns the job as a JSON-able dictionary (for the API/UI).
+
+        Returns:
+            dict: The job data.
+        """
+        return {
+            "id": self.id,
+            "kind": self.kind.value,
+            "payload": self.payload,
+            "state": self.state.value,
+            "result": self.result,
+            "error": self.error,
+        }
+
+
+def _row_to_job(row: sqlite3.Row) -> Job:
+    """Builds a Job from a database row.
+
+    Args:
+        row (sqlite3.Row): The jobs table row.
+
+    Returns:
+        Job: The reconstructed job.
+    """
+    return Job(
+        id=int(row["id"]),
+        kind=JobKind(row["kind"]),
+        payload=json.loads(row["payload"]),
+        state=JobState(row["state"]),
+        result=json.loads(row["result"]) if row["result"] else None,
+        error=row["error"],
+    )
+
+
+class JobQueue:
+    """A persistent job queue backed by the sqlite database.
+
+    The queue holds pending jobs in memory (fast, lock-protected) and
+    mirrors every state change into the jobs table (durable, visible to
+    the UI and the CLI). The worker thread consumes one job at a time.
+    """
+
+    def __init__(self, connection: sqlite3.Connection):
+        """Initializes the queue on an open database connection.
+
+        Args:
+            connection (sqlite3.Connection): The database connection.
+        """
+        self._connection = connection
+        self._lock = threading.Lock()
+        self._pending: list[Job] = []
+        self._cancel_events: dict[int, threading.Event] = {}
+        self._wake = threading.Event()
+        self._load_pending()
+
+    def _load_pending(self):
+        """Loads queued jobs from the database (after a restart)."""
+        rows = self._connection.execute(
+            "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
+        ).fetchall()
+        with self._lock:
+            self._pending = [_row_to_job(row) for row in rows]
+
+    def enqueue(self, job: Job) -> Job:
+        """Adds a job to the queue and persists it.
+
+        Args:
+            job (Job): The job to add.
+
+        Returns:
+            Job: The job with its database id set.
+        """
+        cursor = self._connection.execute(
+            "INSERT INTO jobs (kind, payload, state) VALUES (?, ?, ?)",
+            (job.kind.value, json.dumps(job.payload), JobState.QUEUED.value),
+        )
+        self._connection.commit()
+        job.id = int(cursor.lastrowid or 0)
+        with self._lock:
+            self._pending.append(job)
+        self._wake.set()
+        return job
+
+    def take_next(self) -> Job | None:
+        """Returns the next queued job and marks it running.
+
+        Returns:
+            Job | None: The job, or None if the queue is empty.
+        """
+        with self._lock:
+            if not self._pending:
+                return None
+            job = self._pending.pop(0)
+            job.state = JobState.RUNNING
+        self._connection.execute(
+            "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
+            (JobState.RUNNING.value, job.id),
+        )
+        self._connection.commit()
+        return job
+
+    def finish(self, job: Job, result: dict):
+        """Marks a job as done and stores its result.
+
+        Args:
+            job (Job): The finished job.
+            result (dict): The engine summary (JSON-able).
+        """
+        job.state = JobState.DONE
+        job.result = result
+        self._connection.execute(
+            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+            (JobState.DONE.value, json.dumps(result), job.id),
+        )
+        self._connection.commit()
+
+    def fail(self, job: Job, error: str):
+        """Marks a job as failed and stores the error.
+
+        Args:
+            job (Job): The failed job.
+            error (str): The failure message.
+        """
+        job.state = JobState.FAILED
+        job.error = error
+        self._connection.execute(
+            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') WHERE id = ?",
+            (JobState.FAILED.value, error, job.id),
+        )
+        self._connection.commit()
+
+    def cancel(self, job_id: int) -> bool:
+        """Requests cancellation of a queued job (or signals a running one).
+
+        Queued jobs are removed from the queue directly; running jobs get
+        their cancel event set (the engine checks it between movies).
+
+        Args:
+            job_id (int): The job to cancel.
+
+        Returns:
+            bool: True if a job was found for the id.
+        """
+        with self._lock:
+            for index, job in enumerate(self._pending):
+                if job.id == job_id:
+                    job.state = JobState.CANCELLED
+                    self._pending.pop(index)
+                    self._connection.execute(
+                        "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
+                        (JobState.CANCELLED.value, job_id),
+                    )
+                    self._connection.commit()
+                    return True
+            event = self._cancel_events.get(job_id)
+        if event is not None:
+            event.set()
+            return True
+        return False
+
+    def register_cancel_event(self, job_id: int, event: threading.Event):
+        """Registers the cancel event of a running job.
+
+        Args:
+            job_id (int): The running job's id.
+            event (threading.Event): The event the engine polls.
+        """
+        with self._lock:
+            self._cancel_events[job_id] = event
+
+    def unregister_cancel_event(self, job_id: int):
+        """Removes the cancel event of a finished job.
+
+        Args:
+            job_id (int): The job's id.
+        """
+        with self._lock:
+            self._cancel_events.pop(job_id, None)
+
+    def cancel_event(self, job_id: int) -> threading.Event | None:
+        """Returns the cancel event of a job, if registered.
+
+        Args:
+            job_id (int): The job's id.
+
+        Returns:
+            threading.Event | None: The event, or None.
+        """
+        with self._lock:
+            return self._cancel_events.get(job_id)
+
+    def wait_for_work(self, timeout: float) -> bool:
+        """Waits until a job might be available (or the timeout passes).
+
+        Args:
+            timeout (float): Maximum seconds to wait.
+
+        Returns:
+            bool: True if woken by a new job (check take_next), False on timeout.
+        """
+        woken = self._wake.wait(timeout)
+        self._wake.clear()
+        return woken
+
+    def all_jobs(self, limit: int = 100) -> list[Job]:
+        """Returns the recent jobs (history), newest first.
+
+        Args:
+            limit (int): Maximum number of jobs to return.
+
+        Returns:
+            list[Job]: The recent jobs.
+        """
+        rows = self._connection.execute(
+            "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def get(self, job_id: int) -> Job | None:
+        """Returns one job by id.
+
+        Args:
+            job_id (int): The job's id.
+
+        Returns:
+            Job | None: The job, or None if not found.
+        """
+        row = self._connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return _row_to_job(row) if row is not None else None
+
+
+def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+    """Executes a scan job.
+
+    Args:
+        job (Job): The job (payload: path, workers, rescan, hash, exclude).
+        connection (sqlite3.Connection): The database connection.
+        cancel (threading.Event): Cooperative cancellation signal.
+
+    Returns:
+        dict: The scan summary.
+    """
+    from metadata_scrapper.config import load_config
+    from metadata_scrapper.scanner import scan_movies
+
+    payload = job.payload
+    if cancel.is_set():
+        return {"cancelled": True}
+
+    config = load_config()
+    by_category, movies, errors = scan_movies(
+        Path(payload["path"]),
+        config,
+        workers=payload.get("workers"),
+        connection=connection,
+        rescan=payload.get("rescan", False),
+        compute_hash=payload.get("hash", False),
+        exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
+    )
+    return {
+        "movies": len(movies),
+        "categories": len(by_category),
+        "errors": errors,
+        "cancelled": cancel.is_set(),
+    }
+
+
+def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+    """Executes a plan job (probing only, no encodes).
+
+    Args:
+        job (Job): The job (payload: path, target_vmaf, remove_bars).
+        connection (sqlite3.Connection): The database connection.
+        cancel (threading.Event): Cooperative cancellation signal.
+
+    Returns:
+        dict: The per-movie plan summary.
+    """
+    from metadata_scrapper.config import load_config
+    from metadata_scrapper.quality import plan_quality
+    from metadata_scrapper.scanner import scan_movies
+
+    payload = job.payload
+    config = load_config()
+    _, movies, _ = scan_movies(Path(payload["path"]), config, connection=connection)
+
+    plans: list[dict] = []
+    for movie in movies:
+        if cancel.is_set():
+            plans.append({"movie": movie.name, "state": "cancelled"})
+            continue
+        try:
+            result = plan_quality(
+                movie,
+                target_vmaf=payload.get("target_vmaf", 95.0),
+                encoder=config.handbrake_encoder,
+                remove_bars=payload.get("remove_bars", False),
+            )
+        except (RuntimeError, FileNotFoundError) as e:
+            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+            continue
+        entry = {
+            "movie": movie.name,
+            "state": "skip" if result.skipped_reason else "encode",
+            "crf": result.chosen_crf,
+            "vmaf": result.achieved_vmaf,
+            "estimated_size": result.output_size,
+            "saved_percent": result.saved_percent,
+        }
+        if result.skipped_reason:
+            entry["reason"] = result.skipped_reason
+        plans.append(entry)
+    return {"plans": plans, "cancelled": cancel.is_set()}
+
+
+def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.Event) -> dict:
+    """Executes an encode job (quality or fixed mode).
+
+    Args:
+        job (Job): The job (payload: path, output_dir, quality, target_vmaf,
+            remove_bars, overwrite, workers).
+        connection (sqlite3.Connection): The database connection.
+        cancel (threading.Event): Cooperative cancellation signal.
+
+    Returns:
+        dict: The per-movie outcome summary.
+    """
+    from metadata_scrapper.config import load_config
+    from metadata_scrapper.encode import encode_movies
+    from metadata_scrapper.quality import encode_with_quality
+    from metadata_scrapper.scanner import scan_movies
+    from metadata_scrapper.service import (
+        finished_movies,
+        record_fixed_results,
+        record_quality_results,
+    )
+
+    payload = job.payload
+    config = load_config()
+    output_dir = Path(payload["output_dir"])
+    _, movies, _ = scan_movies(
+        Path(payload["path"]), config, connection=connection, exclude=output_dir
+    )
+
+    outcomes: list[dict] = []
+    if payload.get("quality", False):
+        encoded_paths: set[str] = (
+            set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
+        )
+        for movie in movies:
+            if cancel.is_set():
+                outcomes.append({"movie": movie.name, "state": "cancelled"})
+                continue
+            if str(movie) in encoded_paths:
+                outcomes.append({"movie": movie.name, "state": "already_encoded"})
+                continue
+            result = encode_with_quality(
+                movie,
+                output_dir / movie.name,
+                target_vmaf=payload.get("target_vmaf", 95.0),
+                encoder=config.handbrake_encoder,
+                remove_bars=payload.get("remove_bars", False),
+            )
+            outcome = record_quality_results(
+                connection, movie, result, config, payload.get("target_vmaf", 95.0)
+            )
+            entry = {
+                "movie": movie.name,
+                "state": (
+                    "encoded" if outcome.encoded else "skipped" if outcome.skipped else "failed"
+                ),
+                "input_size": result.input_size,
+                "output_size": result.output_size,
+                "crf": result.chosen_crf,
+                "vmaf": result.achieved_vmaf,
+                "error": result.error,
+            }
+            outcomes.append(entry)
+    else:
+        results = encode_movies(
+            movies,
+            output_dir,
+            preset=config.handbrake_preset,
+            encoder=config.handbrake_encoder,
+            overwrite=payload.get("overwrite", False),
+            workers=payload.get("workers"),
+        )
+        fixed = record_fixed_results(connection, results, config)
+        outcomes = [
+            {
+                "movie": o.movie,
+                "state": "encoded" if o.encoded else "failed",
+            }
+            for o in fixed
+        ]
+        for r in results:
+            if not r.success:
+                outcomes.append(
+                    {"movie": r.input.name, "state": "failed", "error": r.error or "failed"}
+                )
+    return {"outcomes": outcomes, "cancelled": cancel.is_set()}
+
+
+class JobWorker:
+    """The background worker executing jobs from the queue, one at a time.
+
+    Runs as a daemon thread: the process can always exit without waiting
+    for long encodes (the running job's state stays 'running' in the db and
+    is reported as interrupted on the next start).
+    """
+
+    def __init__(self, connection: sqlite3.Connection, queue: JobQueue):
+        """Initializes the worker.
+
+        Args:
+            connection (sqlite3.Connection): The database connection the
+                worker owns while executing jobs.
+            queue (JobQueue): The queue to consume.
+        """
+        self.connection = connection
+        self.queue = queue
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    def start(self):
+        """Starts the worker thread."""
+        self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
+        self._thread.start()
+
+    def stop(self, join_timeout: float = 5.0):
+        """Signals the worker to stop after the current job and joins it.
+
+        Args:
+            join_timeout (float): Seconds to wait for the thread to finish.
+        """
+        self._stop.set()
+        self.queue._wake.set()
+        if self._thread is not None:
+            self._thread.join(timeout=join_timeout)
+
+    def _run(self):
+        """Consumes jobs until stopped."""
+        while not self._stop.is_set():
+            job = self.queue.take_next()
+            if job is None:
+                self.queue.wait_for_work(timeout=1.0)
+                continue
+            self._execute(job)
+
+    def _execute(self, job: Job):
+        """Runs one job and records its outcome.
+
+        Args:
+            job (Job): The job to execute.
+        """
+        if job.id is None:  # not persisted => programming error
+            self.queue.fail(job, "job has no id")
+            return
+        cancel = threading.Event()
+        self.queue.register_cancel_event(job.id, cancel)
+        try:
+            if job.kind == JobKind.SCAN:
+                result = execute_scan(job, self.connection, cancel)
+            elif job.kind == JobKind.PLAN:
+                result = execute_plan(job, self.connection, cancel)
+            elif job.kind == JobKind.ENCODE:
+                result = execute_encode(job, self.connection, cancel)
+            else:
+                self.queue.fail(job, f"unknown job kind: {job.kind}")
+                return
+            if result.get("cancelled"):
+                self.queue.fail(job, "cancelled")
+            else:
+                self.queue.finish(job, result)
+        except Exception as e:
+            self.queue.fail(job, f"{type(e).__name__}: {e}")
+        finally:
+            self.queue.unregister_cancel_event(job.id)
