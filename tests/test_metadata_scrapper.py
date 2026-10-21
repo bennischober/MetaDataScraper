@@ -776,5 +776,42 @@ class TestWatch(unittest.TestCase):
             self.assertEqual(decide(junk, 95.0, False, "x265"), "encode")
 
 
+class TestAdaptivePoll(unittest.TestCase):
+    def test_idle_growth_caps_at_max(self):
+        from metadata_scrapper.watch import next_poll_interval
+
+        # idle polls double the interval up to 4x the base: 60 -> 120 -> 240 -> 240
+        interval = 60.0
+        interval = next_poll_interval(interval, 60.0, False)
+        self.assertEqual(interval, 120.0)
+        interval = next_poll_interval(interval, 60.0, False)
+        self.assertEqual(interval, 240.0)
+        interval = next_poll_interval(interval, 60.0, False)
+        self.assertEqual(interval, 240.0)
+        interval = next_poll_interval(interval, 60.0, False)
+        self.assertEqual(interval, 240.0)
+
+    def test_activity_resets_to_base(self):
+        from metadata_scrapper.watch import next_poll_interval
+
+        # any new candidate (even skipped/unstable ones) resets to the base
+        self.assertEqual(next_poll_interval(240.0, 60.0, True), 60.0)
+        self.assertEqual(next_poll_interval(60.0, 60.0, True), 60.0)
+
+    def test_non_default_base(self):
+        from metadata_scrapper.watch import next_poll_interval
+
+        # growth is capped relative to the given base, not the default
+        interval = 5.0
+        interval = next_poll_interval(interval, 5.0, False)
+        self.assertEqual(interval, 10.0)
+        interval = next_poll_interval(interval, 5.0, False)
+        self.assertEqual(interval, 20.0)
+        interval = next_poll_interval(interval, 5.0, False)
+        self.assertEqual(interval, 20.0)
+        # reset also works with a non-default base
+        self.assertEqual(next_poll_interval(20.0, 5.0, True), 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

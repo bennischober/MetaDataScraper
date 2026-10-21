@@ -31,6 +31,30 @@ STABLE_CHECK_INTERVAL = 30.0
 # ... and it is at least this old (grace period after the last modification)
 STABLE_MIN_AGE = 60.0
 POLL_INTERVAL = 60.0
+# adaptive polling: while the inbox stays idle the sleep between polls grows
+# up to this multiple of POLL_INTERVAL (any new candidate resets it back)
+MAX_POLL_MULTIPLIER = 4.0
+
+
+def next_poll_interval(current: float, base: float, found_new: bool) -> float:
+    """Computes the next poll interval for the watch loop.
+
+    The interval doubles while the inbox stays idle (fewer checks when
+    nothing happens) and resets to the base interval as soon as a poll
+    finds new candidates (activity suggests more may be coming).
+
+    Args:
+        current (float): The interval that was just used (seconds).
+        base (float): The configured base interval (seconds).
+        found_new (bool): Whether the last poll found new candidate files.
+
+    Returns:
+        float: The next interval in seconds: double the current one, capped
+        at base * MAX_POLL_MULTIPLIER, or the base interval on activity.
+    """
+    if found_new:
+        return base
+    return min(current * 2.0, base * MAX_POLL_MULTIPLIER)
 
 
 def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list[Path]:
@@ -189,12 +213,14 @@ def watch(
         target_vmaf (float): The VMAF quality floor.
         remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
-        poll_interval (float): Seconds between inbox checks.
+        poll_interval (float): Seconds between inbox checks (grows while the
+            inbox stays idle, resets on any new candidate).
         once (bool): Run a single pass and return (used by tests).
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
     lock_file = Path(tempfile.gettempdir()) / "metadata_scrapper_watch.lock"
+    sleep_interval = poll_interval
 
     if not acquire_lock(lock_file):
         log_error("Another watcher seems to be running (lock file exists).")
@@ -225,9 +251,10 @@ def watch(
                 )
                 log(f"Done: '{movie.name}' (source left untouched).")
 
+            sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
             if once:
                 return
-            time.sleep(poll_interval)
+            time.sleep(sleep_interval)
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
