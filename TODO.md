@@ -2,6 +2,20 @@
 
 ## Known limitations / planned work
 
+### Library reconciliation (shipped 2026-10-21)
+- [x] Soft-missing instead of instant prune (schema v6): deleted files are
+      flagged (missing_scans/missing_since) and hard-deleted with their encode
+      history only after 3 consecutive scans that miss them; reappearing files
+      recover automatically; upsert resets the flag; mass flagging (>20% of a
+      scope in one pass) emits an accident warning (renamed folder, detached
+      drive). Missing state is visible in /api/library, the dashboard library
+      (MISSING badge) and the HTML report (pill + summary card)
+- [ ] Manual "remove from library" action (UI button + CLI flag) that deletes
+      a row and its history deliberately, bypassing the grace period
+- [ ] Re-parenting: a moved file (renamed folder) currently re-flags under the
+      new path while the old row ages out; a hash match could reconnect the
+      encode history instead of starting fresh
+
 ### UI (next round)
 - [x] Critique round 2026-10-21 (impeccable dual-agent, 20/40): evidence wall
       shipped — the zone ramp plots every movie's measured VMAF as ticks;
