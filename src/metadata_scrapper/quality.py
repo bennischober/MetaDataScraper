@@ -442,7 +442,11 @@ def build_encode_command(
 
 
 def build_vmaf_command(
-    distorted: Path, reference: Path, threads: int = 0, style: str | None = None
+    distorted: Path,
+    reference: Path,
+    threads: int = 0,
+    style: str | None = None,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
@@ -451,6 +455,10 @@ def build_vmaf_command(
     filtergraph (colons in drive letters break filter parsing). Works with
     both the legacy (<6) and modern libvmaf filter API.
 
+    With a crop, the reference is cropped to the same geometry as the
+    distorted input, otherwise libvmaf fails on the dimension/SAR mismatch
+    (e.g. PAL DVD content with uneven side bars).
+
     Args:
         distorted (Path): The encoded file (libvmaf 'main' input).
         reference (Path): The pristine source file (libvmaf 'reference').
@@ -458,6 +466,8 @@ def build_vmaf_command(
             only on modern libvmaf (v3+); legacy builds score single-threaded.
         style (str | None): Force a filter API style (legacy/modern); used by
             tests. None detects the local ffmpeg.
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
+            the reference input to match the distorted geometry.
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
@@ -468,6 +478,18 @@ def build_vmaf_command(
         model_option = "model=path=vmaf_v0.6.1.json"
     else:
         model_option = "model_path=vmaf_v0.6.1.json"
+
+    if crop is not None:
+        top, bottom, left, right = crop
+        filtergraph = (
+            f"[1:v]crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}[r];"
+            f"[0:v][r]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}"
+            f":n_threads={threads}"
+        )
+    else:
+        filtergraph = (
+            f"[0:v][1:v]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}"
+        )
     return [
         FFMPEG_BINARY,
         "-y",
@@ -478,7 +500,7 @@ def build_vmaf_command(
         "-i",
         str(reference),
         "-lavfi",
-        f"[0:v][1:v]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}",
+        filtergraph,
         "-f",
         "null",
         "-",
@@ -503,7 +525,12 @@ def parse_vmaf_log(text: str) -> float:
     return float(pooled["mean"])
 
 
-def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
+def measure_vmaf(
+    distorted: Path,
+    reference: Path,
+    workdir: Path,
+    crop: tuple[int, int, int, int] | None = None,
+) -> float:
     """Measures the mean VMAF of an encode against its source.
 
     The main/reference input order matters: the distorted stream must be the
@@ -514,6 +541,8 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
         distorted (Path): The encoded file.
         reference (Path): The pristine source file.
         workdir (Path): Working directory for the model and log files.
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
+            the reference so it matches the distorted geometry.
 
     Returns:
         float: The mean VMAF score.
@@ -530,7 +559,9 @@ def measure_vmaf(distorted: Path, reference: Path, workdir: Path) -> float:
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
-    code, err = _run(build_vmaf_command(distorted, reference, threads), cwd=workdir)
+    code, err = _run(
+        build_vmaf_command(distorted, reference, threads, crop=crop), cwd=workdir
+    )
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")
@@ -605,7 +636,7 @@ def probe_crf(
         code, err = _run(command)
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
-        scores.append(measure_vmaf(encoded, sample, workdir))
+        scores.append(measure_vmaf(encoded, sample, workdir, crop=crop))
         encoded.unlink()
     return min(scores)
 
