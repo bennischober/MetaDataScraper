@@ -124,8 +124,7 @@ class AppState:
     def _recover_stale_jobs(self):
         """Marks jobs left running by a previous app instance as failed."""
         self.connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
-            "WHERE state = ?",
+            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') WHERE state = ?",
             (
                 "failed",
                 "interrupted by app restart",

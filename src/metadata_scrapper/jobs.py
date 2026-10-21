@@ -316,7 +316,9 @@ class JobQueue:
         return _row_to_job(row) if row is not None else None
 
 
-def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
+def execute_scan(
+    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+) -> dict:
     """Executes a scan job.
 
     Args:
@@ -355,7 +357,9 @@ def execute_scan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     }
 
 
-def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
+def execute_plan(
+    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+) -> dict:
     """Executes a plan job (probing only, no encodes).
 
     Args:
@@ -415,7 +419,9 @@ def execute_plan(job: Job, connection: sqlite3.Connection, cancel: threading.Eve
     return {"plans": plans, "cancelled": cancel.is_set()}
 
 
-def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None) -> dict:
+def execute_encode(
+    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+) -> dict:
     """Executes an encode job (quality or fixed mode).
 
     Args:
@@ -502,7 +508,9 @@ def execute_encode(job: Job, connection: sqlite3.Connection, cancel: threading.E
                 )
     else:
         if progress:
-            progress({"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total})
+            progress(
+                {"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total}
+            )
         results = encode_movies(
             movies,
             output_dir,
