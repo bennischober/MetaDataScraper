@@ -325,11 +325,13 @@ def encode_movies(
     if not pending:
         return results
 
-    # each concurrent encode gets a fair share of the CPU threads
-    cpu = os.cpu_count() or 8
-    threads_per_encode = max(1, cpu // workers)
+    # longest job first: big movies start early so the tail of the run is
+    # short jobs, not an idle half machine next to one capped long encode
+    pending.sort(key=lambda pair: -(probe_duration_seconds(pair[0]) or 0))
 
-    def run_one(index: int, movie: Path, output_file: Path) -> EncodeResult:
+    cpu = os.cpu_count() or 8
+
+    def run_one(movie: Path, output_file: Path, threads: int | None) -> EncodeResult:
         handbrake = find_handbrake()
         if handbrake is None:
             raise RuntimeError(
@@ -342,7 +344,7 @@ def encode_movies(
             output_file,
             preset,
             encoder,
-            encoder_threads=threads_per_encode if workers > 1 else None,
+            encoder_threads=threads,
         )
         return _encode_with_command(movie, output_file, command)
 
@@ -350,23 +352,57 @@ def encode_movies(
         task = progress.add_task("Encoding movies", total=len(pending))
         if workers == 1:
             for movie, output_file in pending:
-                result = run_one(0, movie, output_file)
+                result = run_one(movie, output_file, None)
                 _report_encode(progress, result)
                 results.append(result)
                 progress.advance(task)
         else:
+            # work-queue scheduling: every started encode holds a slot with a
+            # fair share of the CPU; when a slot frees, the next movie starts
+            # with the share of ALL free slots (a lone long movie reclaims the
+            # full machine as the short ones finish)
             from concurrent.futures import ThreadPoolExecutor
+            from threading import Lock
+
+            lock = Lock()
+            running: list[int] = []  # thread budgets of running encodes
+
+            def slot_budget() -> int:
+                with lock:
+                    free = max(1, workers - len(running))
+                    # shares are equal among the encodes that would run
+                    return max(1, cpu // max(1, len(running) + free) * free)
 
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [
-                    executor.submit(run_one, index, movie, output_file)
-                    for index, (movie, output_file) in enumerate(pending)
-                ]
+                futures = []
+                index = 0
+                while index < len(pending) or running:
+                    with lock:
+                        free = workers - len(running)
+                    if free > 0 and index < len(pending):
+                        movie, output_file = pending[index]
+                        index += 1
+                        budget = slot_budget()
+                        with lock:
+                            running.append(budget)
+                        future = executor.submit(run_one, movie, output_file, budget)
+
+                        def done(fut, budget=budget):
+                            with lock:
+                                running.remove(budget)
+                            result = fut.result()
+                            _report_encode(progress, result)
+                            results.append(result)
+                            progress.advance(task)
+
+                        future.add_done_callback(done)
+                        futures.append(future)
+                    else:
+                        import time
+
+                        time.sleep(0.5)
                 for future in futures:
-                    result = future.result()
-                    _report_encode(progress, result)
-                    results.append(result)
-                    progress.advance(task)
+                    future.result()
 
     return results
 
