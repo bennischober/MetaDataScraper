@@ -26,7 +26,7 @@
       default); fmtSaved growth sign reads as gain ("+5.0%" in a "Saved"
       column)
 
-### HDR support (working on HDR10 — validated on real content)
+### HDR support (working on HDR10 — encode validated, findings recorded)
 - [x] Refuse HDR content in quality mode until proper support exists
       (superseded by real support, shipped 2026-10-21)
 - [x] Tone-map HDR sources to SDR before VMAF measurement (hable tonemap on
@@ -34,10 +34,17 @@
 - [x] 10-bit encoder switch (x265_10bit) with HDR metadata preservation
       (HandBrake keeps PQ/Main10 by default, verified)
 - [x] Calibrated HDR target (94.5) and CRF range (10-32) — the Mandalorian
-      plan converged at CRF 14, VMAF 94.78, ~78% estimated savings (21 min
-      plan on 4K)
-- [ ] Full-encode + full-movie VMAF verification on one HDR title (the
-      Mandalorian encode run) — the plan predicts; one encode proves it
+      plan converged at CRF 14, VMAF 94.78 (21 min plan on 4K)
+- [x] Real encode run: The Mandalorian S01E02 at CRF 14 -> 4.26 GB -> 3.45 GB
+      = **19.1% saved** (NOT the 78% the plan estimated!). The probe-based
+      size estimate is strongly over-optimistic on HDR 4K content (same
+      pattern as Django's SDR 77%-predicted/64%-real, but stronger).
+      Duration verified equal (1856.576s both sides).
+- [ ] FULL-MOVIE VMAF verification of that encode (running) — does the
+      probed 94.78 hold across the episode?
+- [ ] Size-estimate correction: HDR 4K estimates need a systematic bias
+      factor or bitrate-based math (probe samples hit easy content);
+      document the uncertainty range in plan/README
 - [ ] Dolby Vision dual-layer handling (the DV enhancement layer may be
       lost on re-encode; warn or preserve — needs a DV test file)
 - [ ] HDR test material in testdata/ for regression tests (short clip)
