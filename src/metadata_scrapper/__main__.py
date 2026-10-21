@@ -739,6 +739,114 @@ def _record_encodes(
         )
 
 
+@app.command()
+def plan(
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Root path of the movie folder, e.g. D:\\Movies",
+    ),
+    quality: bool = typer.Option(
+        True,
+        "--quality/--fixed",
+        help="Plan quality mode (VMAF-driven) or the fixed preset.",
+    ),
+    target_vmaf: float = typer.Option(
+        95.0,
+        "--target-vmaf",
+        min=1.0,
+        max=100.0,
+        help="VMAF quality floor for the quality plan.",
+    ),
+    remove_bars: bool = typer.Option(
+        False, "--remove-bars", help="Include black-bar removal in the plan."
+    ),
+    db_file: Path = typer.Option(
+        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    ),
+):
+    """Probes the movies and predicts the encode outcome without encoding.
+
+    Shows which movies would be encoded (with predicted CRF, quality and
+    estimated size) and which would be skipped (with the reason). Runs the
+    full probing pipeline, so it takes roughly as long as the probing part
+    of a real encode run.
+    """
+    from metadata_scrapper.quality import plan_quality
+
+    config = load_config()
+    connection = db.connect(db_file)
+    try:
+        _, movies, _ = scan_movies(path, config, connection=connection)
+    finally:
+        connection.close()
+
+    table = Table(
+        title=f"Encode plan for {len(movies)} movies "
+        f"(target VMAF {target_vmaf})",
+        title_justify="left",
+    )
+    table.add_column("Movie", style="bold", max_width=32, overflow="ellipsis")
+    table.add_column("Decision", justify="center", no_wrap=True)
+    table.add_column("CRF", justify="right", no_wrap=True)
+    table.add_column("VMAF", justify="right", no_wrap=True)
+    table.add_column("Est. size", justify="right", no_wrap=True)
+    table.add_column("Saved", justify="right", no_wrap=True)
+    table.add_column("Note", max_width=40, overflow="fold")
+
+    total_input = total_output = 0
+    plans: list = []
+    for movie in movies:
+        try:
+            result = plan_quality(
+                movie,
+                target_vmaf=target_vmaf,
+                encoder=config.handbrake_encoder,
+                remove_bars=remove_bars,
+            )
+        except (RuntimeError, FileNotFoundError) as e:
+            table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+            continue
+        plans.append(result)
+
+        if result.skipped_reason is not None:
+            table.add_row(
+                movie.name,
+                "[yellow]skip[/yellow]",
+                str(result.chosen_crf or ""),
+                str(result.achieved_vmaf or ""),
+                "-",
+                "-",
+                result.error or result.skipped_reason,
+            )
+            total_input += result.input_size
+            continue
+
+        est_gb = result.output_size / 1024**3
+        saved = result.saved_percent
+        total_input += result.input_size
+        total_output += result.output_size
+        table.add_row(
+            movie.name,
+            "[green]encode[/green]",
+            str(result.chosen_crf),
+            f"{result.achieved_vmaf:.2f}" if result.achieved_vmaf else "",
+            f"{est_gb:.2f} GB",
+            f"{saved}%",
+            f"bars: {result.probes and ''}{'yes' if remove_bars else 'no'}",
+        )
+
+    console.print(table)
+    if total_input > 0 and total_output > 0:
+        console.print(
+            f"[green]Plan: {len(plans)} movies, estimated total "
+            f"{total_input / 1024**3:.2f} GB -> {total_output / 1024**3:.2f} GB "
+            f"({round((1 - total_output / total_input) * 100, 1)}% saved)[/green]"
+        )
+
+
 def _save_encode(
     connection,
     movie: Path,

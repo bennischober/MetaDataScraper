@@ -796,6 +796,214 @@ def find_optimal_crf_and_skip(
     return chosen, achieved, probes, False
 
 
+def plan_quality(
+    input_file: Path,
+    target_vmaf: float = DEFAULT_TARGET_VMAF,
+    crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
+    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    encoder: str = "x265",
+    encoder_preset: str = "medium",
+    remove_bars: bool = False,
+) -> QualityResult:
+    """Probes a movie and predicts the outcome without encoding it.
+
+    Runs the exact same probing pipeline as encode_with_quality (samples,
+    size estimate, CRF bisect) but stops before the full encode. The result
+    carries the predicted CRF, the measured VMAF and a size estimate based
+    on the sample probes.
+
+    Args:
+        input_file (Path): The file to analyze.
+        target_vmaf (float): The VMAF quality floor to meet.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
+        sample_count (int): The number of samples to probe.
+        sample_seconds (float): The length of each sample in seconds.
+        encoder (str): The video encoder, e.g. 'x265'.
+        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        remove_bars (bool): Detect and crop stable black bars (opt-in).
+
+    Returns:
+        QualityResult: The prediction (success=False with a skipped_reason
+            for skip decisions; input/output sizes carry the size estimate
+            as output_size = input_size * estimated factor).
+
+    Raises:
+        FileNotFoundError: If the input file does not exist.
+        RuntimeError: If HandBrakeCLI is not installed or probing failed.
+    """
+    if not input_file.is_file():
+        raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
+
+    duration = probe_duration_seconds(input_file)
+    if duration is not None and duration < MIN_ENCODE_SECONDS:
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
+            skipped_reason="too short",
+        )
+
+    handbrake = find_handbrake()
+    if handbrake is None:
+        raise RuntimeError(
+            f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
+            "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
+        )
+
+    workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
+    try:
+        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+        log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
+        crf, achieved, probes, skip = find_optimal_crf_and_skip(
+            input_file,
+            workdir,
+            handbrake,
+            target_vmaf=target_vmaf,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            encoder=encoder,
+            encoder_preset=encoder_preset,
+            crop=crop,
+        )
+
+        input_size = input_file.stat().st_size
+        # estimate the full-encode size from the sample probes: the size
+        # probe factor scales linearly with the probed CRF (log-space)
+        factor = estimate_size_factor(
+            extract_samples(input_file, workdir, sample_count, sample_seconds),
+            workdir,
+            handbrake,
+            crf,
+            encoder,
+            encoder_preset,
+            crop=crop,
+        )
+
+        if skip:
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                input_size=input_size,
+                output_size=input_size,
+                error="skipped: re-encode would not shrink the file",
+                skipped_reason="no size gain",
+            )
+        if achieved < target_vmaf and crf == crf_range[0]:
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                input_size=input_size,
+                output_size=input_size,
+                error=(
+                    f"skipped: target VMAF {target_vmaf} unreachable "
+                    f"(best {achieved} at CRF {crf_range[0]})"
+                ),
+                skipped_reason="target unreachable",
+            )
+
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=True,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            input_size=input_size,
+            output_size=int(input_size * factor),
+            error=None,
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _probe_movie(
+    input_file: Path,
+    target_vmaf: float,
+    crf_range: tuple[int, int],
+    sample_count: int,
+    sample_seconds: float,
+    encoder: str,
+    encoder_preset: str,
+    remove_bars: bool,
+) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
+    """Shared probing pipeline of plan_quality and encode_with_quality.
+
+    Args:
+        input_file (Path): The file to probe.
+        target_vmaf (float): The VMAF quality floor to meet.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
+        sample_count (int): The number of samples to probe.
+        sample_seconds (float): The length of each sample in seconds.
+        encoder (str): The video encoder, e.g. 'x265'.
+        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        remove_bars (bool): Detect and crop stable black bars.
+
+    Returns:
+        tuple: The chosen CRF, its VMAF, all probes and the crop bars
+            (None when no crop is applied).
+
+    Raises:
+        RuntimeError: If HandBrakeCLI is not installed or probing failed.
+    """
+    handbrake = find_handbrake()
+    if handbrake is None:
+        raise RuntimeError(
+            f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
+            "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
+        )
+
+    workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
+    try:
+        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+        if crop is not None:
+            log(
+                f"Removing stable black bars of '{input_file.name}': "
+                f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
+            )
+        log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
+        crf, achieved, probes, skip = find_optimal_crf_and_skip(
+            input_file,
+            workdir,
+            handbrake,
+            target_vmaf=target_vmaf,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            encoder=encoder,
+            encoder_preset=encoder_preset,
+            crop=crop,
+        )
+        if skip:
+            raise SkipEncode("re-encode would not shrink the file")
+        if achieved < target_vmaf and crf == crf_range[0]:
+            raise SkipEncode(
+                f"target VMAF {target_vmaf} unreachable "
+                f"(best {achieved} at CRF {crf_range[0]})"
+            )
+        return crf, achieved, probes, crop
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+class SkipEncode(Exception):
+    """Raised when the probing decides a movie should not be encoded."""
+
+
 def encode_with_quality(
     input_file: Path,
     output_file: Path,
@@ -846,122 +1054,83 @@ def encode_with_quality(
             skipped_reason="too short",
         )
 
-    handbrake = find_handbrake()
-    if handbrake is None:
-        raise RuntimeError(
-            f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
-            "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
-        )
-
-    workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
     try:
-        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
-        if crop is not None:
-            log(
-                f"Removing stable black bars of '{input_file.name}': "
-                f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
-            )
-        log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes, skip = find_optimal_crf_and_skip(
+        crf, achieved, probes, crop = _probe_movie(
             input_file,
-            workdir,
-            handbrake,
-            target_vmaf=target_vmaf,
-            crf_range=crf_range,
-            sample_count=sample_count,
-            sample_seconds=sample_seconds,
-            encoder=encoder,
-            encoder_preset=encoder_preset,
-            crop=crop,
+            target_vmaf,
+            crf_range,
+            sample_count,
+            sample_seconds,
+            encoder,
+            encoder_preset,
+            remove_bars,
         )
-        if skip:
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error="skipped: re-encode would not shrink the file",
-                skipped_reason="no size gain",
-            )
-        log(f"Chosen CRF {crf} (VMAF {achieved})")
-
-        # target unreachable even at the lowest CRF => the encode would be
-        # BOTH below the quality floor AND likely larger than the source
-        if achieved < target_vmaf and crf == crf_range[0]:
-            log(
-                f"Skipping '{input_file.name}': target VMAF {target_vmaf} unreachable "
-                f"(best {achieved} at CRF {crf_range[0]}); source is likely "
-                "already efficiently encoded."
-            )
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error=(
-                    f"skipped: target VMAF {target_vmaf} unreachable "
-                    f"(best {achieved} at CRF {crf_range[0]})"
-                ),
-                skipped_reason="target unreachable",
-            )
-
-        command = build_encode_command(
-            handbrake, input_file, output_file, crf, encoder, encoder_preset, crop=crop
-        )
-        code, err = _run(command)
-        if code != 0:
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error=err or "handbrake failed",
-            )
-
-        # HandBrake may exit with 0 even if the encode failed => the output
-        # file must exist, be non-empty and have the full duration
-        if not output_file.is_file() or output_file.stat().st_size == 0:
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error=err or "no output file was written",
-            )
-        if not durations_match(input_file, output_file):
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error="output is truncated (duration mismatch)",
-            )
-
+    except SkipEncode as e:
         return QualityResult(
             input=input_file,
             output=output_file,
-            success=True,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=f"skipped: {e}",
+            skipped_reason=(
+                "target unreachable" if "unreachable" in str(e) else "no size gain"
+            ),
+        )
+
+    log(f"Chosen CRF {crf} (VMAF {achieved})")
+    handbrake = find_handbrake()
+    if handbrake is None:  # already checked in _probe_movie, for mypy
+        raise RuntimeError(f"'{HANDBRAKE_BINARY}' not found!")
+    command = build_encode_command(
+        handbrake, input_file, output_file, crf, encoder, encoder_preset, crop=crop
+    )
+    code, err = _run(command)
+    if code != 0:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
             target_vmaf=target_vmaf,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
-            input_size=input_file.stat().st_size,
-            output_size=output_file.stat().st_size,
+            error=err or "handbrake failed",
         )
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+
+    # HandBrake may exit with 0 even if the encode failed => the output
+    # file must exist, be non-empty and have the full duration
+    if not output_file.is_file() or output_file.stat().st_size == 0:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            error=err or "no output file was written",
+        )
+    if not durations_match(input_file, output_file):
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            error="output is truncated (duration mismatch)",
+        )
+
+    return QualityResult(
+        input=input_file,
+        output=output_file,
+        success=True,
+        target_vmaf=target_vmaf,
+        chosen_crf=crf,
+        achieved_vmaf=achieved,
+        probes=probes,
+        input_size=input_file.stat().st_size,
+        output_size=output_file.stat().st_size,
+    )
+
