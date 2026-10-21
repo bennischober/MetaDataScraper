@@ -361,6 +361,20 @@ def execute_scan(
     movies: list = []
     errors: list = []
     by_category: dict = {}
+
+    def on_movie(index: int, data, error):
+        """Persists each finished movie immediately (progressive UI)."""
+        if progress and not cancel.is_set():
+            progress(
+                {
+                    "stage": "scan",
+                    "detail": error or f"scanned {data['name']}" if data else "scanning",
+                    "done": index,
+                    "total": None,
+                    "movie": data["name"] if data else None,
+                }
+            )
+
     for path in payload_paths(payload):
         part_by_cat, part_movies, part_errors = scan_movies(
             path,
@@ -370,6 +384,7 @@ def execute_scan(
             rescan=payload.get("rescan", False),
             compute_hash=payload.get("hash", False),
             exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
+            on_movie=on_movie,
         )
         movies.extend(part_movies)
         errors.extend(part_errors)

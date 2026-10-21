@@ -245,6 +245,7 @@ def scan_movies(
     rescan: bool = False,
     compute_hash: bool = False,
     exclude: Path | None = None,
+    on_movie=None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 
@@ -266,6 +267,8 @@ def scan_movies(
         rescan (bool): Re-probe all files even if they are cached.
         compute_hash (bool): Compute a fast content hash for new/changed files.
         exclude (Path | None): Directory to exclude (e.g. the encode output).
+        on_movie (callable | None): Called as on_movie(index, data, error)
+            after each movie completes, for progressive UI updates.
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
@@ -290,6 +293,8 @@ def scan_movies(
             if row is not None and db.is_unchanged(row, filename):
                 results[index] = record_from_cache(row)
                 cached[str(filename)] = row
+                if on_movie is not None:
+                    on_movie(index, results[index], None)
 
     to_scan = [filename for index, filename in enumerate(movies) if results[index] is None]
 
@@ -309,6 +314,8 @@ def scan_movies(
                 results[index], error_messages[index] = process_movie(
                     filename, root, config, compute_hash=compute_hash
                 )
+                if on_movie is not None:
+                    on_movie(index, results[index], error_messages[index])
                 progress.advance(task)
         else:
             if workers is None:
@@ -323,6 +330,8 @@ def scan_movies(
                 }
                 for future, index in futures.items():
                     results[index], error_messages[index] = future.result()
+                    if on_movie is not None:
+                        on_movie(index, results[index], error_messages[index])
                     progress.advance(task)
 
     # collect in file order => deterministic output
