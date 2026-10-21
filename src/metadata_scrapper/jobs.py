@@ -334,6 +334,39 @@ def payload_paths(payload: dict) -> list[Path]:
     return [Path(payload["path"])]
 
 
+def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list:
+    """Resolves the payload's movies: scan directories, pass files through.
+
+    A payload path may be a directory (scanned recursively, per the scan
+    engine) or a single movie file (per-movie action from the UI; scanned
+    directly without directory discovery).
+
+    Args:
+        payload (dict): The job payload (paths list or legacy path string).
+        config (Conf): The config settings.
+        connection (sqlite3.Connection | None): Database connection for the
+            scan cache.
+        exclude (Path | None): Directory to exclude from the scan.
+
+    Returns:
+        list[Path]: The movie files.
+    """
+    from metadata_scrapper.scanner import process_movie, scan_movies
+
+    movies: list = []
+    for path in payload_paths(payload):
+        if path.is_file():
+            # single movie file (per-movie action) => process directly,
+            # without scanning the whole parent folder
+            data, _error = process_movie(path, path.parent, config)
+            if data is not None:
+                movies.append(data)
+        else:
+            _, part_movies, _ = scan_movies(path, config, connection=connection, exclude=exclude)
+            movies.extend(part_movies)
+    return movies
+
+
 def execute_scan(
     job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
 ) -> dict:
@@ -376,20 +409,33 @@ def execute_scan(
             )
 
     for path in payload_paths(payload):
-        part_by_cat, part_movies, part_errors = scan_movies(
-            path,
-            config,
-            workers=payload.get("workers"),
-            connection=connection,
-            rescan=payload.get("rescan", False),
-            compute_hash=payload.get("hash", False),
-            exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
-            on_movie=on_movie,
-        )
-        movies.extend(part_movies)
-        errors.extend(part_errors)
-        for cat, mvs in part_by_cat.items():
-            by_category.setdefault(cat, []).extend(mvs)
+        if path.is_file():
+            # single movie file (per-movie action)
+            from metadata_scrapper.scanner import process_movie
+
+            data, error = process_movie(path, path.parent, config)
+            if data is not None:
+                movies.append(data)
+                by_category.setdefault(data["category"], []).append(data)
+            else:
+                errors.append(error or "unknown error")
+            if on_movie is not None:
+                on_movie(0, data, error)
+        else:
+            part_by_cat, part_movies, part_errors = scan_movies(
+                path,
+                config,
+                workers=payload.get("workers"),
+                connection=connection,
+                rescan=payload.get("rescan", False),
+                compute_hash=payload.get("hash", False),
+                exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
+                on_movie=on_movie,
+            )
+            movies.extend(part_movies)
+            errors.extend(part_errors)
+            for cat, mvs in part_by_cat.items():
+                by_category.setdefault(cat, []).extend(mvs)
     return {
         "movies": len(movies),
         "categories": len(by_category),
@@ -414,14 +460,10 @@ def execute_plan(
     """
     from metadata_scrapper.config import load_config
     from metadata_scrapper.quality import plan_quality
-    from metadata_scrapper.scanner import scan_movies
 
     payload = job.payload
     config = load_config()
-    movies: list = []
-    for path in payload_paths(payload):
-        _, part_movies, _ = scan_movies(path, config, connection=connection)
-        movies.extend(part_movies)
+    movies = resolve_movies(payload, config, connection=connection)
 
     plans: list[dict] = []
     total = len(movies)

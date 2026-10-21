@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type Movie, type Job } from './api'
+  import { api, jobPaths, type Movie, type Job } from './api'
   import { fmtGb, fmtSaved } from './api'
 
   let { movies, onsettings, onduplicates, duplicateCount = 0 }: {
@@ -16,6 +16,7 @@
   let selected = $state<Movie | null>(null)
   let selectedHistory = $state<Job[]>([])
   let loadingHistory = $state(false)
+  let actionBusy = $state(false)
 
   const categories = $derived([...new Set(movies.map((m) => m.category))])
 
@@ -72,16 +73,39 @@
     selected = movie
     loadingHistory = true
     selectedHistory = []
+    actionBusy = false
     try {
       // job history touching this movie's path (payload.path matches scans
       // and encodes of the whole folder it lives in)
       const all = await api.jobs(100)
-      selectedHistory = all.filter(
-        (j) => (j.payload as { path?: string }).path === movie.path
-      )
+      selectedHistory = all.filter((j) => jobPaths(j).includes(movie.path))
     } finally {
       loadingHistory = false
     }
+  }
+
+  async function movieAction(kind: 'plan' | 'encode') {
+    if (!selected) return
+    actionBusy = true
+    try {
+      await api.enqueue({
+        kind,
+        path: selected.path,
+        output_dir: kind === 'encode' ? localStorage.getItem('ms.out') || undefined : undefined,
+        quality: true,
+        target_vmaf: Number(localStorage.getItem('ms.vmaf') ?? 95),
+        remove_bars: localStorage.getItem('ms.bars') === '1',
+      })
+    } finally {
+      actionBusy = false
+    }
+  }
+
+  function revealInExplorer() {
+    if (!selected) return
+    // open the folder containing the file
+    const dir = selected.path.replace(/[\\/][^\\/]+$/, '')
+    window.open(`file:///${dir.replace(/\\/g, '/')}`)
   }
 </script>
 
@@ -197,6 +221,16 @@
           </div>
         </div>
       {/if}
+
+      <div class="actions">
+        <button class="act primary mono" onclick={() => movieAction('plan')} disabled={actionBusy}>
+          PLAN
+        </button>
+        <button class="act primary mono" onclick={() => movieAction('encode')} disabled={actionBusy}>
+          ENCODE
+        </button>
+        <button class="act mono" onclick={revealInExplorer}>FOLDER</button>
+      </div>
 
       <div class="legend hist-head">JOB HISTORY</div>
       {#if loadingHistory}
@@ -358,6 +392,23 @@
   .encode-box { border: 1px solid var(--seam); padding: 12px 14px; margin-bottom: 14px; }
   .encode-box .legend { display: block; margin-bottom: 8px; }
   .hist-head { display: block; margin: 6px 0; }
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .act {
+    background: var(--panel-active);
+    border: 1px solid var(--seam);
+    color: var(--ink);
+    padding: 6px 16px;
+    cursor: pointer;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+  }
+  .act:hover:not(:disabled) { border-color: var(--ink-dim); }
+  .act.primary { border-color: var(--ok); color: var(--ok); }
+  .act:disabled { opacity: 0.4; cursor: default; }
   .hist-row {
     display: flex;
     gap: 14px;
