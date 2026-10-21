@@ -172,7 +172,8 @@ def build_command(
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
     if encoder_threads is not None:
-        command += ["--encoder-threads", str(encoder_threads)]
+        # HandBrakeCLI has no thread flag; x264/x265 take it via --encopts
+        command += ["--encopts", f"threads={encoder_threads}"]
     return command
 
 
