@@ -26,16 +26,21 @@
       default); fmtSaved growth sign reads as gain ("+5.0%" in a "Saved"
       column)
 
-### HDR support (partially unblocked: real HDR content exists)
+### HDR support (working on HDR10 — validated on real content)
 - [x] Refuse HDR content in quality mode until proper support exists
-      (`hdr unsupported` skip reason, shipped 2026-10-21)
-- [ ] Validate the refusal end-to-end with The Mandalorian (G:\Serien) —
-      quality mode/plan on that file must skip, scan must keep detecting hdr
-- [ ] Tone-map HDR sources to SDR before VMAF measurement (ffmpeg `tonemap`
-      filter) and measure on the tone-mapped picture
-- [ ] Ensure HandBrake keeps HDR metadata (master display flags / color
-      tags) when re-encoding HDR content
-- [ ] Then: allow HDR encodes with the tone-mapped measurement path
+      (superseded by real support, shipped 2026-10-21)
+- [x] Tone-map HDR sources to SDR before VMAF measurement (hable tonemap on
+      both inputs inside the filtergraph)
+- [x] 10-bit encoder switch (x265_10bit) with HDR metadata preservation
+      (HandBrake keeps PQ/Main10 by default, verified)
+- [x] Calibrated HDR target (94.5) and CRF range (10-32) — the Mandalorian
+      plan converged at CRF 14, VMAF 94.78, ~78% estimated savings (21 min
+      plan on 4K)
+- [ ] Full-encode + full-movie VMAF verification on one HDR title (the
+      Mandalorian encode run) — the plan predicts; one encode proves it
+- [ ] Dolby Vision dual-layer handling (the DV enhancement layer may be
+      lost on re-encode; warn or preserve — needs a DV test file)
+- [ ] HDR test material in testdata/ for regression tests (short clip)
 
 ### Other known limitations
 - [ ] VMAF scores are not comparable across libvmaf versions (documented in
