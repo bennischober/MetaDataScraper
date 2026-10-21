@@ -83,8 +83,15 @@ def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
 # top-tier floor); VMAF falls monotonically with rising CRF.
 DEFAULT_TARGET_VMAF = 95.0
+# HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
+# below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
+# 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
+DEFAULT_HDR_TARGET_VMAF = 94.5
 # CRF 14 is near-transparent for x265, 32 is clearly lossy for live action.
 DEFAULT_CRF_RANGE = (14, 32)
+# HDR needs deeper quality headroom (4K + tone-map scale): CRF 10 was
+# measured at VMAF 96.5 on real HDR10 content
+DEFAULT_HDR_CRF_RANGE = (10, 32)
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
 
@@ -448,6 +455,7 @@ def build_vmaf_command(
     threads: int = 0,
     style: str | None = None,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
@@ -460,6 +468,11 @@ def build_vmaf_command(
     distorted input, otherwise libvmaf fails on the dimension/SAR mismatch
     (e.g. PAL DVD content with uneven side bars).
 
+    With HDR, both inputs are tone-mapped to SDR inside the filtergraph
+    before the comparison: the VMAF model is SDR-trained and PQ content
+    would score misleadingly. Both sides get the identical chain, so the
+    relative quality measurement stays honest.
+
     Args:
         distorted (Path): The encoded file (libvmaf 'main' input).
         reference (Path): The pristine source file (libvmaf 'reference').
@@ -469,6 +482,7 @@ def build_vmaf_command(
             tests. None detects the local ffmpeg.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             the reference input to match the distorted geometry.
+        hdr (bool): Tone-map both inputs to SDR (PQ/bt2020 sources).
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
@@ -480,17 +494,26 @@ def build_vmaf_command(
     else:
         model_option = "model_path=vmaf_v0.6.1.json"
 
-    if crop is not None:
+    vmaf = f"libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}"
+
+    # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
+    # -> back to video levels (validated on real HDR10 content)
+    tonemap = (
+        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+        "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
+        "format=yuv420p10le"
+    )
+
+    if hdr:
+        # tone-map both sides to their SDR twins before comparing
+        filtergraph = f"[0:v]{tonemap}[d];[1:v]{tonemap}[r];[d][r]{vmaf}"
+    elif crop is not None:
         top, bottom, left, right = crop
         filtergraph = (
-            f"[1:v]crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}[r];"
-            f"[0:v][r]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}"
-            f":n_threads={threads}"
+            f"[1:v]crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}[r];[0:v][r]{vmaf}"
         )
     else:
-        filtergraph = (
-            f"[0:v][1:v]libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}"
-        )
+        filtergraph = f"[0:v][1:v]{vmaf}"
     return [
         FFMPEG_BINARY,
         "-y",
@@ -531,6 +554,7 @@ def measure_vmaf(
     reference: Path,
     workdir: Path,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
@@ -560,7 +584,9 @@ def measure_vmaf(
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
-    code, err = _run(build_vmaf_command(distorted, reference, threads, crop=crop), cwd=workdir)
+    code, err = _run(
+        build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr), cwd=workdir
+    )
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")
@@ -626,6 +652,7 @@ def probe_crf(
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
@@ -641,6 +668,7 @@ def probe_crf(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
+        hdr (bool): Tone-map both sides for the VMAF measurement.
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
@@ -657,7 +685,7 @@ def probe_crf(
         code, err = _run(command)
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
-        scores.append(measure_vmaf(encoded, sample, workdir, crop=crop))
+        scores.append(measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr))
         encoded.unlink()
     return min(scores)
 
@@ -670,6 +698,7 @@ def estimate_size_factor(
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -701,6 +730,7 @@ def estimate_size_factor(
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
     try:
+        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr)
         factor = encoded.stat().st_size / sample.stat().st_size
     finally:
         encoded.unlink()
@@ -718,6 +748,7 @@ def find_optimal_crf(
     encoder: str = "x265",
     encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -766,6 +797,7 @@ def find_optimal_crf_and_skip(
     encoder: str = "x265",
     encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -814,6 +846,7 @@ def find_optimal_crf_and_skip(
         encoder=encoder,
         encoder_preset=encoder_preset,
         crop=crop,
+        hdr=hdr,
     )
     return chosen, achieved, probes, False
 
@@ -857,15 +890,12 @@ def plan_quality(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
-    if is_hdr_file(input_file):
-        return QualityResult(
-            input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
-            error="skipped: HDR content (VMAF model is SDR-trained)",
-            skipped_reason="hdr unsupported",
-        )
+    hdr = is_hdr_file(input_file)
+    if hdr:
+        # the tone-mapped measurement scale sits slightly lower; use the
+        # calibrated target and the deeper CRF range for 4K headroom
+        target_vmaf = DEFAULT_HDR_TARGET_VMAF
+        crf_range = DEFAULT_HDR_CRF_RANGE
 
     duration = probe_duration_seconds(input_file)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
@@ -897,20 +927,19 @@ def plan_quality(
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
-            encoder=encoder,
+            encoder="x265_10bit" if hdr else encoder,
             encoder_preset=encoder_preset,
             crop=crop,
+            hdr=hdr,
         )
 
         input_size = input_file.stat().st_size
-        # estimate the full-encode size from the sample probes: the size
-        # probe factor scales linearly with the probed CRF (log-space)
         factor = estimate_size_factor(
             extract_samples(input_file, workdir, sample_count, sample_seconds),
             workdir,
             handbrake,
             crf,
-            encoder,
+            "x265_10bit" if hdr else encoder,
             encoder_preset,
             crop=crop,
         )
@@ -972,6 +1001,7 @@ def _probe_movie(
     encoder: str,
     encoder_preset: str,
     remove_bars: bool,
+    hdr: bool = False,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -984,6 +1014,7 @@ def _probe_movie(
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars.
+        hdr (bool): Tone-map both sides for the VMAF measurement.
 
     Returns:
         tuple: The chosen CRF, its VMAF, all probes and the crop bars
@@ -1019,6 +1050,7 @@ def _probe_movie(
             encoder=encoder,
             encoder_preset=encoder_preset,
             crop=crop,
+            hdr=hdr,
         )
         if skip:
             raise SkipEncode("re-encode would not shrink the file")
@@ -1074,15 +1106,10 @@ def encode_with_quality(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
-    if is_hdr_file(input_file):
-        return QualityResult(
-            input=input_file,
-            output=output_file,
-            success=False,
-            target_vmaf=target_vmaf,
-            error="skipped: HDR content (VMAF model is SDR-trained)",
-            skipped_reason="hdr unsupported",
-        )
+    hdr = is_hdr_file(input_file)
+    if hdr:
+        target_vmaf = DEFAULT_HDR_TARGET_VMAF
+        crf_range = DEFAULT_HDR_CRF_RANGE
 
     duration = probe_duration_seconds(input_file)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
@@ -1102,9 +1129,10 @@ def encode_with_quality(
             crf_range,
             sample_count,
             sample_seconds,
-            encoder,
+            "x265_10bit" if hdr else encoder,
             encoder_preset,
             remove_bars,
+            hdr=hdr,
         )
     except SkipEncode as e:
         return QualityResult(
@@ -1121,7 +1149,13 @@ def encode_with_quality(
     if handbrake is None:  # already checked in _probe_movie, for mypy
         raise RuntimeError(f"'{HANDBRAKE_BINARY}' not found!")
     command = build_encode_command(
-        handbrake, input_file, output_file, crf, encoder, encoder_preset, crop=crop
+        handbrake,
+        input_file,
+        output_file,
+        crf,
+        "x265_10bit" if hdr else encoder,
+        encoder_preset,
+        crop=crop,
     )
     code, err = _run(command)
     if code != 0:
