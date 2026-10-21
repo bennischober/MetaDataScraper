@@ -208,8 +208,8 @@ def app_command(
     root: list[Path] = typer.Option(
         [],
         "--root",
-        help="Folder the API may operate on (repeatable). Defaults to the "
-        "database's parent folder.",
+        help="Folder the API may operate on (repeatable). Defaults to all "
+        "available drive roots (the app is localhost-only).",
     ),
 ):
     """Runs the resident app: job queue, watch loop and the local HTTP API.
@@ -219,7 +219,9 @@ def app_command(
     """
     from metadata_scrapper.app import run_app
 
-    roots = [Path(r) for r in root] or [db_file.parent]
+    # empty list = run_app computes its default (all drive roots); only an
+    # explicit --root narrows the allowlist down
+    roots = [Path(r) for r in root] or None
     run_app(db_file, host=host, port=port, allowed_roots=roots)
 
 
