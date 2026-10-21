@@ -18,13 +18,20 @@ scores and chosen CRFs are only comparable between similar libvmaf builds.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from metadata_scrapper.encode import HANDBRAKE_BINARY, durations_match, find_handbrake
+from metadata_scrapper.encode import (
+    HANDBRAKE_BINARY,
+    MIN_ENCODE_SECONDS,
+    durations_match,
+    find_handbrake,
+    probe_duration_seconds,
+)
 from metadata_scrapper.logger import log
 
 FFMPEG_BINARY = "ffmpeg"
@@ -80,6 +87,157 @@ DEFAULT_TARGET_VMAF = 95.0
 DEFAULT_CRF_RANGE = (14, 32)
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
+
+# a detected bar smaller than this percentage of the dimension is noise
+MIN_BAR_PERCENT = 2.0
+# blackness threshold for cropdetect (0-255); 24 matches ffmpeg's default
+CROP_DETECT_LIMIT = 24
+
+
+def parse_crop_line(text: str) -> tuple[int, int, int, int] | None:
+    """Extracts the last cropdetect crop rectangle from ffmpeg output.
+
+    Args:
+        text (str): The ffmpeg stderr output containing cropdetect lines.
+
+    Returns:
+        tuple | None: The (width, height, x, y) crop rectangle, or None if
+            no crop was detected.
+    """
+    matches = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", text)
+    if not matches:
+        return None
+    last = matches[-1]
+    return tuple(int(value) for value in last)  # type: ignore[return-value]
+
+
+def intersect_crop_rects(
+    rects: list[tuple[int, int, int, int]], frame: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """Intersects crop rectangles => only bars present in ALL samples.
+
+    The intersection is safe by construction: a sample without bars
+    (or with smaller bars) shrinks the crop accordingly, so no picture
+    content can be removed.
+
+    Args:
+        rects (list): Detected (width, height, x, y) rectangles.
+        frame (tuple): The (width, height) of the source frame.
+
+    Returns:
+        tuple | None: The (top, bottom, left, right) bars to crop, or None
+            if no stable bars were detected or they are too small to matter.
+    """
+    if not rects:
+        return None
+    frame_w, frame_h = frame
+
+    # intersection in absolute coordinates: the picture area present in all
+    left = max(x for _, _, x, _ in rects)
+    top = max(y for _, _, _, y in rects)
+    right = min(x + w for w, _, x, _ in rects)
+    bottom = min(y + h for _, h, _, y in rects)
+
+    width = max(0, right - left)
+    height = max(0, bottom - top)
+
+    # the removed BAR sizes must be significant (2% of the dimension), noise
+    # sized bars are ignored; keep even dimensions (encoder requirement)
+    bar_w = frame_w - width
+    bar_h = frame_h - height
+    min_w = frame_w * MIN_BAR_PERCENT / 100
+    min_h = frame_h * MIN_BAR_PERCENT / 100
+    if (bar_w > 0 and bar_w < min_w) or (bar_h > 0 and bar_h < min_h):
+        return None
+    if bar_w == 0 and bar_h == 0:
+        return None
+    width -= width % 2
+    height -= height % 2
+
+    if width >= frame_w and height >= frame_h:
+        return None
+    # convert the picture rectangle into HandBrake's bar order
+    bars_left = left - left % 2
+    bars_top = top - top % 2
+    return (
+        bars_top,
+        max(0, frame_h - bars_top - height),
+        bars_left,
+        max(0, frame_w - bars_left - width),
+    )
+
+
+def detect_crop_rect(
+    movie: Path, workdir: Path, count: int = 3
+) -> tuple[int, int, int, int] | None:
+    """Detects baked-in black bars (letterbox) of a movie via cropdetect.
+
+    Runs cropdetect on several segments and intersects the results, so only
+    bars that are present throughout the movie are removed.
+
+    Args:
+        movie (Path): The source movie file.
+        workdir (Path): Working directory (unused, kept for symmetry).
+        count (int): The number of segments to probe.
+
+    Returns:
+        tuple | None: The (top, bottom, left, right) bars to crop, or None
+            if no stable bars were detected.
+    """
+    from metadata_scrapper.encode import probe_duration_seconds
+
+    duration = probe_duration_seconds(movie)
+    if duration is None:
+        return None
+
+    proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            str(movie),
+        ],
+        capture_output=True,
+    )
+    try:
+        stream = next(
+            s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
+        )
+        frame = (int(stream["width"]), int(stream["height"]))
+    except (StopIteration, KeyError, ValueError, json.JSONDecodeError):
+        return None
+
+    rects: list[tuple[int, int, int, int]] = []
+    for offset in sample_offsets(duration, count):
+        code, err = _run(
+            [
+                FFMPEG_BINARY,
+                "-y",
+                "-v",
+                "info",
+                "-ss",
+                f"{offset:.3f}",
+                "-t",
+                "2",
+                "-i",
+                str(movie),
+                "-vf",
+                f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
+                "-f",
+                "null",
+                "-",
+            ]
+        )
+        if code != 0:
+            continue
+        rect = parse_crop_line(err)
+        if rect is not None:
+            rects.append(rect)
+
+    return intersect_crop_rects(rects, frame)
 
 
 @dataclass
@@ -226,6 +384,7 @@ def build_encode_command(
     crf: int,
     encoder: str,
     encoder_preset: str,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> list[str]:
     """Builds the HandBrakeCLI command for a quality-driven encode.
 
@@ -239,11 +398,13 @@ def build_encode_command(
         crf (int): The CRF quality value.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        crop (tuple | None): Crop bars (top, bottom, left, right) to remove
+            baked-in black bars. None keeps the source resolution.
 
     Returns:
         list[str]: The command as argument list.
     """
-    return [
+    command = [
         binary,
         "--input",
         str(input_file),
@@ -255,11 +416,17 @@ def build_encode_command(
         encoder_preset,
         "--quality",
         str(crf),
+    ]
+    if crop is not None:
+        top, bottom, left, right = crop
+        # HandBrake crop order is top:bottom:left:right
+        command += ["--crop", f"{top}:{bottom}:{left}:{right}"]
+    else:
         # keep the source resolution: HandBrake's auto-crop would letterbox
         # crops break the VMAF comparison (dimension mismatch) and change
         # the output resolution of the library
-        "--crop",
-        "0:0:0:0",
+        command += ["--crop", "0:0:0:0"]
+    command += [
         # keep all audio and subtitle tracks, copy audio => no quality loss
         "--all-audio",
         "--all-subtitles",
@@ -267,6 +434,7 @@ def build_encode_command(
         "copy",
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
+    return command
 
 
 def build_vmaf_command(
@@ -401,6 +569,7 @@ def probe_crf(
     handbrake: str,
     encoder: str,
     encoder_preset: str,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
@@ -414,6 +583,8 @@ def probe_crf(
         handbrake (str): Path to the HandBrakeCLI binary.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        crop (tuple | None): Crop bars applied to probes and measurements,
+            so the decision matches the final encode.
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
@@ -424,7 +595,9 @@ def probe_crf(
     scores: list[float] = []
     for index, sample in enumerate(samples):
         encoded = workdir / f"probe_crf{crf}_{index}.mkv"
-        command = build_encode_command(handbrake, sample, encoded, crf, encoder, encoder_preset)
+        command = build_encode_command(
+            handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
+        )
         code, err = _run(command)
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
@@ -440,6 +613,7 @@ def estimate_size_factor(
     crf: int,
     encoder: str,
     encoder_preset: str,
+    crop: tuple[int, int, int, int] | None = None,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -454,6 +628,7 @@ def estimate_size_factor(
         crf (int): The CRF quality value to probe.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        crop (tuple | None): Crop bars applied to the probe encode.
 
     Returns:
         float: The size ratio of the probe encode (encoded / sample source).
@@ -463,7 +638,9 @@ def estimate_size_factor(
     """
     sample = samples[0]
     encoded = workdir / f"size_probe_crf{crf}.mkv"
-    command = build_encode_command(handbrake, sample, encoded, crf, encoder, encoder_preset)
+    command = build_encode_command(
+        handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
+    )
     code, err = _run(command)
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
@@ -484,6 +661,7 @@ def find_optimal_crf(
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
     encoder_preset: str = "medium",
+    crop: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -497,6 +675,8 @@ def find_optimal_crf(
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
+            probes and the decision, matching the final encode.
 
     Returns:
         tuple: The chosen CRF, the VMAF measured at that CRF and all probes.
@@ -509,7 +689,7 @@ def find_optimal_crf(
     probes: list[SampleProbe] = []
 
     def check(crf: int) -> bool:
-        vmaf = probe_crf(samples, crf, workdir, handbrake, encoder, encoder_preset)
+        vmaf = probe_crf(samples, crf, workdir, handbrake, encoder, encoder_preset, crop=crop)
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
         return vmaf >= target_vmaf
 
@@ -529,6 +709,7 @@ def find_optimal_crf_and_skip(
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
     encoder_preset: str = "medium",
+    crop: tuple[int, int, int, int] | None = None,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -546,6 +727,8 @@ def find_optimal_crf_and_skip(
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
+            probes and the decision, matching the final encode.
 
     Returns:
         tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
@@ -555,7 +738,7 @@ def find_optimal_crf_and_skip(
 
     # cheapest CRF (largest size) of the search range as the pessimistic bound
     factor = estimate_size_factor(
-        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset
+        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset, crop=crop
     )
     if factor >= 1.0:
         log(
@@ -574,6 +757,7 @@ def find_optimal_crf_and_skip(
         sample_seconds=sample_seconds,
         encoder=encoder,
         encoder_preset=encoder_preset,
+        crop=crop,
     )
     return chosen, achieved, probes, False
 
@@ -587,11 +771,13 @@ def encode_with_quality(
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
     encoder_preset: str = "medium",
+    remove_bars: bool = False,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
     Short samples of the movie are probed first (bisect search), then the
-    whole movie is encoded once with the winning CRF.
+    whole movie is encoded once with the winning CRF. With remove_bars,
+    stable baked-in black bars (letterbox) are detected and cropped away.
 
     Args:
         input_file (Path): The file to re-encode.
@@ -602,6 +788,8 @@ def encode_with_quality(
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        remove_bars (bool): Detect and crop stable black bars (opt-in, the
+            crop is irreversible).
 
     Returns:
         QualityResult: The result of the encode.
@@ -613,6 +801,19 @@ def encode_with_quality(
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
+    duration = probe_duration_seconds(input_file)
+    if duration is not None and duration < MIN_ENCODE_SECONDS:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"skipped: duration {duration:.0f}s is below the "
+                f"{MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)"
+            ),
+        )
+
     handbrake = find_handbrake()
     if handbrake is None:
         raise RuntimeError(
@@ -622,6 +823,12 @@ def encode_with_quality(
 
     workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
     try:
+        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+        if crop is not None:
+            log(
+                f"Removing stable black bars of '{input_file.name}': "
+                f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
+            )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         crf, achieved, probes, skip = find_optimal_crf_and_skip(
             input_file,
@@ -633,6 +840,7 @@ def encode_with_quality(
             sample_seconds=sample_seconds,
             encoder=encoder,
             encoder_preset=encoder_preset,
+            crop=crop,
         )
         if skip:
             return QualityResult(
@@ -648,7 +856,7 @@ def encode_with_quality(
         log(f"Chosen CRF {crf} (VMAF {achieved})")
 
         command = build_encode_command(
-            handbrake, input_file, output_file, crf, encoder, encoder_preset
+            handbrake, input_file, output_file, crf, encoder, encoder_preset, crop=crop
         )
         code, err = _run(command)
         if code != 0:

@@ -486,6 +486,41 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(encode.MIN_ENCODE_SECONDS, 300.0)
         # the guard lives in the encode path => importable constant
 
+    def test_parse_crop_line(self):
+        text = "[Parsed_cropdetect] crop=1920:800:0:140\n[Parsed_cropdetect] crop=1920:796:0:142\n"
+        self.assertEqual(quality.parse_crop_line(text), (1920, 796, 0, 142))
+        self.assertIsNone(quality.parse_crop_line("nothing here"))
+
+    def test_intersect_crop_rects(self):
+        frame = (1920, 1080)
+        # identical rects => those bars
+        rects = [(1920, 800, 0, 140), (1920, 800, 0, 140)]
+        bars = quality.intersect_crop_rects(rects, frame)
+        self.assertEqual(bars, (140, 140, 0, 0))
+        # one sample with smaller/different bars => conservative intersection
+        # (the picture area present in ALL samples is kept: y in [140, 940])
+        smaller = [(1920, 800, 0, 140), (1920, 900, 0, 90)]
+        self.assertEqual(quality.intersect_crop_rects(smaller, frame), (140, 140, 0, 0))
+        # one sample showing side bars only => top/bottom bars vanish
+        sides = [(1920, 1080, 0, 0), (1800, 1080, 60, 0)]
+        self.assertEqual(quality.intersect_crop_rects(sides, frame), (0, 0, 60, 60))
+        # noise-sized bars (below 2% of the dimension) => None
+        tiny = [(1920, 1060, 0, 10), (1920, 1060, 0, 10)]
+        self.assertIsNone(quality.intersect_crop_rects(tiny, frame))
+        # empty input
+        self.assertIsNone(quality.intersect_crop_rects([], frame))
+
+    def test_build_encode_command_crop(self):
+        command = quality.build_encode_command(
+            "hb.exe", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium", crop=(140, 140, 0, 0)
+        )
+        self.assertEqual(command[command.index("--crop") + 1], "140:140:0:0")
+        # no crop => explicit 0:0:0:0 (auto-crop would break VMAF geometry)
+        plain = quality.build_encode_command(
+            "hb.exe", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
+        )
+        self.assertEqual(plain[plain.index("--crop") + 1], "0:0:0:0")
+
 
 if __name__ == "__main__":
     unittest.main()

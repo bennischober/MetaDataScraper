@@ -587,6 +587,14 @@ def encode(
         max=100.0,
         help="VMAF quality floor for --quality mode.",
     ),
+    remove_bars: bool = typer.Option(
+        False,
+        "--remove-bars",
+        help=(
+            "Quality mode: detect stable baked-in black bars (letterbox) and "
+            "crop them away (irreversible, opt-in)."
+        ),
+    ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
@@ -598,14 +606,22 @@ def encode(
     try:
         _, movies, _ = scan_movies(path, config, connection=connection)
         _record_encodes(
-            connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf
+            connection,
+            movies,
+            output_dir,
+            config,
+            dry_run,
+            overwrite,
+            quality,
+            target_vmaf,
+            remove_bars,
         )
     finally:
         connection.close()
 
 
 def _record_encodes(
-    connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf
+    connection, movies, output_dir, config, dry_run, overwrite, quality, target_vmaf, remove_bars
 ):
     """Runs the encoding and records the results in the database.
 
@@ -618,6 +634,7 @@ def _record_encodes(
         overwrite (bool): Whether existing output files may be replaced.
         quality (bool): Use VMAF-driven quality mode.
         target_vmaf (float): VMAF quality floor for quality mode.
+        remove_bars (bool): Crop stable baked-in black bars (quality mode).
     """
     from metadata_scrapper.encode import encode_movies
     from metadata_scrapper.quality import encode_with_quality
@@ -641,6 +658,7 @@ def _record_encodes(
                     output_dir / movie.name,
                     target_vmaf=target_vmaf,
                     encoder=config.handbrake_encoder,
+                    remove_bars=remove_bars,
                 )
                 if result.success:
                     saved = result.saved_percent
