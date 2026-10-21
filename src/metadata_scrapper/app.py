@@ -142,6 +142,38 @@ def get_state() -> AppState:
     return state
 
 
+@app.get("/")
+def index():
+    """Serves the built web UI.
+
+    Returns:
+        FileResponse: The UI's index.html (or a hint when not built).
+    """
+    index_path = Path(__file__).parent / "ui" / "dist" / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="UI not built. Run: npm install && npm run build in src/metadata_scrapper/ui",
+        )
+    return FileResponse(index_path)
+
+
+@app.get("/assets/{asset_path:path}")
+def ui_asset(asset_path: str):
+    """Serves the built UI's static assets.
+
+    Args:
+        asset_path (str): The asset file path within the build output.
+
+    Returns:
+        FileResponse: The asset file.
+    """
+    asset = Path(__file__).parent / "ui" / "dist" / "assets" / asset_path
+    if not asset.is_file():
+        raise HTTPException(status_code=404, detail="asset not found")
+    return FileResponse(asset)
+
+
 @app.get("/api/status")
 def status():
     """Returns the app status: queue depth, running job, watcher state.

@@ -1,0 +1,101 @@
+/*
+ * Zone Record design tokens — the locked visual world of the dashboard.
+ *
+ * A darkroom printer's exposure record: panels sit on a backlit 11-step
+ * zone ramp, state is density (solid = done, hatched = in progress, empty
+ * = untouched), quantities are tabular mono, legends are tracked condensed
+ * caps. One dichroic magenta for annotations; state colors ride on top
+ * only where they carry meaning.
+ */
+
+:root {
+  /* ── the zone ramp (11 steps, backlit neutral scale) ── */
+  --zone-0: #0c0d0f;
+  --zone-1: #16181c;
+  --zone-2: #22252b;
+  --zone-3: #30343b;
+  --zone-4: #41464f;
+  --zone-5: #565c66;
+  --zone-6: #6f7680;
+  --zone-7: #8b939e;
+  --zone-8: #aab2bc;
+  --zone-9: #ccd3db;
+  --zone-10: #eef1f4;
+
+  /* ── surfaces ── */
+  --ground: #14161a;            /* the page ground (zone 1-2) */
+  --panel: #17191d;             /* record sheets */
+  --panel-active: #1a1d22;      /* the sheet under work */
+  --seam: #2a2e34;              /* hairline seams */
+  --row-line: #22252b;          /* inner table rules */
+
+  /* ── ink ── */
+  --ink: #e8eaed;               /* primary text (paper white) */
+  --ink-dim: #8b929c;           /* secondary text */
+  --ink-faint: #5c646e;         /* disabled/ghost */
+
+  /* ── annotation (the one dichroic voice) ── */
+  --magenta: #c542e8;
+
+  /* ── state colors (meaning only) ── */
+  --ok: #3fb950;                /* encoded / measured OK */
+  --warn: #d29922;              /* skipped / degraded */
+  --bad: #f85149;               /* failed */
+
+  /* ── type ── */
+  --font-ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, 'Cascadia Mono', 'SF Mono', ui-monospace, monospace;
+  --font-legend: var(--font-ui);
+
+  --fs-data: 12px;              /* tabular data */
+  --fs-legend: 10px;            /* tracked caps legends */
+  --fs-body: 13px;              /* general UI text */
+  --fs-title: 15px;             /* section titles */
+
+  --track-legend: 1.5px;        /* legend letter-spacing */
+
+  /* ── density hatch patterns (state as density) ── */
+  --hatch-work: repeating-linear-gradient(
+    45deg, #2c313a 0 4px, transparent 4px 8px);
+  --hatch-progress: repeating-linear-gradient(
+    45deg, rgba(63, 185, 80, 0.27) 0 4px, transparent 4px 8px);
+  --hatch-skip: repeating-linear-gradient(
+    90deg, rgba(210, 153, 34, 0.18) 0 6px, transparent 6px 12px);
+}
+
+/* ── shared text voices ── */
+.legend {
+  font-size: var(--fs-legend);
+  letter-spacing: var(--track-legend);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-data);
+}
+
+/* ── density state chips (hatch, not pill) ── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--seam);
+  border-radius: 3px;
+  font-size: var(--fs-legend);
+  letter-spacing: var(--track-legend);
+  text-transform: uppercase;
+}
+.chip .swatch {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--seam);
+}
+.chip.done .swatch { background: var(--ok); }
+.chip.progress .swatch { background: var(--hatch-progress); }
+.chip.skip .swatch { background: var(--hatch-skip); }
+.chip.untouched .swatch { background: transparent; }
+.chip.failed .swatch { background: var(--bad); }
