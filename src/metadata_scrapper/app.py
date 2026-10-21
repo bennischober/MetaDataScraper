@@ -64,8 +64,13 @@ def validate_path(path_str: str, what: str = "path") -> Path:
         raise HTTPException(status_code=400, detail=f"invalid {what}: {e}") from e
 
     for root in _allowed_roots:
-        if path == root or root in path.parents:
-            return path
+        # containment proof via relative_to: any '..' escape or drive change
+        # makes the path not a relative child of the root
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        return path
     raise HTTPException(
         status_code=403,
         detail=f"{what} is outside the allowed roots: {_allowed_roots}",
@@ -192,13 +197,24 @@ def _ui_dist() -> Path:
 def ui_asset(asset_path: str):
     """Serves the built UI's static assets.
 
+    The asset path is contained to the build output: traversal attempts
+    ('..', absolute paths, drive letters) resolve outside dist/ and are
+    rejected.
+
     Args:
         asset_path (str): The asset file path within the build output.
 
     Returns:
         FileResponse: The asset file.
     """
-    asset = _ui_dist() / "assets" / asset_path
+    dist = _ui_dist().resolve()
+    # the URL prefixes /assets/ but the files live in dist/assets/
+    asset = (dist / "assets" / asset_path).resolve()
+    try:
+        asset.relative_to(dist)
+    except ValueError as e:
+        # the path escapes the build output => never serve it
+        raise HTTPException(status_code=404, detail="asset not found") from e
     if not asset.is_file():
         raise HTTPException(status_code=404, detail="asset not found")
     return FileResponse(asset)
@@ -354,16 +370,24 @@ def library():
 def report_page():
     """Serves the generated HTML report (regenerating it first).
 
+    The report path is contained to the database folder (an app-controlled
+    location, not user-supplied per request).
+
     Returns:
         FileResponse: The report file.
     """
     s = get_state()
-    report_path = s.db_file.parent / "report.html"
+    report_dir = s.db_file.resolve().parent
+    report_path = report_dir / "report.html"
     try:
         generate_report(s.db_file, report_path)
     except Exception as e:
         log_error(f"report generation failed: {e}")
         raise HTTPException(status_code=500, detail="report generation failed") from e
+    try:
+        report_path.resolve().relative_to(report_dir)
+    except ValueError as e:  # pragma: no cover - cannot happen by construction
+        raise HTTPException(status_code=500, detail="report path invalid") from e
     return FileResponse(report_path, media_type="text/html")
 
 

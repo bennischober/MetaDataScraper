@@ -1051,6 +1051,52 @@ class TestApiPathValidation(unittest.TestCase):
             validate_path("movies")
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_validate_path_accepts_root_itself_and_children(self):
+        import tempfile
+
+        from metadata_scrapper.app import allow_roots, validate_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            allow_roots([root])
+            # the root itself and direct children are allowed
+            self.assertEqual(validate_path(str(root)), root)
+            self.assertEqual(validate_path(str(root / "sub")), root / "sub")
+            # '..' escaping the root is rejected
+            from fastapi import HTTPException
+
+            with self.assertRaises(HTTPException) as ctx:
+                validate_path(str(root / ".." / "elsewhere"))
+            self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_ui_asset_containment(self):
+        import tempfile
+
+        from fastapi.testclient import TestClient
+
+        import metadata_scrapper.app as app_module
+        from metadata_scrapper.app import AppState
+        from metadata_scrapper.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app_module.state = AppState(Path(tmp) / "test.db")
+            try:
+                client = TestClient(fast_app)
+                # traversal attempts are rejected with 404 (not served)
+                response = client.get("/assets/../metadata.db")
+                self.assertEqual(response.status_code, 404)
+                response = client.get("/assets/..%2F..%2Fpyproject.toml")
+                self.assertEqual(response.status_code, 404)
+                # a real asset inside dist is served (if the UI is built)
+                dist = Path(__file__).parent.parent / "ui" / "dist" / "assets"
+                if dist.is_dir() and any(dist.iterdir()):
+                    asset_name = next(dist.iterdir()).name
+                    ok = client.get(f"/assets/{asset_name}")
+                    self.assertEqual(ok.status_code, 200)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
 
 if __name__ == "__main__":
     unittest.main()
