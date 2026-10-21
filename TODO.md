@@ -12,19 +12,16 @@
 - [ ] Job detail view in the UI (click a history row -> full payload/result)
 - [ ] Per-movie actions: encode/plan a single movie from its detail drawer
 
-### HDR support (blocked on test material)
-- [ ] Validate quality mode with real HDR content (HDR10 / Dolby Vision) —
-      waiting for the external drive with HDR movies to come back
-- [ ] The standard VMAF model (`vmaf_v0.6.1`) is trained on SDR content and
-      produces misleading scores on HDR — options:
-      - tone-map HDR sources to SDR before measurement (ffmpeg `tonemap`
-        filter) and measure on the tone-mapped picture
-      - or switch to a HDR-aware metric (e.g. CAMBI for banding as a
-        complement) for HDR titles
-- [ ] Ensure HandBrake keeps HDR metadata (`--all-audio` analog for master
-      display flags / color tags) when re-encoding HDR content
-- [ ] `scan` already detects HDR via `codec.hdr` config values; the encode
-      path should refuse (or warn) for HDR content until this is done
+### HDR support (partially unblocked: real HDR content exists)
+- [x] Refuse HDR content in quality mode until proper support exists
+      (`hdr unsupported` skip reason, shipped 2026-10-21)
+- [ ] Validate the refusal end-to-end with The Mandalorian (G:\Serien) —
+      quality mode/plan on that file must skip, scan must keep detecting hdr
+- [ ] Tone-map HDR sources to SDR before VMAF measurement (ffmpeg `tonemap`
+      filter) and measure on the tone-mapped picture
+- [ ] Ensure HandBrake keeps HDR metadata (master display flags / color
+      tags) when re-encoding HDR content
+- [ ] Then: allow HDR encodes with the tone-mapped measurement path
 
 ### Other known limitations
 - [ ] VMAF scores are not comparable across libvmaf versions (documented in
