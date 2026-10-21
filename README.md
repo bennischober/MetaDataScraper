@@ -167,7 +167,9 @@ Runs the same probing pipeline as a quality encode (samples, CRF search, bar
 detection) and prints the predicted outcome per movie — encode or skip, with
 CRF, VMAF and an estimated size — plus the estimated total savings. Use it to
 decide whether (and with which options) a real encode run is worth it. The
-size estimate comes from the short probe samples, so treat it as a ballpark.
+size estimate comes from the short probe samples, so treat it as a ballpark;
+the probing predicts the decision, the encode measures it — the chosen CRF
+can differ by ±1 between runs.
 
 ### `report` — the library as one page
 
@@ -176,23 +178,44 @@ uv run metadata-scrapper report --output report.html
 ```
 
 Generates a self-contained HTML page (dark theme, no external assets) from
-the database: summary cards (movies, encoded, skipped, disk space saved) and
-a per-movie table with decision, sizes, CRF and VMAF. Read-only — regenerate
-any time to see the current state.
+the database: summary cards, a per-category breakdown and a per-movie table
+with decision, sizes, CRF and VMAF. Read-only — regenerate any time.
 
-### `watch` — automatic encoding on arrival
+### `app` — the resident application
+
+```bash
+uv run metadata-scrapper app            # http://127.0.0.1:8420
+```
+
+Starts the resident application: a local server owning the job queue and the
+watch loop, plus the **web dashboard** (open the printed URL). Terminal and
+browser are just two consumers of the same engine and database:
+
+- the dashboard shows live job status (running/queued with progress and
+  elapsed time), the scanned library with decision chips, plan/encode results
+  and job history
+- jobs are enqueued from the UI (multi-directory: add several movie folders)
+  or via the API (`POST /api/jobs`)
+- the watch loop can be started/stopped from the UI or
+  `POST /api/watch/start|stop`
+- the configuration (`config.json`) is editable in the UI's settings dialog
+- jobs survive restarts; jobs interrupted by a restart are marked as failed
+
+The server binds to localhost only — there is no authentication, so do not
+expose it to the network. Stop with Ctrl+C; the running job's state is
+recovered on the next start.
+
+### `watch` — one-shot folder watcher
 
 ```bash
 uv run metadata-scrapper watch 'D:\Downloads' 'D:\Encoded' --remove-bars
 ```
 
-Polls the inbox folder for new movie files and encodes them automatically:
-files are waited on until they are stable (size unchanged + minimum age, so
-half-finished downloads are never touched), the same skip logic as the
-`encode` command applies, and **sources stay untouched** — outputs land in
-the output directory, so you stay in the loop for swapping library files.
-Single-instance lock, clean shutdown with Ctrl+C (the running encode
-finishes first).
+The standalone variant of the app's watch loop: polls the inbox folder for
+new movie files, waits until they are stable (download/copy finished), applies
+the same skip logic and encodes them — **sources stay untouched**. Use the
+`app` command instead when you want this to run continuously alongside the
+dashboard.
 
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
@@ -225,7 +248,19 @@ Optional [config.json](config.json) (defaults are used when missing):
 ## Development
 
 A [devcontainer](.devcontainer/devcontainer.json) is included (Ubuntu with uv,
-ffmpeg and handbrake-cli) — open in VS Code and reopen in the container.
+ffmpeg and handbrake-cli) - open in VS Code and reopen in the container.
+
+### Web UI (ui/)
+The dashboard is a Svelte 5 + Vite + TypeScript app in `ui/`. Node.js is only
+needed for *developing or rebuilding* the UI - using the tool does not require
+it:
+```bash
+cd ui
+npm install        # once
+npm run dev        # dev server with hot reload (API proxied to :8420)
+npm run build      # production build to ui/dist (served by the app)
+npm run check      # svelte-check (type checking)
+```
 
 ```bash
 uv run pytest          # tests (with coverage report)
