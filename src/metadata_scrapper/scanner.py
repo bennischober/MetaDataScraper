@@ -99,7 +99,9 @@ def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) 
                     continue  # inside the excluded directory
                 except ValueError:
                     pass
-            movies.append(candidate)
+            # absolute paths: the db cache is keyed by absolute path, so a
+            # relative scan root must not produce relative cache misses
+            movies.append(candidate.resolve())
     # on windows glob is case insensitive => the same file is found twice
     return list(dict.fromkeys(movies))
 
