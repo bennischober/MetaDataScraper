@@ -15,6 +15,13 @@ export interface Job {
   finished_at?: string | null
 }
 
+/** Extract the movie folders a job operated on (multi-directory aware). */
+export function jobPaths(job: Job): string[] {
+  const payload = job.payload as { paths?: string[]; path?: string }
+  if (payload.paths?.length) return payload.paths
+  return payload.path ? [payload.path] : []
+}
+
 export interface EncodeInfo {
   preset: string | null
   crf: number | null
@@ -73,6 +80,7 @@ export const api = {
   enqueue: (body: {
     kind: JobKind
     path: string
+    paths?: string[]
     output_dir?: string
     quality?: boolean
     target_vmaf?: number

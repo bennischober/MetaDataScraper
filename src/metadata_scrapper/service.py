@@ -159,7 +159,11 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
 
 
 def record_fixed_results(connection, results: list, config) -> list[EncodeOutcome]:
-    """Persists the successful encodes of a fixed-preset run.
+    """Persists the results of a fixed-preset run.
+
+    An encode that did NOT shrink the file is recorded as a skip ('no size
+    gain') instead of a success: a pointless encode should never wear a
+    green chip in the UI.
 
     Args:
         connection: The database connection.
@@ -167,19 +171,26 @@ def record_fixed_results(connection, results: list, config) -> list[EncodeOutcom
         config (Conf): The config settings.
 
     Returns:
-        list[EncodeOutcome]: One outcome per recorded (successful) encode.
+        list[EncodeOutcome]: One outcome per result.
     """
     outcomes = []
     for encode_result in results:
-        if not encode_result.success:
+        if encode_result.success and encode_result.output_size >= encode_result.input_size:
+            save_skip(connection, encode_result.input, "no size gain")
+            outcomes.append(EncodeOutcome(movie=str(encode_result.input), skipped=True))
             continue
-        save_encode(
-            connection,
-            encode_result.input,
-            config.handbrake_preset,
-            config.handbrake_encoder,
-            encode_result.input_size,
-            encode_result.output_size,
-        )
-        outcomes.append(EncodeOutcome(movie=str(encode_result.input), encoded=True))
+        if encode_result.success:
+            save_encode(
+                connection,
+                encode_result.input,
+                config.handbrake_preset,
+                config.handbrake_encoder,
+                encode_result.input_size,
+                encode_result.output_size,
+            )
+            outcomes.append(EncodeOutcome(movie=str(encode_result.input), encoded=True))
+        else:
+            outcomes.append(
+                EncodeOutcome(movie=str(encode_result.input), error=encode_result.error)
+            )
     return outcomes

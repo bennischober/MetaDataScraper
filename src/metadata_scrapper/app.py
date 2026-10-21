@@ -114,6 +114,8 @@ class JobRequest(BaseModel):
     Attributes:
         kind (JobKind): What to do (scan/plan/encode).
         path (str): The movie folder the job operates on.
+        paths (list[str] | None): Additional movie folders (multi-directory
+            support; merged with path).
         output_dir (str | None): Output directory (encode only).
         quality (bool): Use VMAF-driven quality mode (encode/plan).
         target_vmaf (float): The VMAF quality floor.
@@ -126,6 +128,7 @@ class JobRequest(BaseModel):
 
     kind: JobKind
     path: str
+    paths: list[str] | None = None
     output_dir: str | None = None
     quality: bool = False
     target_vmaf: float = Field(95.0, ge=1.0, le=100.0)
@@ -450,7 +453,22 @@ def create_job(request: JobRequest):
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
 
-    payload: dict = {"path": str(path)}
+    # multi-directory: merge the primary path with any additional paths
+    all_paths = [path]
+    for extra in request.paths or []:
+        extra_path = validate_path(extra, "paths")
+        if not extra_path.exists():
+            raise HTTPException(status_code=400, detail=f"path does not exist: {extra_path}")
+        all_paths.append(extra_path)
+    # deduplicate, keep order
+    seen: set[Path] = set()
+    unique_paths: list[Path] = []
+    for p in all_paths:
+        if p not in seen:
+            seen.add(p)
+            unique_paths.append(p)
+
+    payload: dict = {"paths": [str(p) for p in unique_paths]}
     if request.kind == JobKind.ENCODE:
         if not request.output_dir:
             raise HTTPException(status_code=400, detail="encode requires output_dir")

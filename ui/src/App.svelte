@@ -16,16 +16,34 @@
   let showSettings = $state(false)
 
   // persisted defaults (recognition over recall)
-  let scanPath = $state(localStorage.getItem('ms.path') ?? 'D:\\Movies')
+  let scanPaths = $state<string[]>(
+    JSON.parse(localStorage.getItem('ms.paths') ?? '["D:\\\\Movies"]')
+  )
+  let newPath = $state('')
   let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
   let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 95))
   let removeBars = $state(localStorage.getItem('ms.bars') === '1')
 
   function persist() {
-    localStorage.setItem('ms.path', scanPath)
+    localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
     localStorage.setItem('ms.out', outputDir)
     localStorage.setItem('ms.vmaf', String(targetVmaf))
     localStorage.setItem('ms.bars', removeBars ? '1' : '0')
+  }
+
+  function addPath() {
+    const value = newPath.trim()
+    if (!value) return
+    if (!scanPaths.some((p) => p.toLowerCase() === value.toLowerCase())) {
+      scanPaths = [...scanPaths, value]
+      persist()
+    }
+    newPath = ''
+  }
+
+  function removePath(path: string) {
+    scanPaths = scanPaths.filter((p) => p !== path)
+    persist()
   }
 
   // derived plan/encode results of the latest finished jobs
@@ -74,8 +92,8 @@
   }
 
   async function enqueue(kind: 'scan' | 'plan' | 'encode') {
-    if (!scanPath.trim()) {
-      error = 'movie folder is required'
+    if (scanPaths.length === 0) {
+      error = 'at least one movie folder is required'
       return
     }
     busy = true
@@ -83,7 +101,8 @@
     try {
       await api.enqueue({
         kind,
-        path: scanPath,
+        path: scanPaths[0],
+        paths: scanPaths.slice(1),
         output_dir: kind === 'encode' ? outputDir || undefined : undefined,
         quality: kind !== 'scan',
         target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
@@ -110,7 +129,7 @@
       if (status.watcher === 'running') {
         await api.watch('stop')
       } else {
-        await api.watch('start', scanPath, outputDir)
+        await api.watch('start', scanPaths[0], outputDir)
       }
       await refresh()
     } catch (e) {
@@ -171,12 +190,22 @@
 
     <!-- actions -->
     <div class="actions">
-      <input
-        class="mono"
-        bind:value={scanPath}
-        placeholder="movie folder"
-        aria-label="Movie folder path"
-      />
+      <div class="paths">
+        {#each scanPaths as path (path)}
+          <span class="path-chip mono">
+            {path}
+            <button class="path-x" onclick={() => removePath(path)} aria-label="Remove {path}">x</button>
+          </span>
+        {/each}
+        <input
+          class="mono"
+          bind:value={newPath}
+          placeholder="add folder + Enter"
+          aria-label="Add movie folder"
+          onkeydown={(e) => e.key === 'Enter' && addPath()}
+          onblur={addPath}
+        />
+      </div>
       <input
         class="mono"
         bind:value={outputDir}
@@ -373,6 +402,42 @@
     gap: 10px;
     align-items: center;
     flex-wrap: wrap;
+  }
+  .paths {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .path-chip {
+    background: var(--panel-active);
+    border: 1px solid var(--seam);
+    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-data);
+  }
+  .path-x {
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+  }
+  .path-x:hover { color: var(--bad); }
+  .paths input {
+    background: transparent;
+    border: 1px dashed var(--seam);
+    color: var(--ink);
+    padding: 4px 10px;
+    min-width: 200px;
+    font-size: var(--fs-data);
   }
   .actions input:not([type='checkbox']):not([type='number']) {
     background: var(--panel);

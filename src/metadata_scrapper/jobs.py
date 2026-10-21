@@ -316,6 +316,24 @@ class JobQueue:
         return _row_to_job(row) if row is not None else None
 
 
+def payload_paths(payload: dict) -> list[Path]:
+    """Resolves the job payload's movie folders (multi-directory aware).
+
+    Supports the current 'paths' list form and the legacy single 'path'
+    string form.
+
+    Args:
+        payload (dict): The job payload.
+
+    Returns:
+        list[Path]: The movie folders.
+    """
+    paths = payload.get("paths")
+    if paths:
+        return [Path(p) for p in paths]
+    return [Path(payload["path"])]
+
+
 def execute_scan(
     job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
 ) -> dict:
@@ -340,15 +358,23 @@ def execute_scan(
         progress({"stage": "scan", "detail": "scanning library"})
 
     config = load_config()
-    by_category, movies, errors = scan_movies(
-        Path(payload["path"]),
-        config,
-        workers=payload.get("workers"),
-        connection=connection,
-        rescan=payload.get("rescan", False),
-        compute_hash=payload.get("hash", False),
-        exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
-    )
+    movies: list = []
+    errors: list = []
+    by_category: dict = {}
+    for path in payload_paths(payload):
+        part_by_cat, part_movies, part_errors = scan_movies(
+            path,
+            config,
+            workers=payload.get("workers"),
+            connection=connection,
+            rescan=payload.get("rescan", False),
+            compute_hash=payload.get("hash", False),
+            exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
+        )
+        movies.extend(part_movies)
+        errors.extend(part_errors)
+        for cat, mvs in part_by_cat.items():
+            by_category.setdefault(cat, []).extend(mvs)
     return {
         "movies": len(movies),
         "categories": len(by_category),
@@ -377,7 +403,10 @@ def execute_plan(
 
     payload = job.payload
     config = load_config()
-    _, movies, _ = scan_movies(Path(payload["path"]), config, connection=connection)
+    movies: list = []
+    for path in payload_paths(payload):
+        _, part_movies, _ = scan_movies(path, config, connection=connection)
+        movies.extend(part_movies)
 
     plans: list[dict] = []
     total = len(movies)
@@ -447,9 +476,10 @@ def execute_encode(
     payload = job.payload
     config = load_config()
     output_dir = Path(payload["output_dir"])
-    _, movies, _ = scan_movies(
-        Path(payload["path"]), config, connection=connection, exclude=output_dir
-    )
+    movies: list = []
+    for path in payload_paths(payload):
+        _, part_movies, _ = scan_movies(path, config, connection=connection, exclude=output_dir)
+        movies.extend(part_movies)
 
     outcomes: list[dict] = []
     total = len(movies)
