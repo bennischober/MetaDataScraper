@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -53,11 +53,14 @@ CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
 
 # migration v1 -> v2: record quality-mode decisions (chosen CRF, measured
 # VMAF) and skipped movies so subsequent runs do not re-probe them
+# migration v2 -> v3: stored paths must be absolute (relative paths created
+# phantom duplicates when runs happened from different working directories)
 MIGRATIONS = {
     2: [
         "ALTER TABLE encodes ADD COLUMN chosen_crf INTEGER",
         "ALTER TABLE encodes ADD COLUMN achieved_vmaf REAL",
     ],
+    3: ["__absolute_paths__"],  # handled specially in _migrate (needs Path)
 }
 
 
@@ -74,7 +77,23 @@ def _migrate(connection: sqlite3.Connection):
     while current < SCHEMA_VERSION:
         current += 1
         for statement in MIGRATIONS.get(current, []):
-            connection.execute(statement)
+            if statement == "__absolute_paths__":
+                # rewrite relative file paths to absolute ones (rows whose
+                # path no longer exists relative to the cwd are dropped)
+                rows = connection.execute("SELECT id, path FROM files").fetchall()
+                for row in rows:
+                    path = Path(row["path"])
+                    if not path.is_absolute():
+                        absolute = path.resolve()
+                        if absolute.is_file():
+                            connection.execute(
+                                "UPDATE files SET path = ? WHERE id = ?",
+                                (str(absolute), row["id"]),
+                            )
+                        else:
+                            connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
+            else:
+                connection.execute(statement)
         connection.execute("DELETE FROM schema_version")
         connection.execute("INSERT INTO schema_version (version) VALUES (?)", (current,))
     connection.commit()

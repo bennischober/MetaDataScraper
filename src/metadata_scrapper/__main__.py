@@ -125,7 +125,7 @@ def movie_record_from_data(filename: Path, data: dict) -> db.MovieRecord:
     """
     stat = filename.stat()
     return db.MovieRecord(
-        path=filename,
+        path=filename.resolve(),
         mtime=stat.st_mtime,
         size=stat.st_size,
         hash=data.get("hash"),
@@ -927,6 +927,7 @@ def _ensure_file_row(connection, movie: Path) -> int:
     Returns:
         int: The file id.
     """
+    movie = movie.resolve()
     file_row = db.get_file_by_path(connection, movie)
     if file_row is not None:
         return int(file_row["id"])

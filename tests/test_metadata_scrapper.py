@@ -276,7 +276,7 @@ class TestDb(unittest.TestCase):
 
             migrated = db.connect(db_path)
             version = migrated.execute("SELECT version FROM schema_version").fetchone()
-            self.assertEqual(version["version"], 2)
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
             # the quality columns exist and are usable
             columns = {
                 row["name"] for row in migrated.execute("PRAGMA table_info(encodes)").fetchall()
@@ -284,6 +284,60 @@ class TestDb(unittest.TestCase):
             self.assertIn("chosen_crf", columns)
             self.assertIn("achieved_vmaf", columns)
             migrated.close()
+
+    def test_migration_v2_to_v3_absolute_paths(self):
+        # v2 database with a relative path => migrated to absolute (or dropped)
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v2.db"
+            # create a real file so the relative path can resolve to it
+            existing = Path(tmp) / "movie.mkv"
+            existing.write_bytes(b"x")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                connection = sqlite3.connect(db_path)
+                connection.executescript(
+                    """
+                    CREATE TABLE schema_version (version INTEGER NOT NULL);
+                    INSERT INTO schema_version (version) VALUES (2);
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        path TEXT NOT NULL UNIQUE,
+                        mtime REAL NOT NULL,
+                        size INTEGER NOT NULL,
+                        name TEXT NOT NULL,
+                        category TEXT NOT NULL
+                    );
+                    CREATE TABLE encodes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                        preset TEXT NOT NULL,
+                        encoder TEXT NOT NULL,
+                        input_size INTEGER NOT NULL,
+                        output_size INTEGER NOT NULL,
+                        saved_percent REAL NOT NULL
+                    );
+                    INSERT INTO files (path, mtime, size, name, category) VALUES
+                        ('movie.mkv', 1.0, 1, 'movie', 'Cat'),
+                        ('deleted.mkv', 1.0, 1, 'gone', 'Cat');
+                    """
+                )
+                connection.commit()
+                connection.close()
+
+                migrated = db.connect(db_path)
+                version = migrated.execute("SELECT version FROM schema_version").fetchone()
+                self.assertEqual(version["version"], 3)
+                paths = {r["path"] for r in migrated.execute("SELECT path FROM files")}
+                # existing file => absolute; deleted file => dropped
+                self.assertEqual(len(paths), 1)
+                self.assertIn(str(existing), paths)
+                migrated.close()
+            finally:
+                os.chdir(cwd)
 
     def test_add_encode_with_quality_fields(self):
         file_id = db.upsert_file(self.connection, self._record("a.mkv"))
