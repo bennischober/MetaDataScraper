@@ -2,6 +2,16 @@
 
 ## Known limitations / planned work
 
+### UI (next round)
+- [ ] Design-rethink round: the user may want new prototypes for the dashboard
+      (the Zone Record direction is locked, but a re-shape with new comps is
+      possible at any time)
+- [ ] Live job progress for encodes: the encode engine reports stage +
+      per-movie fractions; a within-encode percent (frames encoded) needs a
+      HandBrake progress parse or a size-based estimate
+- [ ] Job detail view in the UI (click a history row -> full payload/result)
+- [ ] Per-movie actions: encode/plan a single movie from its detail drawer
+
 ### HDR support (blocked on test material)
 - [ ] Validate quality mode with real HDR content (HDR10 / Dolby Vision) —
       waiting for the external drive with HDR movies to come back
