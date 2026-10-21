@@ -60,6 +60,46 @@
   const runningProgress = $derived(
     (runningJob?.result as { progress?: { movie?: string; percent?: number; done?: number; total?: number; detail?: string } } | null)?.progress ?? null
   )
+
+  // per-category bars: size + reclaimed per category (pure CSS, honest data)
+  interface CatBar {
+    name: string
+    titles: number
+    sizeGb: number
+    reclaimedGb: number
+  }
+  const catBars = $derived.by(() => {
+    const map = new Map<string, CatBar>()
+    for (const m of movies) {
+      const bar = map.get(m.category) ?? { name: m.category, titles: 0, sizeGb: 0, reclaimedGb: 0 }
+      bar.titles += 1
+      bar.sizeGb += (m.size ?? 0) / 1024 ** 3
+      if (m.encode?.saved_percent != null && m.encode.saved_percent > 0) {
+        bar.reclaimedGb += ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0)) / 1024 ** 3
+      }
+      map.set(m.category, bar)
+    }
+    return [...map.values()].sort((a, b) => b.sizeGb - a.sizeGb)
+  })
+  const maxCatSize = $derived(Math.max(...catBars.map((b) => b.sizeGb), 0.001))
+
+  // plan results of the latest finished plan job
+  interface PlanEntry {
+    movie: string
+    state: string
+    crf?: number | null
+    vmaf?: number | null
+    estimated_size?: number
+    saved_percent?: number
+    reason?: string
+    error?: string
+  }
+  const lastPlan = $derived(
+    history.find((j) => j.kind === 'plan' && j.state === 'done' && j.result)
+  )
+  const planEntries = $derived(
+    (lastPlan?.result as { plans?: PlanEntry[] } | null)?.plans ?? []
+  )
 </script>
 
 <div class="page page-in">
@@ -190,6 +230,56 @@
         <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
       </div>
     </section>
+
+    <!-- ══ per-category bars: where the bytes live ══ -->
+    <section class="panel wide">
+      <div class="panel-head">
+        <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
+        <button class="link legend" onclick={() => ongoto('library')}>LIBRARY →</button>
+      </div>
+      <div class="bars">
+        {#each catBars as bar (bar.name)}
+          <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
+            <span class="bar-name">{bar.name}</span>
+            <div class="bar-track">
+              <div class="bar-size" style="width: {(bar.sizeGb / maxCatSize) * 100}%"></div>
+              <div class="bar-reclaimed" style="width: {(bar.reclaimedGb / maxCatSize) * 100}%"></div>
+            </div>
+            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · −${bar.reclaimedGb.toFixed(1)}` : ''}</span>
+          </div>
+        {:else}
+          <div class="dim pad">no titles scanned yet</div>
+        {/each}
+      </div>
+    </section>
+
+    <!-- ══ plan results: the prediction, visible ══ -->
+    {#if planEntries.length > 0}
+      <section class="panel wide">
+        <div class="panel-head">
+          <span class="legend">LAST PLAN — RUN #{lastPlan?.id}</span>
+          <span class="mono dim">
+            {planEntries.filter((p) => p.state === 'encode').length} to encode ·
+            {planEntries.filter((p) => p.state === 'skip').length} skipped
+          </span>
+        </div>
+        <div class="plan-list">
+          {#each planEntries.slice(0, 8) as entry (entry.movie)}
+            <div class="plan-row mono">
+              <span class="p-name">{entry.movie}</span>
+              <span class="chip {entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
+                <span class="swatch"></span>{entry.state.toUpperCase()}
+              </span>
+              <span class="p-num">{entry.crf ?? '—'}</span>
+              <span class="p-num">{entry.vmaf?.toFixed(1) ?? '—'}</span>
+              <span class="p-num">{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}</span>
+              <span class="p-num">{entry.saved_percent != null ? `${entry.saved_percent.toFixed(0)}%` : '—'}</span>
+              <span class="dim p-reason">{entry.reason ?? entry.error ?? ''}</span>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
   </div>
 </div>
 
@@ -273,6 +363,64 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: 10px;
+  }
+  .panel.wide { grid-column: 1 / -1; }
+
+  /* category bars */
+  .bars { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 14px; }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 170px;
+    gap: 10px;
+    align-items: center;
+  }
+  .bar-name {
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bar-track {
+    position: relative;
+    height: 10px;
+    background: var(--ground);
+    border: 1px solid var(--row-line);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar-size {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--panel-raised);
+    border-right: 1px solid var(--ink-dim);
+  }
+  .bar-reclaimed {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: repeating-linear-gradient(45deg, var(--teal-glow) 0 3px, transparent 3px 6px);
+    box-shadow: inset -1px 0 0 var(--teal);
+  }
+  .bar-nums { font-size: 10px; text-align: right; white-space: nowrap; }
+
+  /* plan list */
+  .plan-list { display: flex; flex-direction: column; padding: 4px 14px 14px; }
+  .plan-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1.4fr) 110px 40px 50px 70px 50px 1fr;
+    gap: 10px;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--row-line);
+    font-size: 11px;
+  }
+  .plan-row:last-child { border-bottom: none; }
+  .p-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .p-num { text-align: right; }
+  .p-reason {
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .panel {
     border: 1px solid var(--seam);

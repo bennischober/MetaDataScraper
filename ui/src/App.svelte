@@ -15,7 +15,6 @@
   let history: Job[] = $state([])
   let duplicates: DuplicateGroup[] = $state([])
   let error = $state<string | null>(null)
-  let busy = $state(false)
   let page = $state<Page>('overview')
   let detailMovie = $state<Movie | null>(null)
 
@@ -109,13 +108,26 @@
     }
   }
 
+  // pending: global click-guard + per-kind queue guard (no job spam: a kind
+  // already queued/running disables its enqueue buttons)
+  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'dedupe' | null>(null)
+  const kindQueued = $derived(
+    (kind: 'scan' | 'plan' | 'encode' | 'dedupe') =>
+      history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
+  )
+
   async function enqueue(
-    kind: 'scan' | 'plan' | 'encode',
+    kind: 'scan' | 'plan' | 'encode' | 'dedupe',
     paths?: string[],
     confirmed = false
   ) {
+    if (pendingKind !== null) return
+    if (kindQueued(kind)) {
+      error = `${kind} is already queued — it runs next`
+      return
+    }
     const targets = paths ?? scanPaths
-    if (targets.length === 0) {
+    if (kind !== 'dedupe' && targets.length === 0) {
       error = paths ? 'select at least one movie' : 'at least one movie folder is required'
       return
     }
@@ -123,24 +135,28 @@
       confirmBars = true
       return
     }
-    busy = true
+    pendingKind = kind
     persist()
     confirmBars = false
     try {
-      await api.enqueue({
-        kind,
-        path: targets[0],
-        paths: targets.slice(1),
-        output_dir: kind === 'encode' ? outputDir || undefined : undefined,
-        quality: kind !== 'scan',
-        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
-        remove_bars: removeBars,
-      })
+      if (kind === 'dedupe') {
+        await api.enqueue({ kind })
+      } else {
+        await api.enqueue({
+          kind,
+          path: targets[0],
+          paths: targets.slice(1),
+          output_dir: kind === 'encode' ? outputDir || undefined : undefined,
+          quality: kind !== 'scan',
+          target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
+          remove_bars: removeBars,
+        })
+      }
       await refresh()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     } finally {
-      busy = false
+      pendingKind = null
     }
   }
 
@@ -173,7 +189,8 @@
 
   // per-movie actions (encode/plan a single title from its page)
   async function encodeOne(path: string) {
-    busy = true
+    if (pendingKind !== null) return
+    pendingKind = 'encode'
     try {
       await api.enqueue({
         kind: 'encode',
@@ -187,7 +204,7 @@
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     } finally {
-      busy = false
+      pendingKind = null
     }
   }
 
@@ -308,7 +325,8 @@
           {selectedPaths}
           {targetVmaf}
           {removeBars}
-          scanning={runningJobs.some((j) => j.kind === 'scan')}
+          scanning={kindQueued('scan')}
+          pending={pendingKind !== null}
           runningMovie={runningProgress?.movie ?? null}
           runningPercent={runningProgress?.percent ?? null}
           plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
@@ -330,7 +348,13 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'duplicates'}>
-        <DuplicatesPage {duplicates} onrefresh={refreshDuplicates} />
+        <DuplicatesPage
+          {duplicates}
+          analyzing={kindQueued('dedupe')}
+          pending={pendingKind !== null}
+          onanalyze={() => enqueue('dedupe')}
+          onrefresh={refreshDuplicates}
+        />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
         <JobsPage {history} oncancel={cancelJob} onretry={(j) => enqueue(j.kind)} />

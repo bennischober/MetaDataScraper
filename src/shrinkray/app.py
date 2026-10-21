@@ -131,7 +131,7 @@ class JobRequest(BaseModel):
     """
 
     kind: JobKind
-    path: str
+    path: str = ""
     paths: list[str] | None = None
     output_dir: str | None = None
     quality: bool = False
@@ -298,13 +298,46 @@ def duplicates():
 
     Grouping: byte-identical files (content hash) and same-title files
     (normalized name + duration tolerance). Read-only — resolving a group
-    is a manual, explicit user action.
+    is a manual, explicit user action. The rows are snapshotted under the
+    lock; the matching itself runs outside it (the fuzzy pass is O(n²) and
+    must not block the worker).
 
     Returns:
         list[dict]: The duplicate groups, best candidate first.
     """
+    import sqlite3
+
     s = get_state()
-    groups = s.with_lock(lambda c: find_duplicates(c))
+
+    def snapshot(c: sqlite3.Connection) -> list[sqlite3.Row]:
+        return c.execute(
+            """
+            SELECT path, name, category, size, duration_raw, codec, hash, width, height
+            FROM files ORDER BY size DESC
+            """
+        ).fetchall()
+
+    rows = s.with_lock(snapshot)
+
+    # match outside the lock, on a private connection to the same file
+    private = sqlite3.connect(s.db_file, check_same_thread=False)
+    private.row_factory = sqlite3.Row
+    try:
+        private.executescript(
+            """
+            CREATE TEMP TABLE files (
+                path TEXT PRIMARY KEY, name TEXT, category TEXT, size INTEGER,
+                duration_raw REAL, codec TEXT, hash TEXT, width INTEGER, height INTEGER
+            )
+            """
+        )
+        private.executemany(
+            "INSERT INTO temp.files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [tuple(r) for r in rows],
+        )
+        groups = find_duplicates(private)
+    finally:
+        private.close()
     return [g.to_dict() for g in groups]
 
 
@@ -482,12 +515,18 @@ def create_job(request: JobRequest):
         dict: The created job.
     """
     s = get_state()
-    path = validate_path(request.path, "path")
-    if not path.exists():
-        raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
+    # dedupe needs no paths (it analyzes the whole library)
+    if request.kind != JobKind.DEDUPE:
+        if not request.path:
+            raise HTTPException(status_code=400, detail="path is required for this job kind")
+        path = validate_path(request.path, "path")
+        if not path.exists():
+            raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
 
     # multi-directory: merge the primary path with any additional paths
-    all_paths = [path]
+    all_paths = []
+    if request.kind != JobKind.DEDUPE:
+        all_paths = [path]
     for extra in request.paths or []:
         extra_path = validate_path(extra, "paths")
         if not extra_path.exists():
@@ -502,7 +541,9 @@ def create_job(request: JobRequest):
             unique_paths.append(p)
 
     payload: dict = {"paths": [str(p) for p in unique_paths]}
-    if request.kind == JobKind.ENCODE:
+    if request.kind == JobKind.DEDUPE:
+        payload = {}
+    elif request.kind == JobKind.ENCODE:
         if not request.output_dir:
             raise HTTPException(status_code=400, detail="encode requires output_dir")
         payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))

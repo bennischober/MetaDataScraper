@@ -35,6 +35,7 @@ class JobKind(str, Enum):
     SCAN = "scan"
     PLAN = "plan"
     ENCODE = "encode"
+    DEDUPE = "dedupe"
 
 
 @dataclass
@@ -624,6 +625,34 @@ def execute_encode(
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 
+def execute_dedupe(
+    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+) -> dict:
+    """Executes a duplicate-analysis job.
+
+    Args:
+        job (Job): The job (payload: none required).
+        connection (sqlite3.Connection): The database connection.
+        cancel (threading.Event): Cooperative cancellation signal.
+        progress (callable | None): Callback progress(dict) for live updates.
+
+    Returns:
+        dict: The duplicate-analysis summary.
+    """
+    from shrinkray.dedupe import find_duplicates
+
+    if progress:
+        progress(
+            {"stage": "dedupe", "detail": "matching titles and hashes", "done": 0, "total": None}
+        )
+    groups = find_duplicates(connection)
+    return {
+        "groups": len(groups),
+        "wasted_bytes": sum(g.wasted_bytes for g in groups),
+        "cancelled": cancel.is_set(),
+    }
+
+
 class JobWorker:
     """The background worker executing jobs from the queue, one at a time.
 
@@ -694,6 +723,8 @@ class JobWorker:
                 result = execute_plan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.ENCODE:
                 result = execute_encode(job, self.connection, cancel, progress=progress)
+            elif job.kind == JobKind.DEDUPE:
+                result = execute_dedupe(job, self.connection, cancel, progress=progress)
             else:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return

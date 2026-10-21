@@ -18,7 +18,19 @@
     wasted_bytes: number
   }
 
-  let { duplicates = [], onrefresh }: { duplicates?: DuplicateGroup[]; onrefresh?: () => void } = $props()
+  let {
+    duplicates = [],
+    analyzing = false,
+    pending = false,
+    onanalyze,
+    onrefresh,
+  }: {
+    duplicates?: DuplicateGroup[]
+    analyzing?: boolean
+    pending?: boolean
+    onanalyze?: () => void
+    onrefresh?: () => void
+  } = $props()
 
   let confirmPath = $state<string | null>(null)
   let confirmEl: HTMLDivElement | null = $state(null)
@@ -45,9 +57,16 @@
   </header>
 
   {#if duplicates.length === 0}
-    <div class="empty dim">no duplicates found — the library is clean</div>
+    <div class="empty dim">
+      no duplicates found — the library is clean
+      <button class="act analyze" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
+        {analyzing ? 'ANALYZING…' : 'ANALYZE LIBRARY'}
+      </button>
+    </div>
   {:else}
-    <button class="act rescan" onclick={() => onrefresh?.()}>RE-ANALYZE</button>
+    <button class="act rescan" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
+      {analyzing ? 'ANALYZING…' : 'RE-ANALYZE (JOB)'}
+    </button>
     {#each duplicates as group (group.files[0].path)}
       <div class="group">
         <div class="group-head">
@@ -104,7 +123,17 @@
   .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
   .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
-  .empty { padding: 60px 20px; text-align: center; border: 1px dashed var(--seam); border-radius: var(--radius); }
+  .empty {
+    padding: 60px 20px;
+    text-align: center;
+    border: 1px dashed var(--seam);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .act.analyze { border-color: var(--ink); color: var(--ink); }
   .rescan { align-self: flex-start; }
   .act {
     background: var(--panel-raised);

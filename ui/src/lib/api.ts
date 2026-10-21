@@ -1,7 +1,7 @@
 /** Typed client for the resident app's API. */
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type JobKind = 'scan' | 'plan' | 'encode'
+export type JobKind = 'scan' | 'plan' | 'encode' | 'dedupe'
 
 export interface Job {
   id: number | null
@@ -87,7 +87,7 @@ export const api = {
     request<Config>('/api/config', { method: 'PUT', body: JSON.stringify(config) }),
   enqueue: (body: {
     kind: JobKind
-    path: string
+    path?: string
     paths?: string[]
     output_dir?: string
     quality?: boolean

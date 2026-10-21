@@ -1058,6 +1058,27 @@ class TestJobs(unittest.TestCase):
         self.connection.close()
         self.tmp.cleanup()
 
+    def test_dedupe_job_execution(self):
+        """A dedupe job analyzes the library and records its summary."""
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.DEDUPE, payload={}))
+        self.assertIsNotNone(job.id)
+        result = jobs.execute_dedupe(job, self.connection, threading.Event())
+        self.assertEqual(result["groups"], 0)
+        self.assertEqual(result["wasted_bytes"], 0)
+        # two same-title same-duration files form one group
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category, duration_raw)"
+            " VALUES ('D:/a/x.mkv', 1.0, 100, 'movie', 'Cat', 60.0)"
+        )
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category, duration_raw)"
+            " VALUES ('D:/b/x.mkv', 1.0, 100, 'movie', 'Cat', 60.0)"
+        )
+        self.connection.commit()
+        result = jobs.execute_dedupe(job, self.connection, threading.Event())
+        self.assertEqual(result["groups"], 1)
+        self.assertEqual(result["wasted_bytes"], 100)
+
     def test_enqueue_and_persist(self):
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": "D:/Movies"}))
         self.assertIsNotNone(job.id)
