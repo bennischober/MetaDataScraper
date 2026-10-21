@@ -813,5 +813,72 @@ class TestAdaptivePoll(unittest.TestCase):
         self.assertEqual(next_poll_interval(20.0, 5.0, True), 5.0)
 
 
+class TestReportCategory(unittest.TestCase):
+    def test_generate_report_category_breakdown(self):
+        import tempfile
+
+        from metadata_scrapper.report import generate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            connection = db.connect(db_path)
+
+            def add_file(name, category):
+                return connection.execute(
+                    "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (f"D:/Movies/{name}", 1.0, 1000, name, category, "01:00:00", "h264", 1920, 1080),
+                ).lastrowid
+
+            gb = 1024**3
+            # category "Movies": one encode, one skip
+            movies_encode = add_file("m1.mkv", "Movies")
+            movies_skip = add_file("m2.mkv", "Movies")
+            # category "Series": one skip, one never processed (no encode row)
+            series_skip = add_file("s1.mkv", "Series")
+            add_file("s2.mkv", "Series")
+
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (movies_encode, "VMAF>95.0", "x265", 3 * gb, int(1.5 * gb), 50.0, 20, 95.4),
+            )
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (movies_skip, "skipped (too short)", "x265", gb, gb, 0.0, None, None),
+            )
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (series_skip, "skipped (below minimum)", "x265", gb, gb, 0.0, None, None),
+            )
+            connection.commit()
+            connection.close()
+
+            out = Path(tmp) / "report.html"
+            generate_report(db_path, out)
+            html = out.read_text(encoding="utf-8")
+
+            # the category breakdown sits between the summary cards and the movie table
+            self.assertLess(html.index("Movies in database"), html.index("<th>Category</th>"))
+            self.assertLess(html.index("<th>Category</th>"), html.index("<th>Movie</th>"))
+
+            # "Movies": 2 movies, 1 encoded, 1 skipped
+            self.assertIn(
+                "<td>Movies</td><td class='num'>2</td><td class='num'>1</td><td class='num'>1</td>",
+                html,
+            )
+            # "Series": 2 movies, 0 encoded, 1 skipped, and no encodes => '—' saved
+            self.assertIn(
+                "<td>Series</td><td class='num'>2</td><td class='num'>0</td><td class='num'>1</td>"
+                "<td class='num'>1.00 GB</td><td class='num'>—</td>",
+                html,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

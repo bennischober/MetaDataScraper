@@ -132,6 +132,44 @@ def _movie_table(rows: list[dict]) -> str:
     return f"<table><thead>{head}</thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
+def _category_table(rows: list[dict]) -> str:
+    """Renders the per-category summary table."""
+    categories: dict[str, dict] = {}
+    for r in rows:
+        cat = r["category"] or "—"
+        stats = categories.setdefault(
+            cat, {"count": 0, "encoded": 0, "skipped": 0, "total": 0, "saved": 0}
+        )
+        stats["count"] += 1
+        if r["decision"] == "encode":
+            stats["encoded"] += 1
+            stats["saved"] += (r["input_size"] or 0) - (r["output_size"] or 0)
+        elif r["decision"] == "skip":
+            stats["skipped"] += 1
+        stats["total"] += r["input_size"] or 0
+
+    head = (
+        "<tr><th>Category</th><th class='num'>Movies</th><th class='num'>Encoded</th>"
+        "<th class='num'>Skipped</th><th class='num'>Total size</th>"
+        "<th class='num'>Saved</th><th class='num'>Saved %</th></tr>"
+    )
+    body_rows = []
+    for cat, s in categories.items():
+        saved_percent = (s["saved"] / s["total"] * 100) if s["total"] else None
+        body_rows.append(
+            f"<tr>"
+            f"<td>{_esc(cat)}</td>"
+            f"<td class='num'>{s['count']}</td>"
+            f"<td class='num'>{s['encoded']}</td>"
+            f"<td class='num'>{s['skipped']}</td>"
+            f"<td class='num'>{_fmt_gb(s['total'])}</td>"
+            f"<td class='num'>{_fmt_gb(s['saved'])}</td>"
+            f"<td class='num'>{_fmt_percent(saved_percent)}</td>"
+            f"</tr>"
+        )
+    return f"<table><thead>{head}</thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+
 def generate_report(db_path: Path, output: Path):
     """Generates a self-contained HTML report from the database.
 
@@ -185,6 +223,7 @@ def generate_report(db_path: Path, output: Path):
         "<h1>MetaDataScraper Report</h1>"
         f'<div class="sub">Generated {generated} from {_esc(db_path.name)}</div>'
         f"{_summary_cards(enriched)}"
+        f"{_category_table(enriched)}"
         f"{_movie_table(enriched)}"
         f"<footer>MetaDataScraper · quality-measured re-encoding · "
         f'<a style="color:var(--blue)" href="https://github.com/bennischober/MetaDataScraper">GitHub</a></footer>'
