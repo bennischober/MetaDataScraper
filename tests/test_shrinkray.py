@@ -342,6 +342,55 @@ class TestDb(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_migration_v5_to_v6_missing_columns(self):
+        # v5 database: files without the soft-missing columns => added with
+        # defaults, existing rows are considered present (not missing)
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v5.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (5);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE encodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    preset TEXT NOT NULL,
+                    encoder TEXT NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    output_size INTEGER NOT NULL,
+                    saved_percent REAL NOT NULL
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('D:/Movies/a.mkv', 1.0, 1, 'movie', 'Cat');
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            columns = {
+                row["name"] for row in migrated.execute("PRAGMA table_info(files)").fetchall()
+            }
+            self.assertIn("missing_scans", columns)
+            self.assertIn("missing_since", columns)
+            row = migrated.execute("SELECT * FROM files").fetchone()
+            self.assertEqual(row["missing_scans"], 0)
+            self.assertIsNone(row["missing_since"])
+            migrated.close()
+
     def test_add_encode_with_quality_fields(self):
         file_id = db.upsert_file(self.connection, self._record("a.mkv"))
         encode_id = db.add_encode(
@@ -429,11 +478,59 @@ class TestDb(unittest.TestCase):
 
         # prune with the stored path strings (Path normalizes the separators)
         existing = {str(Path("D:/Movies/a.mkv"))}
-        deleted = db.prune_missing(self.connection, existing)
-        self.assertEqual(deleted, 1)
-        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
-        # encodes of surviving files are still there
+        # first scan: b.mkv is flagged, not deleted (grace period)
+        result = db.prune_missing(self.connection, existing)
+        self.assertEqual(result.flagged, 1)
+        self.assertEqual(result.pruned, 0)
+        self.assertEqual(result.missing_now, 1)
+        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
         self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
+        row = db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv"))
+        self.assertEqual(row["missing_scans"], 1)
+        self.assertIsNotNone(row["missing_since"])
+
+        # grace exhausted: the row (and its encodes) is hard-deleted
+        for _ in range(db.MISSING_GRACE - 1):
+            result = db.prune_missing(self.connection, existing)
+        self.assertEqual(result.pruned, 1)
+        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
+        # a.mkv was never missing => its encode history survives
+        self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
+
+    def test_prune_missing_recovers_reappeared_files(self):
+        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
+        # the file disappears => flagged
+        result = db.prune_missing(self.connection, set(), scope="D:/Movies")
+        self.assertEqual(result.flagged, 1)
+        # the file reappears (e.g. folder was moved back) => un-flagged
+        result = db.prune_missing(
+            self.connection, {str(Path("D:/Movies/a.mkv"))}, scope="D:/Movies"
+        )
+        self.assertEqual(result.recovered, 1)
+        self.assertEqual(result.missing_now, 0)
+        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
+        self.assertEqual(row["missing_scans"], 0)
+        self.assertIsNone(row["missing_since"])
+
+    def test_prune_missing_mass_flagging(self):
+        # more than 20% of the scope flagged at once => the accident warning
+        for name in ("a", "b", "c", "d", "e", "f"):
+            db.upsert_file(self.connection, self._record(f"D:/Movies/{name}.mkv"))
+        result = db.prune_missing(self.connection, set(), scope="D:/Movies")
+        self.assertEqual(result.flagged, 6)
+        self.assertTrue(result.mass)
+
+    def test_upsert_resets_missing_state(self):
+        # a file flagged as missing is re-scanned (changed or rescan) =>
+        # the upsert clears the missing state
+        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
+        db.prune_missing(self.connection, set(), scope="D:/Movies")
+        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
+        self.assertEqual(row["missing_scans"], 1)
+        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
+        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
+        self.assertEqual(row["missing_scans"], 0)
+        self.assertIsNone(row["missing_since"])
 
     def test_has_output_for_latest_encode(self):
         import tempfile
@@ -475,20 +572,23 @@ class TestDb(unittest.TestCase):
 
         # scan of D:/Movies finds only a.mkv, scope limits pruning to that root
         existing = {str(Path("D:/Movies/a.mkv"))}
-        deleted = db.prune_missing(self.connection, existing, scope="D:/Movies")
-        self.assertEqual(deleted, 0)  # b.mkv is outside the scope => kept
+        result = db.prune_missing(self.connection, existing, scope="D:/Movies")
+        self.assertEqual(result.pruned, 0)  # b.mkv is outside the scope => kept
+        self.assertEqual(result.flagged, 0)  # ...and outside => not even flagged
         self.assertIsNotNone(db.get_file_by_path(self.connection, Path("E:/Other/b.mkv")))
         self.assertEqual(len(db.get_encodes_for_file(self.connection, id_outside)), 1)
 
         # a.mkv is inside the scope and on disk => kept as well
         self.assertIsNotNone(db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv")))
 
-        # a file inside the scope that vanished is pruned
-        id_gone = db.upsert_file(self.connection, self._record("D:/Movies/gone.mkv"))
-        deleted = db.prune_missing(self.connection, existing, scope="D:/Movies")
-        self.assertEqual(deleted, 1)
+        # a file inside the scope that vanished is flagged first, then pruned
+        db.upsert_file(self.connection, self._record("D:/Movies/gone.mkv"))
+        result = db.prune_missing(self.connection, existing, scope="D:/Movies")
+        self.assertEqual(result.flagged, 1)
+        for _ in range(db.MISSING_GRACE - 1):
+            result = db.prune_missing(self.connection, existing, scope="D:/Movies")
+        self.assertEqual(result.pruned, 1)
         self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/gone.mkv")))
-        _ = id_gone
 
 
 class TestMain(unittest.TestCase):

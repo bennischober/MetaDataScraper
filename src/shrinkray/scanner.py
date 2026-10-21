@@ -26,6 +26,37 @@ from shrinkray.media import get_data
 UNCATEGORIZED = "Uncategorized"
 
 
+def log_prune_result(result: db.PruneResult) -> None:
+    """Logs the outcome of a disk/database reconciliation.
+
+    A mass-flagging (implausibly large share of the scope flagged in one
+    pass) gets a loud warning because it usually means an accident (renamed
+    folder, detached drive) rather than deliberate deletions.
+
+    Args:
+        result (db.PruneResult): The reconcile outcome to report.
+    """
+    if result.pruned:
+        log(
+            f"Removed {result.pruned} movie(s) missing for {db.MISSING_GRACE} "
+            "consecutive scans (encode history deleted)."
+        )
+    if result.flagged:
+        log(
+            f"Flagged {result.flagged} movie(s) as missing "
+            f"({result.missing_now} flagged in total) — their history is kept "
+            f"until they have been missing for {db.MISSING_GRACE} consecutive scans."
+        )
+    if result.recovered:
+        log(f"Recovered {result.recovered} previously missing movie(s).")
+    if result.mass:
+        log_warning(
+            f"Many movies ({result.flagged}) were flagged missing in one pass — "
+            "if a whole folder was renamed or a drive was detached, re-scan the "
+            "new path to recover the history."
+        )
+
+
 def get_name(filename: Path) -> str:
     """Determines the movie name from the file name.
 
@@ -278,6 +309,12 @@ def scan_movies(
     # search for movie files with the configured extensions, recursive
     movies = find_movies(root, config.extensions, exclude=exclude)
     if not movies:
+        # nothing found: the folder may have been emptied or renamed — the
+        # database still needs to reconcile (flagging, not deleting, thanks
+        # to the grace period) before the early return
+        if connection is not None:
+            prune = db.prune_missing(connection, set(), scope=str(root))
+            log_prune_result(prune)
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
 
@@ -348,10 +385,10 @@ def scan_movies(
                 continue
             record = movie_record_from_data(movies[index], result)
             db.upsert_file(connection, record)
-        # remove files that are no longer on disk (only inside the scanned
-        # root: other roots in the database keep their history)
-        pruned = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
-        if pruned:
-            log(f"Removed {pruned} missing movies from the database.")
+        # reconcile with disk: flag files that vanished (grace period before
+        # deletion), recover reappeared ones; only rows inside the scanned
+        # root are touched (other roots in the database keep their history)
+        prune = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
+        log_prune_result(prune)
 
     return movies_by_category, movies, error_list

@@ -49,6 +49,7 @@ h1 { font-size: 1.6rem; margin: 0 0 .2rem; }
 .card .lbl { color: var(--dim); font-size: .85rem; }
 .card.green .num { color: var(--green); }
 .card.blue .num { color: var(--blue); }
+.card.red .num { color: var(--red); }
 table {
     width: 100%; border-collapse: collapse; background: var(--panel);
     border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
@@ -64,6 +65,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 }
 .pill.ok { background: rgba(63,185,80,.15); color: var(--green); }
 .pill.skip { background: rgba(210,153,34,.15); color: var(--yellow); }
+.pill.missing { background: rgba(248,81,73,.15); color: var(--red); }
 .pill.err { background: rgba(248,81,73,.15); color: var(--red); }
 .pill.enc { background: rgba(88,166,255,.15); color: var(--blue); }
 .note { color: var(--dim); font-size: .85rem; }
@@ -79,11 +81,19 @@ def _summary_cards(rows: list[dict]) -> str:
     saved_bytes = sum((r["input_size"] or 0) - (r["output_size"] or 0) for r in encodes)
     total_input = sum(r["input_size"] or 0 for r in encodes)
     saved_percent = (saved_bytes / total_input * 100) if total_input else 0
+    missing = [r for r in rows if r["decision"] == "missing"]
+    missing_card = (
+        f'<div class="card red"><div class="num">{len(missing)}</div>'
+        '<div class="lbl">Missing on disk</div></div>'
+        if missing
+        else ""
+    )
     return (
         '<div class="cards">'
         f'<div class="card"><div class="num">{total}</div><div class="lbl">Movies in database</div></div>'
         f'<div class="card blue"><div class="num">{len(encodes)}</div><div class="lbl">Encoded</div></div>'
         f'<div class="card"><div class="num">{len(skips)}</div><div class="lbl">Skipped</div></div>'
+        f"{missing_card}"
         f'<div class="card green"><div class="num">{_fmt_gb(saved_bytes)}</div>'
         f'<div class="lbl">Disk space saved ({saved_percent:.1f}%)</div></div>'
         "</div>"
@@ -101,7 +111,9 @@ def _movie_table(rows: list[dict]) -> str:
     body_rows = []
     for r in rows:
         decision = r["decision"]
-        if decision == "encode":
+        if decision == "missing":
+            pill, cls = "missing", "missing"
+        elif decision == "encode":
             pill, cls = "encoded", "ok"
         elif decision == "skip":
             pill, cls = "skipped", "skip"
@@ -184,7 +196,7 @@ def generate_report(db_path: Path, output: Path):
     rows = connection.execute(
         """
         SELECT f.path, f.name, f.category, f.duration, f.codec,
-               f.width, f.height,
+               f.width, f.height, f.missing_scans,
                e.input_size, e.output_size, e.saved_percent,
                e.chosen_crf, e.achieved_vmaf, e.preset, e.encoded_at
         FROM files f
@@ -199,7 +211,9 @@ def generate_report(db_path: Path, output: Path):
     enriched = []
     for r in rows:
         preset = r["preset"] or ""
-        if preset.startswith("skipped"):
+        if r["missing_scans"]:
+            decision, note = "missing", "flagged missing on disk"
+        elif preset.startswith("skipped"):
             decision, note = "skip", preset.removeprefix("skipped ").strip("()")
         elif preset.startswith("VMAF>"):
             decision, note = "encode", f"quality mode ({preset})"

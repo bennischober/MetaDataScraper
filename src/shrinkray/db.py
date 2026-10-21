@@ -3,7 +3,12 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# how many consecutive scans a file may be missing before its row (and its
+# encode history) is hard-deleted; the grace period also protects against
+# accidental mass deletions (e.g. a renamed media folder)
+MISSING_GRACE = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -30,6 +35,8 @@ CREATE TABLE IF NOT EXISTS files (
     hdr INTEGER,
     other_codecs TEXT,
     audio_languages TEXT,
+    missing_scans INTEGER NOT NULL DEFAULT 0,
+    missing_since TEXT,
     scanned_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -116,6 +123,12 @@ MIGRATIONS = {
         "ALTER TABLE encodes ADD COLUMN source_codec TEXT",
         "ALTER TABLE encodes ADD COLUMN source_duration REAL",
         "ALTER TABLE encodes ADD COLUMN tool_versions TEXT",
+    ],
+    6: [
+        # soft-missing: deleted files are flagged first (history retained),
+        # hard-deleted only after MISSING_GRACE consecutive scans
+        "ALTER TABLE files ADD COLUMN missing_scans INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE files ADD COLUMN missing_since TEXT",
     ],
 }
 
@@ -239,6 +252,26 @@ class MovieRecord:
     scanned_at: str | None = None
 
 
+@dataclass
+class PruneResult:
+    """Outcome of a disk/database reconciliation.
+
+    Attributes:
+        flagged (int): Rows newly flagged as missing (still within grace).
+        recovered (int): Rows that reappeared on disk and were un-flagged.
+        pruned (int): Rows hard-deleted (grace exhausted) with their encodes.
+        missing_now (int): Total rows currently flagged as missing.
+        mass (bool): True when an implausibly large share of the scope was
+            flagged in one pass (likely a renamed folder / detached drive).
+    """
+
+    flagged: int = 0
+    recovered: int = 0
+    pruned: int = 0
+    missing_now: int = 0
+    mass: bool = False
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     """Opens a connection to the database and ensures the schema.
 
@@ -315,6 +348,8 @@ def upsert_file(connection: sqlite3.Connection, record: MovieRecord) -> int:
             hdr = excluded.hdr,
             other_codecs = excluded.other_codecs,
             audio_languages = excluded.audio_languages,
+            missing_scans = 0,
+            missing_since = NULL,
             scanned_at = datetime('now')
         """,
         (
@@ -537,32 +572,70 @@ def prune_missing(
     connection: sqlite3.Connection,
     existing_paths: set[str],
     scope: str | None = None,
-) -> int:
-    """Deletes file rows (and their encodes) that are no longer on disk.
+) -> PruneResult:
+    """Reconciles the database with what is actually on disk.
+
+    Files of the scanned scope that are no longer on disk are not deleted
+    immediately: they are flagged (missing_scans incremented, missing_since
+    recorded) and hard-deleted — including their encode history — only after
+    MISSING_GRACE consecutive scans still do not see them. Files that
+    reappear while flagged are reset to normal. The grace period also acts
+    as a guard against accidents (e.g. a renamed media folder flags instead
+    of wiping the whole scope).
 
     Without a scope, only rows inside the given scope directory are
-    considered: a scan of one folder must never delete the history of files
-    stored elsewhere (e.g. a scan of testdata/movies_two would otherwise
-    wipe the records of testdata/movies).
+    considered: a scan of one folder must never touch the history of files
+    stored elsewhere (e.g. a scan of testdata/movies_two must leave the
+    records of testdata/movies alone).
 
     Args:
         connection (sqlite3.Connection): The database connection.
         existing_paths (set[str]): Paths that are still on disk.
-        scope (str | None): Only prune rows under this directory path.
+        scope (str | None): Only reconcile rows under this directory path.
 
     Returns:
-        int: Number of deleted rows.
+        PruneResult: What was flagged, recovered and hard-deleted.
     """
-    rows = connection.execute("SELECT id, path FROM files").fetchall()
-    scope_normalized = str(Path(scope)) if scope is not None else None
-    deleted = 0
+    rows = connection.execute("SELECT id, path, missing_scans FROM files").fetchall()
+    # the db stores absolute paths; a relative scan root must resolve or the
+    # prefix match would silently never fire (no flagging, no pruning)
+    scope_normalized = str(Path(scope).resolve()) if scope is not None else None
+    result = PruneResult()
+    in_scope = 0
     for row in rows:
         path = row["path"]
         if scope_normalized is not None and not path.startswith(scope_normalized):
             continue
-        if path not in existing_paths:
+        in_scope += 1
+        if path in existing_paths:
+            if row["missing_scans"]:
+                connection.execute(
+                    "UPDATE files SET missing_scans = 0, missing_since = NULL WHERE id = ?",
+                    (row["id"],),
+                )
+                result.recovered += 1
+            continue
+        scans = int(row["missing_scans"] or 0) + 1
+        if scans >= MISSING_GRACE:
             connection.execute("DELETE FROM encodes WHERE file_id = ?", (row["id"],))
             connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
-            deleted += 1
+            result.pruned += 1
+        else:
+            connection.execute(
+                """
+                UPDATE files
+                SET missing_scans = ?,
+                    missing_since = COALESCE(missing_since, datetime('now'))
+                WHERE id = ?
+                """,
+                (scans, row["id"]),
+            )
+            result.flagged += 1
+    result.missing_now = int(
+        connection.execute("SELECT COUNT(*) FROM files WHERE missing_scans > 0").fetchone()[0]
+    )
+    # many flags in one pass look like an accident (renamed folder, detached
+    # drive) — the scanner turns this into a loud warning
+    result.mass = in_scope > 0 and result.flagged >= max(5, in_scope * 0.2)
     connection.commit()
-    return deleted
+    return result

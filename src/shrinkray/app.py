@@ -544,7 +544,7 @@ def library(conn=Depends(db_access)):
         lambda c: c.execute(
             """
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
-                   f.size, f.hdr,
+                   f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent
             FROM files f
@@ -565,6 +565,8 @@ def library(conn=Depends(db_access)):
             "resolution": [r["width"], r["height"]],
             "size": r["size"],
             "hdr": bool(r["hdr"]),
+            "missing": bool(r["missing_scans"]),
+            "missing_since": r["missing_since"],
             "encode": {
                 "preset": r["preset"],
                 "crf": r["chosen_crf"],

@@ -233,6 +233,7 @@
               <button class="name-btn" onclick={(e) => openDetail(movie, e)}>
                 {movie.name}
                 {#if movie.hdr}<span class="mono hdr-tag">HDR</span>{/if}
+                {#if movie.missing}<span class="mono missing-tag">MISSING</span>{/if}
               </button>
             </td>
             <td class="dim">{movie.category}</td>
@@ -428,6 +429,13 @@
   .hdr-tag {
     margin-left: 8px;
     color: var(--amber);
+    font-size: 10px;
+    border: 1px solid var(--seam);
+    padding: 0 4px;
+  }
+  .missing-tag {
+    margin-left: 8px;
+    color: var(--red);
     font-size: 10px;
     border: 1px solid var(--seam);
     padding: 0 4px;

@@ -40,6 +40,8 @@ export interface Movie {
   resolution: [number, number] | null
   size: number | null
   hdr: boolean
+  missing?: boolean
+  missing_since?: string | null
   encode: EncodeInfo | null
 }
 
