@@ -1,66 +1,78 @@
 /*
- * Zone Record design tokens — the locked visual world of the dashboard.
+ * The Drafting Table — design tokens of the dashboard.
  *
- * A darkroom printer's exposure record: panels sit on a backlit 11-step
- * zone ramp, state is density (solid = done, hatched = in progress, empty
- * = untouched), quantities are tabular mono, legends are tracked condensed
- * caps. One dichroic magenta for annotations; state colors ride on top
- * only where they carry meaning.
+ * A technical drawing sheet: cool paper under a faint construction grid,
+ * graphite ink, schematic teal for selection/active/primary, amber for the
+ * figure in progress, red reserved for failure and destruction. Data is
+ * annotated like dimensions: mono tabular values, tracked sans labels,
+ * hairline rules, title block. State is density: solid = done, hatched =
+ * in progress, empty = untouched.
  */
 
-:root {
-  /* ── the zone ramp (11 steps, backlit neutral scale) ── */
-  --zone-0: #0c0d0f;
-  --zone-1: #16181c;
-  --zone-2: #22252b;
-  --zone-3: #30343b;
-  --zone-4: #41464f;
-  --zone-5: #565c66;
-  --zone-6: #6f7680;
-  --zone-7: #8b939e;
-  --zone-8: #aab2bc;
-  --zone-9: #ccd3db;
-  --zone-10: #eef1f4;
+/* ── self-hosted faces (localhost must not depend on a CDN) ── */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/plex-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/plex-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/plex-mono-600.woff2') format('woff2');
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
 
-  /* ── surfaces ── */
-  --ground: #14161a;            /* the page ground (zone 1-2) */
-  --panel: #17191d;             /* record sheets */
-  --panel-active: #1a1d22;      /* the sheet under work */
-  --seam: #2a2e34;              /* hairline seams */
-  --row-line: #22252b;          /* inner table rules */
+:root {
+  /* ── paper ── */
+  --ground: #eceef0;            /* sheet ground */
+  --panel: #f4f5f6;             /* panels: slightly lighter sheet */
+  --panel-active: #e2f0ee;      /* the panel under work (teal-tinted) */
+  --row-alt: #e9ebed;           /* zebra rows on the sheet */
+  --seam: #c9ced3;              /* hairline seams */
+  --row-line: #dde1e4;          /* inner table rules */
+  --grid-line: rgba(30, 35, 40, 0.055); /* construction grid */
 
   /* ── ink ── */
-  --ink: #e8eaed;               /* primary text (paper white) */
-  --ink-dim: #8b929c;           /* secondary text */
-  --ink-faint: #5c646e;         /* disabled/ghost */
+  --ink: #1e2328;               /* graphite, primary text */
+  --ink-dim: #5b6470;           /* secondary text */
+  --ink-faint: #98a1ab;         /* disabled/ghost */
 
-  /* ── annotation (the one dichroic voice) ── */
-  --magenta: #c542e8;
-
-  /* ── state colors (meaning only) ── */
-  --ok: #3fb950;                /* encoded / measured OK */
-  --warn: #d29922;              /* skipped / degraded */
-  --bad: #f85149;               /* failed */
+  /* ── drawing accents (meaning only) ── */
+  --teal: #0f766e;              /* selection, active tab, primary action, measured */
+  --teal-ink: #0b5952;          /* teal text on paper (contrast-safe) */
+  --amber: #b45309;             /* the figure in progress */
+  --red: #b3382c;               /* failed, destructive only */
 
   /* ── type ── */
-  --font-ui: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono: Consolas, 'Cascadia Mono', 'SF Mono', ui-monospace, monospace;
-  --font-legend: var(--font-ui);
+  --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', Consolas, ui-monospace, monospace;
 
   --fs-data: 12px;              /* tabular data */
-  --fs-legend: 10px;            /* tracked caps legends */
+  --fs-legend: 10.5px;          /* tracked caps labels */
   --fs-body: 13px;              /* general UI text */
-  --fs-title: 15px;             /* section titles */
+  --fs-title: 15px;             /* sheet titles */
 
-  --track-legend: 1.5px;        /* legend letter-spacing */
+  --track-legend: 1.4px;        /* caps letter-spacing */
 
   /* ── density hatch patterns (state as density) ── */
   --hatch-work: repeating-linear-gradient(
-    45deg, #2c313a 0 4px, transparent 4px 8px);
+    45deg, #d4d9dd 0 4px, transparent 4px 8px);
   --hatch-progress: repeating-linear-gradient(
-    45deg, rgba(63, 185, 80, 0.27) 0 4px, transparent 4px 8px);
+    45deg, rgba(180, 83, 9, 0.28) 0 4px, transparent 4px 8px);
   --hatch-skip: repeating-linear-gradient(
-    90deg, rgba(210, 153, 34, 0.18) 0 6px, transparent 6px 12px);
+    90deg, rgba(180, 83, 9, 0.18) 0 6px, transparent 6px 12px);
+  --hatch-select: repeating-linear-gradient(
+    45deg, rgba(15, 118, 110, 0.12) 0 4px, transparent 4px 8px);
 }
 
 /* ── shared text voices ── */
@@ -77,25 +89,98 @@
   font-size: var(--fs-data);
 }
 
-/* ── density state chips (hatch, not pill) ── */
+/* ── density state chips (annotation squares) ── */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 2px 8px;
   border: 1px solid var(--seam);
-  border-radius: 3px;
+  border-radius: 2px;
+  background: var(--panel);
   font-size: var(--fs-legend);
   letter-spacing: var(--track-legend);
   text-transform: uppercase;
+  color: var(--ink);
 }
 .chip .swatch {
   width: 10px;
   height: 10px;
-  border: 1px solid var(--seam);
+  border: 1px solid var(--ink-dim);
 }
-.chip.done .swatch { background: var(--ok); }
+.chip.done .swatch { background: var(--teal); border-color: var(--teal); }
 .chip.progress .swatch { background: var(--hatch-progress); }
 .chip.skip .swatch { background: var(--hatch-skip); }
 .chip.untouched .swatch { background: transparent; }
-.chip.failed .swatch { background: var(--bad); }
+.chip.failed .swatch { background: var(--red); border-color: var(--red); }
+.chip.neutral .swatch { background: var(--seam); border-color: var(--ink-dim); }
+.chip.planned .swatch { background: var(--hatch-select); border-color: var(--teal); }
+
+/* ── the construction grid (the sheet's visible armature) ── */
+.sheet-grid {
+  background-image:
+    repeating-linear-gradient(to right, var(--grid-line) 0 1px, transparent 1px 24px),
+    repeating-linear-gradient(to bottom, var(--grid-line) 0 1px, transparent 1px 24px);
+}
+
+/* ── L-corner ticks: the drawing sheet marks its active panel ── */
+.corner-ticks {
+  position: relative;
+}
+.corner-ticks::before,
+.corner-ticks::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+}
+.corner-ticks::before {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid var(--teal);
+  border-left: 2px solid var(--teal);
+}
+.corner-ticks::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid var(--teal);
+  border-right: 2px solid var(--teal);
+}
+
+/* ── browser surfaces: themed from the palette ── */
+::selection {
+  background: rgba(15, 118, 110, 0.22);
+}
+input {
+  caret-color: var(--teal);
+}
+::placeholder {
+  color: var(--ink-faint);
+  opacity: 1;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--seam) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--seam); }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ── focus: visible, teal, offset — keyboard operators are first-class ── */
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 1px;
+}
+
+/* ── motion: one authored moment — annotations draw in with a leader line ── */
+@media (prefers-reduced-motion: no-preference) {
+  .leader-in {
+    animation: leader-draw 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes leader-draw {
+    from { opacity: 0; transform: translateX(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+}

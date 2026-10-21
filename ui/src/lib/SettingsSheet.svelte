@@ -13,7 +13,14 @@
       .config()
       .then((c) => (config = c))
       .catch((e) => (saveError = e instanceof Error ? e.message : String(e)))
+    // Escape closes from anywhere while the config sheet is open
+    window.addEventListener('keydown', handleKeydown)
+    return () => window.removeEventListener('keydown', handleKeydown)
   })
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') onclose()
+  }
 
   async function save() {
     if (!config) return
@@ -44,7 +51,6 @@
   }
 
   // duplicate keys abort Svelte each-blocks => dedupe defensively
-  // (config.json had .mpg/.mpeg twice)
   const dedupedExtensions = $derived([...new Set(config?.file?.extensions ?? [])])
 
   function removeExtension(ext: string) {
@@ -56,11 +62,11 @@
   }
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="Settings">
-  <div class="sheet">
+<div class="block" role="group" aria-label="Configuration">
+  <div class="panel">
     <div class="head">
-      <span class="legend">CONFIGURATION</span>
-      <button class="close" onclick={onclose} aria-label="Close settings">X</button>
+      <span class="legend">SHEET 04 — CONFIGURATION</span>
+      <button class="close" onclick={onclose} aria-label="Close configuration and return to library">CLOSE ✕</button>
     </div>
 
     {#if !config}
@@ -75,7 +81,7 @@
           {#each dedupedExtensions as ext (ext)}
             <span class="ext mono">
               {ext}
-              <button class="ext-x" onclick={() => removeExtension(ext)} aria-label="Remove {ext}">X</button>
+              <button class="ext-x" onclick={() => removeExtension(ext)} aria-label="Remove {ext}">✕</button>
             </span>
           {/each}
           <input
@@ -133,21 +139,17 @@
 </div>
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(12, 13, 15, 0.72);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
+  .block {
+    flex: 1;
+    min-height: 0;
+    outline: none;
   }
-  .sheet {
+  .panel {
     width: min(560px, 92vw);
     max-height: 88vh;
     overflow: auto;
     background: var(--panel);
-    border: 1px solid var(--seam);
+    border: 1px solid var(--ink);
     padding: 18px 22px;
   }
   .head {
@@ -161,11 +163,12 @@
     border: 1px solid var(--seam);
     color: var(--ink-dim);
     cursor: pointer;
-    padding: 2px 8px;
+    padding: 3px 9px;
   }
   .close:hover { color: var(--ink); border-color: var(--ink-dim); }
   .group {
     border: 1px solid var(--seam);
+    background: var(--ground);
     padding: 12px 14px;
     margin-bottom: 12px;
   }
@@ -187,11 +190,11 @@
   .ext-x {
     background: transparent;
     border: none;
-    color: var(--ink-dim);
+    color: var(--ink-faint);
     cursor: pointer;
     font-size: 10px;
   }
-  .ext-x:hover { color: var(--bad); }
+  .ext-x:hover { color: var(--red); }
   .ext-input {
     background: transparent;
     border: 1px dashed var(--seam);
@@ -208,7 +211,7 @@
   .field:last-child { margin-bottom: 0; }
   .field span { width: 120px; flex-shrink: 0; }
   .field input {
-    background: var(--ground);
+    background: var(--panel);
     border: 1px solid var(--seam);
     color: var(--ink);
     padding: 5px 9px;
@@ -221,24 +224,24 @@
     margin-top: 4px;
   }
   .save {
-    background: var(--panel-active);
-    border: 1px solid var(--ok);
-    color: var(--ok);
+    background: var(--teal);
+    border: 1px solid var(--teal);
+    color: #fff;
     padding: 6px 18px;
     cursor: pointer;
     font-size: var(--fs-legend);
     letter-spacing: var(--track-legend);
   }
+  .save:hover:not(:disabled) { background: var(--teal-ink); }
   .save:disabled { opacity: 0.5; cursor: default; }
   .error {
-    color: var(--bad);
-    border: 1px solid var(--bad);
+    color: var(--red);
+    border: 1px solid var(--red);
     padding: 6px 10px;
     margin-bottom: 10px;
-    font-size: var(--fs-data);
     word-break: break-word;
   }
-  .saved { color: var(--ok); margin-bottom: 10px; font-size: var(--fs-data); }
+  .saved { color: var(--teal-ink); margin-bottom: 10px; }
   .loading { padding: 24px; text-align: center; }
   .dim { color: var(--ink-dim); }
 </style>
