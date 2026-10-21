@@ -992,8 +992,7 @@ def _probe_movie(
             raise SkipEncode("re-encode would not shrink the file")
         if achieved < target_vmaf and crf == crf_range[0]:
             raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable "
-                f"(best {achieved} at CRF {crf_range[0]})"
+                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})"
             )
         return crf, achieved, probes, crop
     finally:
@@ -1072,9 +1071,7 @@ def encode_with_quality(
             success=False,
             target_vmaf=target_vmaf,
             error=f"skipped: {e}",
-            skipped_reason=(
-                "target unreachable" if "unreachable" in str(e) else "no size gain"
-            ),
+            skipped_reason=("target unreachable" if "unreachable" in str(e) else "no size gain"),
         )
 
     log(f"Chosen CRF {crf} (VMAF {achieved})")
@@ -1133,4 +1130,3 @@ def encode_with_quality(
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
     )
-
