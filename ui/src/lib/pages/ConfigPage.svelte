@@ -1,28 +1,40 @@
 <script lang="ts">
   import { api, type Config } from '../api'
+  import HintMark from './HintMark.svelte'
 
-  /** SHEET: configuration — sources, output and the tool settings in one
-   * first-class page (setup is configuration, not a footer strip). */
+  /** SHEET: configuration — sources, output, quality target and the tool
+   * settings in one first-class page (setup is configuration, not a
+   * footer strip). */
 
   let {
     scanPaths,
     outputDir,
     removeBars = false,
+    targetVmaf = 95,
     onpathsChange,
     onoutputChange,
     onbarsChange,
+    onvmafChange,
   }: {
     scanPaths: string[]
     outputDir: string
     removeBars?: boolean
+    targetVmaf?: number
     onpathsChange: (paths: string[]) => void
     onoutputChange: (dir: string) => void
     onbarsChange?: (armed: boolean) => void
+    onvmafChange?: (vmaf: number) => void
   } = $props()
 
   let newPath = $state('')
   // two-way: the armed state lives at app level; this page only edits it
   let barsArmed = $derived(removeBars)
+  // local editing copy of the VMAF target (committed on change); the
+  // effect syncs it when the app-level value changes
+  let vmafDraft = $state(95)
+  $effect(() => {
+    vmafDraft = targetVmaf
+  })
   let config = $state<Config | null>(null)
   let saveError = $state<string | null>(null)
   let saved = $state(false)
@@ -136,6 +148,29 @@
         placeholder="output folder"
         aria-label="Output folder path (encode)"
       />
+    </div>
+  </section>
+
+  <!-- ══ quality target ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">QUALITY TARGET — THE ENCODER'S FLOOR</span>
+    </div>
+    <div class="pad row vmaf-row">
+      <label class="vmaf-label">
+        <span class="dim">VMAF target</span>
+        <input
+          class="mono vmaf-input"
+          type="number"
+          min="70"
+          max="100"
+          step="0.5"
+          bind:value={vmafDraft}
+          onchange={() => onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 95)))}
+          aria-label="VMAF quality target"
+        />
+      </label>
+      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 95 is Netflix's 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples." />
     </div>
   </section>
 
@@ -306,6 +341,17 @@
     border-radius: var(--radius);
     color: var(--ink);
     padding: 6px 12px;
+  }
+
+  .vmaf-row { display: flex; align-items: center; gap: 10px; }
+  .vmaf-label { display: flex; align-items: center; gap: 10px; }
+  .vmaf-input {
+    background: var(--panel-raised);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    color: var(--ink);
+    width: 80px;
+    padding: 6px 10px;
   }
 
   .group { padding: 12px 14px; border-top: 1px solid var(--row-line); }

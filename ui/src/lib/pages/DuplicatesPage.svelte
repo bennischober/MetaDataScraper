@@ -39,6 +39,10 @@
     if (confirmPath) confirmEl?.focus()
   })
 
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') confirmPath = null
+  }
+
   const totalWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_bytes, 0))
 
   async function copyPath(path: string) {
@@ -46,6 +50,8 @@
     confirmPath = null
   }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="page page-in">
   <header class="page-head">

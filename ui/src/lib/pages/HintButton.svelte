@@ -1,8 +1,8 @@
 <script lang="ts">
   /** The hint pattern: a caps label whose meaning lives in a tooltip on
    * hover AND in a visible one-line explanation on focus (keyboard users
-   * get the same text). Used on action buttons where the verb alone
-   * under-explains (PLAN, ENCODE, RESCAN ALL). */
+   * get the same text via focus + aria-describedby). Used on action
+   * buttons where the verb alone under-explains (PLAN, ENCODE). */
 
   let {
     label,
@@ -17,19 +17,23 @@
     disabled?: boolean
     variant?: 'default' | 'primary'
   } = $props()
+
+  // unique id for aria-describedby (one hint per button instance)
+  const hintId = `hint-${Math.random().toString(36).slice(2, 9)}`
 </script>
 
-<span class="wrap" tabindex="-1">
+<span class="wrap">
   <button
+    type="button"
     {onclick}
     {disabled}
     class:primary={variant === 'primary'}
-    aria-label="{label}: {hint}"
+    aria-describedby={hintId}
     title={hint}
   >
     {label}
   </button>
-  <span class="hint legend" role="note">{hint}</span>
+  <span class="hint" role="note" id={hintId}>{hint}</span>
 </span>
 
 <style>
@@ -70,12 +74,12 @@
     padding: 6px 10px;
     font-size: 10.5px;
     letter-spacing: 0.2px;
-    text-transform: none;
     z-index: 70;
     opacity: 0;
     pointer-events: none;
     transition: opacity 120ms ease;
     white-space: normal;
+    text-transform: none;
   }
   .wrap:hover .hint,
   .wrap:focus-within .hint {

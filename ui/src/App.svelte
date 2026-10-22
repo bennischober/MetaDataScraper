@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, type Movie, type Status, type Job } from './lib/api'
+  import { api, jobPaths, type Movie, type Status, type Job } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
   import DuplicatesPage from './lib/pages/DuplicatesPage.svelte'
@@ -50,8 +50,9 @@
   )
   let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
   let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 95))
+  // per-run arming of the irreversible bar crop — never persisted, so a
+  // fresh session always starts unarmed
   let removeBars = $state(false)
-  let confirmBars = $state(false)
 
   function persist() {
     localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
@@ -59,6 +60,8 @@
     localStorage.setItem('ms.vmaf', String(targetVmaf))
   }
 
+  // movies inside any scan path (case-insensitive prefix) — used for the
+  // bars blast-radius when the targets are the whole library
   const barsAffected = $derived(
     movies.filter((m) =>
       scanPaths.some((p) => m.path.toLowerCase().startsWith(p.toLowerCase()))
@@ -116,6 +119,32 @@
       history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
   )
 
+  // ── the bars ceremony: the single gate for EVERY encode ──
+  // The confirmation carries the actual target list (never re-derived at
+  // confirm time) and is the only place an encode with bars armed passes
+  // through — movie page, bulk selection and ENCODE ALL all route here.
+  let pendingBarsTargets = $state<string[] | null>(null)
+  let barsConfirmEl: HTMLDivElement | null = $state(null)
+  $effect(() => {
+    if (pendingBarsTargets) barsConfirmEl?.focus()
+  })
+  const barsAffectedList = $derived(
+    (pendingBarsTargets ?? []).filter((t) =>
+      scanPaths.some((p) => t.toLowerCase().startsWith(p.toLowerCase()))
+    )
+  )
+
+  function requestEncode(paths: string[] | undefined, confirmed = false) {
+    const targets = paths ?? scanPaths
+    if (removeBars && !confirmed) {
+      // irreversible work demands explicit per-run confirmation naming
+      // the exact targets
+      pendingBarsTargets = targets
+      return
+    }
+    void enqueue('encode', paths, true)
+  }
+
   async function enqueue(
     kind: 'scan' | 'plan' | 'encode' | 'dedupe',
     paths?: string[],
@@ -131,13 +160,14 @@
       error = paths ? 'select at least one movie' : 'at least one movie folder is required'
       return
     }
-    if (kind === 'encode' && removeBars && !confirmed && !confirmBars) {
-      confirmBars = true
+    if (kind === 'encode' && !confirmed) {
+      // every encode routes through the ceremony
+      requestEncode(paths, false)
       return
     }
     pendingKind = kind
     persist()
-    confirmBars = false
+    pendingBarsTargets = null
     try {
       if (kind === 'dedupe') {
         await api.enqueue({ kind })
@@ -187,8 +217,25 @@
     }
   }
 
-  function openDetail(movie: Movie) {
-    detailMovie = movie
+  // retry: re-enqueue the job with ITS OWN scope and parameters (never the
+  // current form — a failed single-movie encode must not become a
+  // whole-library run); remove_bars routes through the ceremony
+  async function retryJob(job: Job) {
+    if (pendingKind !== null) return
+    if (job.kind === 'dedupe') {
+      await enqueue('dedupe')
+      return
+    }
+    const payload = job.payload as Record<string, unknown>
+    const paths = jobPaths(job)
+    if (payload.remove_bars === true) {
+      requestEncode(paths)
+      return
+    }
+    await enqueue(job.kind, paths)
+  }
+
+  function openDetail(movie: Movie) {    detailMovie = movie
   }
   function closeDetail() {
     detailMovie = null
@@ -197,22 +244,7 @@
   // per-movie actions (encode/plan a single title from its page)
   async function encodeOne(path: string) {
     if (pendingKind !== null) return
-    pendingKind = 'encode'
-    try {
-      await api.enqueue({
-        kind: 'encode',
-        path,
-        output_dir: outputDir || undefined,
-        quality: true,
-        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
-        remove_bars: removeBars,
-      })
-      await refresh()
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
-    } finally {
-      pendingKind = null
-    }
+    requestEncode([path])
   }
 
   let dismissed = $state<Set<number>>(new Set())
@@ -278,6 +310,11 @@
       </button>
     </nav>
     <div class="rail-foot">
+      {#if removeBars}
+        <span class="armed-chip mono" title="Remove-bars is armed for this session (set in Config). Encodes will crop bars after confirmation.">
+          ⚠ BARS ARMED
+        </span>
+      {/if}
       <button class="theme-toggle legend" onclick={() => (theme = theme === 'dark' ? 'light' : 'dark')}
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
@@ -366,34 +403,41 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} oncancel={cancelJob} onretry={(j) => enqueue(j.kind)} />
+        <JobsPage {history} oncancel={cancelJob} onretry={retryJob} />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
         <ConfigPage
           {scanPaths}
           {outputDir}
           {removeBars}
+          {targetVmaf}
           onpathsChange={(p) => { scanPaths = p; persist() }}
           onoutputChange={(o) => { outputDir = o; persist() }}
           onbarsChange={(armed) => { removeBars = armed }}
+          onvmafChange={(v) => { targetVmaf = v; persist() }}
         />
       </div>
     {/if}
   </main>
 </div>
 
-<!-- ══ irreversible-work confirmation strip (global) ══ -->
-{#if confirmBars}
-  <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal">
+<!-- ══ irreversible-work confirmation strip (global; echoes the ACTUAL targets) ══ -->
+{#if pendingBarsTargets}
+  <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal" tabindex="-1" bind:this={barsConfirmEl}>
     <div class="bars-text">
       <strong>BARS WILL BE CROPPED PERMANENTLY.</strong>
-      {barsAffected} movie{barsAffected === 1 ? '' : 's'} in {scanPaths.join(', ')} — there is no undo.
+      {#if pendingBarsTargets.length <= 3}
+        {pendingBarsTargets.length} movie{pendingBarsTargets.length === 1 ? '' : 's'}: {pendingBarsTargets.map((t) => t.split(/[\\/]/).pop()).join(' · ')}
+      {:else}
+        {pendingBarsTargets.length} movies across {scanPaths.length} folder{scanPaths.length === 1 ? '' : 's'}
+      {/if}
+      — there is no undo.
     </div>
     <div class="bars-buttons">
-      <button class="mono confirm" onclick={() => { confirmBars = false; enqueue('encode', undefined, true) }}>
-        CROP {barsAffected} MOVIE{barsAffected === 1 ? '' : 'S'}
+      <button class="mono confirm" onclick={() => { const t = pendingBarsTargets!; pendingBarsTargets = null; enqueue('encode', t, true) }}>
+        CROP {pendingBarsTargets.length} MOVIE{pendingBarsTargets.length === 1 ? '' : 'S'}
       </button>
-      <button class="mono deny" onclick={() => (confirmBars = false)}>KEEP BARS</button>
+      <button class="mono deny" onclick={() => (pendingBarsTargets = null)}>KEEP BARS</button>
     </div>
   </div>
 {/if}
@@ -472,6 +516,16 @@
     padding: 5px 10px;
     cursor: pointer;
     text-align: left;
+  }
+  .armed-chip {
+    color: var(--red);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    padding: 5px 10px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-align: center;
+    background: repeating-linear-gradient(45deg, rgba(242, 114, 101, 0.1) 0 4px, transparent 4px 8px), var(--panel);
   }
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
   .watcher.on { color: var(--teal-ink); border-color: var(--teal); }
