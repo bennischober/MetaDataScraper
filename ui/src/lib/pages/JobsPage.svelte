@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtWhen, fmtSpan, type Job } from '../api'
+  import { fmtGb, fmtWhen, fmtSpan, type Job } from '../api'
 
   /** The run log as an event log: every job with its timestamps, wall
    * duration, and expandable payload/result — the tool's audit trail. */
@@ -51,6 +51,19 @@
     if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
     else parts.push('fixed preset')
     if (p.remove_bars) parts.push('bars removed')
+    return parts.join(' · ')
+  }
+
+  /** One-line summary of a finished dedupe run (the raw JSON stays in
+   * the detail view; this is the headline). */
+  const dedupeNote = (job: Job) => {
+    if (job.state !== 'done' || job.kind !== 'dedupe') return ''
+    const r = job.result as { groups?: number; wasted_bytes?: number; excluded_missing?: number } | null
+    if (!r) return ''
+    const parts: string[] = []
+    if (r.groups != null) parts.push(`${r.groups} group${r.groups === 1 ? '' : 's'}`)
+    if (r.wasted_bytes != null) parts.push(`${fmtGb(r.wasted_bytes)} wasted`)
+    if (r.excluded_missing) parts.push(`${r.excluded_missing} retired ignored`)
     return parts.join(' · ')
   }
 
@@ -120,6 +133,8 @@
             </div>
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
+          {:else if job.state === 'done' && dedupeNote(job)}
+            <div class="mono dim note">{dedupeNote(job)}</div>
           {:else if job.error}
             <div class="mono error">{job.error}</div>
           {/if}
