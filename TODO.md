@@ -3,6 +3,10 @@
 ## Known limitations / planned work
 
 ### Decisions (2026-10-22)
+- [x] **Releases are changelog-written.** Every tag gets real release
+      notes assembled from the cycle's history (CHANGELOG.md is the
+      durable record; the GitHub release carries the same text). No
+      bare tags.
 - [x] **No PyInstaller/packaging - ever.** The distribution IS the uv-based
       install (install.ps1 on Windows, clone+uv sync or uvx from git on
       Linux). A plain source checkout stays auditable, patchable in place
