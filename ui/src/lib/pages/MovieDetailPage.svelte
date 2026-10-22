@@ -1,9 +1,19 @@
 <script lang="ts">
-  import { api, fmtGb, fmtSeconds, jobPaths, type Movie, type Job } from '../api'
+  import {
+    api,
+    fmtGb,
+    fmtSeconds,
+    fmtWhen,
+    jobPaths,
+    type Movie,
+    type Job,
+    type EncodeRecord,
+  } from '../api'
 
   /** The provenance page: everything recorded about one title — source
-   * facts, the latest encode with every schema-v5 metric, full job
-   * history, and the actions. */
+   * facts, the latest encode with every schema-v5 metric, the COMPLETE
+   * encode history (deltas between runs) with a VMAF-vs-target gauge,
+   * the job audit trail, and the actions. Deep-linkable via #/movie. */
 
   let {
     movie,
@@ -21,22 +31,24 @@
     backTo?: 'overview' | 'library'
   } = $props()
 
-  let history = $state<Job[]>([])
-  let loadingHistory = $state(true)
+  let jobs = $state<Job[]>([])
+  let encodes = $state<EncodeRecord[] | null>(null)
   let encodeBusy = $state(false)
   let revealBusy = $state(false)
   let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
 
   $effect(() => {
-    // job history touching this movie (multi-folder aware)
+    // full encode history from the dedicated endpoint (the library list
+    // carries only the latest encode per title) + this movie's job trail
+    api
+      .movie(movie.path)
+      .then((d) => (encodes = d.history))
+      .catch(() => (encodes = []))
     api
       .jobs(100)
-      .then((all) => {
-        history = all.filter((j) => jobPaths(j).includes(movie.path))
-        loadingHistory = false
-      })
-      .catch(() => (loadingHistory = false))
+      .then((all) => (jobs = all.filter((j) => jobPaths(j).includes(movie.path))))
+      .catch(() => {})
     pageEl?.focus()
   })
 
@@ -80,13 +92,42 @@
         : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
       : null
   )
+
+  /** Source bitrate in Mbps (size per second) — the honest "how fat is
+   * this source" figure next to the encode's own bitrate. */
+  function bitrateMbps(size: number | null | undefined, duration: string | null): string | null {
+    if (!size || !duration) return null
+    const parts = duration.split(':').map(Number)
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null
+    const seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+    if (seconds <= 0) return null
+    return ((size * 8) / 1_000_000 / seconds).toFixed(1)
+  }
+
+  /** Newest first for the history table. */
+  const encodesDesc = $derived(encodes ? [...encodes].reverse() : [])
+  /** Deltas between consecutive encodes (newest vs its predecessor). */
+  function delta(current: EncodeRecord, previous: EncodeRecord | null): string {
+    if (!previous) return ''
+    const parts: string[] = []
+    if (previous.output_size && current.output_size) {
+      const diff = current.output_size - previous.output_size
+      const pct = (diff / previous.output_size) * 100
+      parts.push(`${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% size`)
+    }
+    if (previous.vmaf != null && current.vmaf != null) {
+      const d = current.vmaf - previous.vmaf
+      parts.push(`${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(1)} VMAF`)
+    }
+    return parts.length ? `(${parts.join(', ')})` : ''
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="page page-in" tabindex="-1" bind:this={pageEl}>
   <header class="page-head">
-    <button class="back legend" onclick={onclose}>← {backTo === 'overview' ? 'OVERVIEW' : 'LIBRARY'}</button>
+    <button class="nav-link back" onclick={onclose}>← {backTo === 'overview' ? 'OVERVIEW' : 'LIBRARY'}</button>
   </header>
 
   <!-- ══ hero: the title as the page header ══ -->
@@ -119,6 +160,9 @@
         <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
         <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
+        {#if bitrateMbps(movie.size, movie.duration)}
+          <div class="fact"><span class="legend">SOURCE BITRATE</span><span class="mono">{bitrateMbps(movie.size, movie.duration)} Mbps</span></div>
+        {/if}
       </div>
     </section>
 
@@ -134,7 +178,14 @@
             <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
           </div>
           <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
-          <div class="fact"><span class="legend">VMAF</span><span class="mono measured">{encode.vmaf?.toFixed(2) ?? '—'}</span></div>
+          <div class="fact">
+            <span class="legend">VMAF</span>
+            <span class="gauge" role="img" aria-label="VMAF {encode.vmaf?.toFixed(1)} of target {targetVmaf}">
+              <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf ?? 0)}%"></span>
+              <span class="gauge-target" style="left: {targetVmaf}%"></span>
+            </span>
+            <span class="mono measured">{encode.vmaf?.toFixed(2) ?? '—'}</span>
+          </div>
           <div class="fact"><span class="legend">CRF</span><span class="mono">{encode.crf ?? '—'}</span></div>
           <div class="fact"><span class="legend">PRESET</span><span class="mono">{encode.preset}</span></div>
           {#if encode.encoder_preset}
@@ -142,6 +193,9 @@
           {/if}
           {#if encode.encode_seconds != null}
             <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{fmtSeconds(encode.encode_seconds)}</span></div>
+          {/if}
+          {#if bitrateMbps(encode.output_size, movie.duration)}
+            <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)} Mbps</span></div>
           {/if}
           {#if encode.probe_count != null}
             <div class="fact">
@@ -156,19 +210,51 @@
       {/if}
     </section>
 
-    <!-- ══ job history ══ -->
+    <!-- ══ encode history: every run recorded, with deltas ══ -->
     <section class="panel wide">
-      <div class="panel-head"><span class="legend">JOB HISTORY</span></div>
-      {#if loadingHistory}
+      <div class="panel-head"><span class="legend">ENCODE HISTORY — {encodesDesc.length || 'NO'} RUN{encodesDesc.length === 1 ? '' : 'S'}</span></div>
+      {#if encodes === null}
         <div class="dim pad">loading…</div>
-      {:else if history.length === 0}
+      {:else if encodesDesc.length === 0}
+        <div class="dim pad">no encode recorded — the title is untouched</div>
+      {:else}
+        <div class="enc-table mono">
+          <div class="enc-row enc-head legend" aria-hidden="true">
+            <span>WHEN</span>
+            <span class="num">CRF</span>
+            <span class="num">VMAF</span>
+            <span class="num">SIZE</span>
+            <span class="num">SAVED</span>
+            <span class="num">TIME</span>
+            <span class="delta"></span>
+          </div>
+          {#each encodesDesc as rec, i (rec.encoded_at)}
+            <div class="enc-row">
+              <span class="dim">{fmtWhen(rec.encoded_at)}</span>
+              <span class="num">{rec.crf ?? '—'}</span>
+              <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
+              <span class="num">{fmtGb(rec.output_size)}</span>
+              <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
+              <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
+              <span class="delta dim">{i < encodesDesc.length - 1 ? delta(rec, encodesDesc[i + 1]) : 'first run'}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
+    <!-- ══ job audit trail for this title ══ -->
+    <section class="panel wide">
+      <div class="panel-head"><span class="legend">JOB TRAIL</span></div>
+      {#if jobs.length === 0}
         <div class="dim pad">no jobs for this movie yet</div>
       {:else}
-        {#each history as job (job.id)}
+        {#each jobs as job (job.id)}
           <div class="hist-row mono">
             <span class="dim">#{job.id}</span>
             <span>{job.kind}</span>
             <span class={job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>{job.state}</span>
+            <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
             <span class="dim err">{job.error ?? ''}</span>
           </div>
         {/each}
@@ -186,6 +272,9 @@
     cursor: pointer;
     padding: 0;
     align-self: flex-start;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-transform: uppercase;
   }
   .back:hover { text-decoration: underline; }
   .dim { color: var(--ink-dim); }
@@ -252,6 +341,46 @@
   }
   .hist-row:last-child { border-bottom: none; }
   .err { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+  /* VMAF gauge: fill vs the target mark */
+  .fact .gauge {
+    position: relative;
+    flex: 1;
+    max-width: 180px;
+    height: 8px;
+    background: var(--ground);
+    border: 1px solid var(--row-line);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .gauge-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--teal);
+  }
+  .gauge-target {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--amber);
+  }
+
+  /* encode history table */
+  .enc-table { display: flex; flex-direction: column; padding: 6px 14px 12px; }
+  .enc-row {
+    display: grid;
+    grid-template-columns: 90px 40px 50px 80px 50px 70px 1fr;
+    gap: 10px;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--row-line);
+    font-size: 11px;
+  }
+  .enc-row:last-child { border-bottom: none; }
+  .enc-head { border-bottom: 1px solid var(--seam); color: var(--ink-faint); font-size: 10px; letter-spacing: 1px; }
+  .num { text-align: right; }
+  .delta { text-align: right; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   @media (max-width: 820px) {
     .cols { grid-template-columns: 1fr; }

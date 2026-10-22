@@ -783,6 +783,78 @@ def library(
     return JSONResponse(body, headers={"ETag": etag})
 
 
+@app.get("/api/movie")
+def movie_detail(path: str, conn=Depends(db_access)):
+    """Returns one movie's full record: file facts plus its COMPLETE encode
+    history (the library list only carries the latest encode per title).
+
+    Args:
+        path (str): The movie file's path (allowlist-checked).
+        conn: The database connection (db_access dependency).
+
+    Returns:
+        dict: {"file": {...}, "history": [one entry per encode, oldest
+        first]} — 404 when the path is unknown to the database.
+    """
+    p = validate_path(path, "path")
+    s = get_state()
+    row = s.with_lock(
+        lambda c: c.execute(
+            """
+            SELECT f.id, f.path, f.name, f.category, f.duration, f.codec,
+                   f.width, f.height, f.size, f.hdr, f.missing_scans,
+                   f.missing_since
+            FROM files f WHERE f.path = ?
+            """,
+            (str(p),),
+        ).fetchone()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="movie not found in the library")
+    history = s.with_lock(
+        lambda c: [
+            {
+                "preset": r["preset"],
+                "crf": r["chosen_crf"],
+                "vmaf": r["achieved_vmaf"],
+                "input_size": r["input_size"],
+                "output_size": r["output_size"],
+                "saved_percent": r["saved_percent"],
+                "encoder_preset": r["encoder_preset"],
+                "encode_seconds": r["encode_seconds"],
+                "probe_count": r["probe_count"],
+                "probe_seconds": r["probe_seconds"],
+                "tool_versions": r["tool_versions"],
+                "encoded_at": r["encoded_at"],
+            }
+            for r in c.execute(
+                """
+                SELECT preset, chosen_crf, achieved_vmaf, input_size, output_size,
+                       saved_percent, encoder_preset, encode_seconds, probe_count,
+                       probe_seconds, tool_versions, encoded_at
+                FROM encodes WHERE file_id = ? ORDER BY id
+                """,
+                (row["id"],),
+            ).fetchall()
+        ]
+    )
+    return {
+        "file": {
+            "path": row["path"],
+            "name": row["name"],
+            "category": row["category"],
+            "duration": row["duration"],
+            "codec": row["codec"],
+            "resolution": [row["width"], row["height"]] if row["width"] else None,
+            "size": row["size"],
+            "hdr": bool(row["hdr"]),
+            "missing": bool(row["missing_scans"]),
+            "missing_since": row["missing_since"],
+        },
+        "history": history,
+    }
+
+
 @app.post("/api/reveal")
 def reveal(request: RevealRequest):
     """Reveals a file's containing folder in the system file manager.

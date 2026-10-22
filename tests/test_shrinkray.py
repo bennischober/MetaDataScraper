@@ -526,6 +526,57 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_movie_detail_endpoint(self):
+        """GET /api/movie returns the file facts plus the COMPLETE encode
+        history (the library list carries only the latest encode)."""
+        # real temp dir: the endpoint allowlist-checks the path, so the
+        # movie file must live under an allowed root (a fictional D:/x
+        # would be rejected before the database is ever consulted)
+        import tempfile
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "detail-movie.mkv")
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="detail-movie",
+                    category="Cat",
+                ),
+            )
+            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 1000, 300, 70.0)
+            db.add_encode(self.connection, file_id, "VMAF>90", "x265", 1000, 250, 75.0)
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                response = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["file"]["name"], "detail-movie")
+                self.assertEqual(len(body["history"]), 2)  # both encodes, oldest first
+                self.assertEqual(body["history"][0]["preset"], "VMAF>95")
+                self.assertEqual(body["history"][1]["preset"], "VMAF>90")
+                # unknown path inside the allowlist: 404
+                missing = client.get(
+                    "/api/movie", params={"path": str(Path(self.tmp.name) / "unknown.mkv")}
+                )
+                self.assertEqual(missing.status_code, 404)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+                app_module._allowed_roots = []
+
     def test_snapshot_endpoint(self):
         """One request returns status + jobs + library (ETag-aware), and an
         unchanged library comes back as null while the rest stays fresh."""

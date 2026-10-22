@@ -67,6 +67,25 @@
     return parts.join(' · ')
   }
 
+  /** A DONE job whose per-movie outcomes failed is not a clean done: the
+   * lifecycle completed, but the work did not. The row says so in red and
+   * offers RETRY — a green DONE must never hide failed work. */
+  interface JobOutcome {
+    movie: string
+    state: string
+    error?: string
+  }
+  const failedOutcomeNote = (job: Job) => {
+    if (job.state !== 'done' || job.kind !== 'encode') return ''
+    const r = job.result as { outcomes?: JobOutcome[] } | null
+    if (!r?.outcomes) return ''
+    const failed = r.outcomes.filter((o) => o.state === 'failed')
+    if (failed.length === 0) return ''
+    return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
+      .map((o) => o.movie)
+      .join(', ')}`
+  }
+
   function stateClass(state: string): string {
     return state === 'done' ? 'ok' : state === 'failed' ? 'bad' : state === 'running' ? 'run' : 'dim'
   }
@@ -102,12 +121,12 @@
         <span></span>
       </div>
       {#each history as job (job.id)}
-        <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:open={job.id !== null && expanded.has(job.id)}>
+        <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed' || (job.state === 'done' && failedOutcomeNote(job) !== '')} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
             <span class="kind">{job.kind}</span>
             <span class="state {stateClass(job.state)}">
-              {job.state.toUpperCase()}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
+              {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
             </span>
             <span class="when" title={job.started_at ?? ''}>{fmtWhen(job.started_at ?? job.created_at)}</span>
             <span class="dur">{job.state === 'done' ? fmtSpan(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
@@ -125,7 +144,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <div class="trace" role="progressbar" aria-valuenow={p?.percent ?? 0} aria-valuemin="0" aria-valuemax="100" aria-label="{job.kind} progress">
+            <div class="trace" role="progressbar" aria-valuenow={p?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="{job.kind} progress">
               <div class="fill" style="width: {p?.percent ?? 2}%"></div>
               <span class="mono reading">
                 {p?.movie ? `${p.movie} · ` : ''}{p?.detail ?? 'starting…'}{p?.percent != null ? ` · ${p.percent}%` : ''}
@@ -135,6 +154,12 @@
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && dedupeNote(job)}
             <div class="mono dim note">{dedupeNote(job)}</div>
+          {:else if job.state === 'done' && failedOutcomeNote(job)}
+            {@const note = failedOutcomeNote(job)}
+            <div class="mono error">
+              {note.replace('__FAILED_OUTCOMES__', '')}
+              <button class="mini" onclick={() => onretry(job)}>RETRY</button>
+            </div>
           {:else if job.error}
             <div class="mono error">{job.error}</div>
           {/if}

@@ -37,6 +37,16 @@ export interface EncodeInfo {
   tool_versions?: string | null
 }
 
+/** One historical encode of a movie (GET /api/movie history entry). */
+export interface EncodeRecord extends EncodeInfo {
+  encoded_at: string | null
+}
+
+export interface MovieDetail {
+  file: Omit<Movie, 'encode'>
+  history: EncodeRecord[]
+}
+
 export interface Movie {
   path: string
   name: string
@@ -114,6 +124,11 @@ export const api = {
   library: () => request<Movie[]>('/api/library'),
   jobs: (limit = 50) => request<Job[]>(`/api/jobs?limit=${limit}`),
   job: (id: number) => request<Job>(`/api/jobs/${id}`),
+  /** One movie's full record: file facts + the COMPLETE encode history. */
+  movie: (path: string) => {
+    const params = new URLSearchParams({ path })
+    return request<MovieDetail>(`/api/movie?${params}`)
+  },
   config: () => request<Config>('/api/config'),
   saveConfig: (config: Config) =>
     request<Config>('/api/config', { method: 'PUT', body: JSON.stringify(config) }),

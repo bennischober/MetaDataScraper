@@ -52,6 +52,13 @@
       ? measured.reduce((sum, m) => sum + (m.encode?.vmaf ?? 0), 0) / measured.length
       : null
   )
+  const minVmaf = $derived(measured.length ? Math.min(...measured.map((m) => m.encode?.vmaf ?? 100)) : null)
+  const worstMeasured = $derived.by(() => {
+    if (!measured.length) return null
+    return measured.reduce((worst, m) =>
+      (m.encode?.vmaf ?? 100) < (worst.encode?.vmaf ?? 100) ? m : worst
+    )
+  })
 
   // encode cost statistics (schema v5)
   const withDuration = $derived(movies.filter((m) => m.encode?.encode_seconds != null))
@@ -206,11 +213,6 @@
       <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
       <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB source</span>
     </button>
-    <button class="stat">
-      <span class="legend">MEAN VMAF</span>
-      <span class="stat-v mono">{meanVmaf ? meanVmaf.toFixed(1) : '—'}</span>
-      <span class="stat-sub mono dim">{measuredCount} measured</span>
-    </button>
     <button class="stat" onclick={() => ongoto('duplicates')}>
       <span class="legend">DUPLICATES</span>
       <span class="stat-v mono" class:warn={duplicates > 0}>{duplicates}</span>
@@ -222,13 +224,6 @@
         <span class="stat-v mono bad">{missingMovies.length}</span>
         <span class="stat-sub mono dim">flagged by the last scan</span>
       </button>
-    {/if}
-    {#if totalEncodeHours > 0}
-      <div class="stat">
-        <span class="legend">ENCODE TIME</span>
-        <span class="stat-v mono">{totalEncodeHours.toFixed(1)} h</span>
-        <span class="stat-sub mono dim">{withDuration.length} runs measured</span>
-      </div>
     {/if}
   </div>
 
@@ -260,12 +255,12 @@
           {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
-        <button class="act" onclick={() => ongoto('jobs')}>JOBS →</button>
+        <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
       </div>
     {:else}
       <div class="quiet-strip">
         <span class="mono dim">no active work</span>
-        <button class="act" onclick={() => ongoto('library')}>LIBRARY →</button>
+        <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
       </div>
     {/if}
   {/if}
@@ -275,7 +270,7 @@
     <section class="panel">
       <div class="panel-head">
         <span class="legend">ATTENTION — FAILURES</span>
-        {#if failedJobs.length > 0}<button class="link legend" onclick={() => ongoto('jobs')}>JOBS →</button>{/if}
+        {#if failedJobs.length > 0}<button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>{/if}
       </div>
       {#if failedJobs.length === 0}
         <div class="dim pad">nothing failed — the last runs are clean</div>
@@ -315,7 +310,7 @@
     <section class="panel">
       <div class="panel-head">
         <span class="legend">SETUP</span>
-        <button class="link legend" onclick={() => ongoto('config')}>CONFIG →</button>
+        <button class="nav-link" onclick={() => ongoto('config')}>CONFIG →</button>
       </div>
       <div class="setup mono">
         <div class="fact"><span class="legend">SCAN FROM</span><span class="src">{scanPaths.join(' · ') || '—'}</span></div>
@@ -325,21 +320,49 @@
       </div>
     </section>
 
+    <!-- ══ measured quality: the score that justifies the whole product ══ -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="legend">MEASURED QUALITY — VMAF {targetVmaf} TARGET</span>
+      </div>
+      {#if measured.length === 0}
+        <div class="dim pad">nothing measured yet — plan predicts, encode measures</div>
+      {:else}
+        <div class="quality mono">
+          <div class="q-head">
+            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{meanVmaf?.toFixed(1)}</span>
+            <span class="q-label legend">MEAN</span>
+            <span class="q-sub mono dim">min {minVmaf?.toFixed(1)} · {measured.length} measured</span>
+          </div>
+          {#each measured.slice(0, 6) as m (m.path)}
+            <div class="q-row" title="{m.name}: VMAF {m.encode?.vmaf?.toFixed(1)} (target {targetVmaf})">
+              <span class="q-name">{m.name}</span>
+              <span class="q-bar"><span class="q-fill" style="width: {Math.min(100, ((m.encode?.vmaf ?? 0) / 100) * 100)}%"></span></span>
+              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{m.encode?.vmaf?.toFixed(1)}</span>
+            </div>
+          {/each}
+          {#if measured.length > 6}
+            <button class="link legend more" onclick={() => ongoto('library')}>{measured.length - 6} more →</button>
+          {/if}
+        </div>
+      {/if}
+    </section>
+
     <!-- ══ per-category bars: where the bytes live ══ -->
     <section class="panel wide">
       <div class="panel-head">
         <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
-        <button class="link legend" onclick={() => ongoto('library')}>LIBRARY →</button>
+        <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
       </div>
       <div class="bars">
         {#each catBars as bar (bar.name)}
           <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
             <span class="bar-name">{bar.name}</span>
             <div class="bar-track">
-              <div class="bar-size" style="width: {(bar.sizeGb / maxCatSize) * 100}%"></div>
-              <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.2) : 0}%"></div>
+              <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
+              <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
             </div>
-            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · −${bar.reclaimedGb.toFixed(1)}` : ''}</span>
+            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · −${bar.reclaimedGb >= 10 ? bar.reclaimedGb.toFixed(0) : bar.reclaimedGb.toFixed(1)} GB (${((bar.reclaimedGb / bar.sizeGb) * 100).toFixed(0)}%)` : ''}</span>
           </div>
         {:else}
           <div class="dim pad">no titles scanned yet</div>
@@ -487,7 +510,7 @@
   }
   .bar-track {
     position: relative;
-    height: 10px;
+    height: 12px;
     background: var(--ground);
     border: 1px solid var(--row-line);
     border-radius: 2px;
@@ -571,10 +594,39 @@
     text-transform: inherit;
   }
   .link:hover { text-decoration: underline; }
+
+  /* the ONE cross-page navigation style: page name + arrow, quiet link,
+     teal ink, underline on hover — band buttons and panel heads alike */
+  .nav-link {
+    background: transparent;
+    border: none;
+    color: var(--teal-ink);
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .nav-link:hover { text-decoration: underline; }
   .more { padding: 8px 14px; text-align: left; }
   .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
   .fact { display: flex; justify-content: space-between; gap: 12px; }
   .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+
+  /* measured quality panel */
+  .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .q-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .q-big { font-size: 26px; font-weight: 600; color: var(--teal-ink); }
+  .q-big.warn { color: var(--amber); }
+  .q-label { color: var(--ink-faint); }
+  .q-sub { margin-left: auto; font-size: 10px; }
+  .q-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 38px; gap: 8px; align-items: center; }
+  .q-name { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .q-bar { height: 6px; background: var(--ground); border: 1px solid var(--row-line); border-radius: 3px; overflow: hidden; }
+  .q-fill { display: block; height: 100%; background: var(--teal); }
+  .q-v { font-size: 10.5px; text-align: right; }
 
   .act {
     background: var(--panel-raised);

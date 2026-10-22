@@ -40,18 +40,35 @@
   let detailFrom = $state<'overview' | 'library'>('overview')
   function goto(next: Page) {
     detailMovie = null
+    detailPath = null
+    sessionStorage.removeItem('sr.detail')
     page = next
     location.hash = `/${next}`
   }
   function openDetail(movie: Movie, from: 'overview' | 'library') {
     detailMovie = movie
     detailFrom = from
+    detailPath = null
+    // deep link: the hash stays routable (#/movie), the path rides in
+    // sessionStorage so F5 on a detail page restores the same title
+    sessionStorage.setItem('sr.detail', movie.path)
+    location.hash = '/movie'
   }
   function closeDetail() {
     detailMovie = null
+    detailPath = null
+    sessionStorage.removeItem('sr.detail')
     page = detailFrom
     location.hash = `/${detailFrom}`
   }
+  // F5 on #/movie: restore the detail from sessionStorage (the poll may
+  // not have delivered the library yet — resolve lazily when it arrives)
+  if (pageFromHash() === 'overview' && location.hash === '#/movie') {
+    page = 'library'
+  }
+  let detailPath = $state<string | null>(
+    location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null
+  )
 
   // back/forward support
   window.addEventListener('hashchange', () => (page = pageFromHash()))
@@ -151,6 +168,19 @@
       error = e instanceof Error ? e.message : String(e)
     }
   }
+
+  // deep-link restore: a reload on #/movie re-opens the detail as soon as
+  // the library arrives (the path rides in sessionStorage)
+  $effect(() => {
+    if (detailPath && movies.length > 0) {
+      const m = movies.find((mv) => mv.path === detailPath)
+      if (m) {
+        detailMovie = m
+        detailFrom = 'library'
+      }
+      detailPath = null
+    }
+  })
 
   // adaptive polling: one snapshot request per tick, fast (1s) while work
   // is queued/running, relaxed (3s) when idle, paused entirely while the
@@ -353,8 +383,19 @@
   const runningJobs = $derived(
     history.filter((j) => (j.state === 'running' || j.state === 'queued') && j.id !== null && !dismissed.has(j.id))
   )
+  // failed work: jobs that FAILED, and DONE jobs whose per-movie outcomes
+  // failed (the engine completed but the work did not — a green DONE must
+  // not hide them)
   const failedJobs = $derived(
-    history.filter((j) => j.state === 'failed' && j.id !== null && !dismissed.has(j.id))
+    history.filter((j) => {
+      if (j.id === null || dismissed.has(j.id)) return false
+      if (j.state === 'failed') return true
+      if (j.state === 'done' && j.kind === 'encode') {
+        const outcomes = (j.result as { outcomes?: { state: string }[] } | null)?.outcomes ?? []
+        return outcomes.some((o) => o.state === 'failed')
+      }
+      return false
+    })
   )
   function dismissFailed(id: number | null) {
     if (id === null) return
