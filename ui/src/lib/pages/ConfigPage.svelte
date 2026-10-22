@@ -68,6 +68,22 @@
     onpathsChange(scanPaths.filter((p) => p !== path))
   }
 
+  // instant-commit fields acknowledge their own persistence — the tool
+  // settings panel has 'saved ✓'; silence here read as identical silence
+  // with the opposite truth (round-5 P1: the two persistence models were
+  // indistinguishable in the UI)
+  let flashed = $state<Record<string, boolean>>({})
+  function flash(key: string) {
+    flashed = { ...flashed, [key]: true }
+    setTimeout(() => {
+      flashed = { ...flashed, [key]: false }
+    }, 1400)
+  }
+  function commitPaths(next: string[]) {
+    onpathsChange(next)
+    flash('paths')
+  }
+
   async function save() {
     if (!config) return
     busy = true
@@ -117,13 +133,14 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">SCAN SOURCES — WHERE THE LIBRARY LIVES</span>
+      <span class="mono dim saved-note" role="status">{flashed.paths ? 'saved ✓' : 'applies immediately'}</span>
     </div>
     <div class="pad">
       <div class="path-list">
         {#each scanPaths as path (path)}
           <span class="path-chip mono">
             {path}
-            <button class="x" onclick={() => removePath(path)} aria-label="Remove {path}">✕</button>
+            <button class="x" onclick={() => commitPaths(scanPaths.filter((p) => p !== path))} aria-label="Remove {path}">✕</button>
           </span>
         {/each}
         <input
@@ -143,12 +160,16 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">OUTPUT — WHERE ENCODES ARE WRITTEN</span>
+      <span class="mono dim saved-note" role="status">{flashed.output ? 'saved ✓' : 'applies immediately'}</span>
     </div>
     <div class="pad row">
       <input
         class="mono out"
         bind:value={outputDir}
-        onchange={() => onoutputChange(outputDir)}
+        onchange={() => {
+          onoutputChange(outputDir)
+          flash('output')
+        }}
         placeholder="output folder"
         aria-label="Output folder path (encode)"
       />
@@ -159,6 +180,7 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">QUALITY TARGET — THE ENCODER'S FLOOR</span>
+      <span class="mono dim saved-note" role="status">{flashed.vmaf ? 'saved ✓' : 'applies immediately'}</span>
     </div>
     <div class="pad row vmaf-row">
       <label class="vmaf-label">
@@ -170,7 +192,10 @@
           max="100"
           step="0.5"
           bind:value={vmafDraft}
-          onchange={() => onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 95)))}
+          onchange={() => {
+            onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 95)))
+            flash('vmaf')
+          }}
           aria-label="VMAF quality target"
         />
       </label>
@@ -182,6 +207,7 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">ENCODE PARALLELISM — FIXED MODE ONLY</span>
+      <span class="mono dim saved-note" role="status">{flashed.workers ? 'saved ✓' : 'applies immediately'}</span>
     </div>
     <div class="pad row vmaf-row">
       <label class="vmaf-label">
@@ -197,6 +223,7 @@
           onchange={(e) => {
             const raw = (e.currentTarget as HTMLInputElement).value
             onworkersChange?.(raw === '' ? null : Math.min(16, Math.max(1, Number(raw))))
+            flash('workers')
           }}
           aria-label="Concurrent encodes (fixed mode)"
         />
@@ -229,7 +256,7 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">TOOL SETTINGS — CONFIG.JSON NEXT TO THE DATABASE</span>
-      <span class="mono dim">{saved ? 'saved ✓' : ''}</span>
+      <span class="mono dim">{saved ? 'saved ✓' : 'applies on SAVE CONFIG'}</span>
     </div>
     {#if !config}
       <div class="dim pad">loading…</div>
@@ -319,6 +346,7 @@
     padding: 9px 14px;
     border-bottom: 1px solid var(--row-line);
   }
+  .saved-note { font-size: 10px; letter-spacing: 0.5px; white-space: nowrap; }
   .pad { padding: 14px; }
   .pad.row { padding: 14px; }
   .groups { display: flex; flex-direction: column; gap: 14px; }

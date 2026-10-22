@@ -418,7 +418,9 @@
       <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
     </div>
     <div class="bars">
-      {#each catBars as bar (bar.name)}
+      <!-- top-8 cap: a 22-row inventory was the tallest panel on the
+           at-a-glance page with 2 data-bearing rows (round-5 P2) -->
+      {#each catBars.slice(0, 8) as bar (bar.name)}
         <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
           <span class="bar-name">{bar.name}</span>
           <div class="bar-track">
@@ -430,6 +432,9 @@
       {:else}
         <div class="dim pad">no titles scanned yet</div>
       {/each}
+      {#if catBars.length > 8}
+        <button class="link legend more" onclick={() => ongoto('library')}>{catBars.length - 8} more →</button>
+      {/if}
     </div>
   </section>
 
@@ -473,13 +478,13 @@
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
               <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
             </span>
-            <span class="p-num" class:measured={done}>
+            <span class="p-num" class:measured={done && rec?.crf != null}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done}>
+            <span class="p-num" class:measured={done && rec?.vmaf != null}>
               {#if done}{rec?.vmaf?.toFixed(1) ?? '—'}{:else}{entry.vmaf?.toFixed(1) ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done}>
+            <span class="p-num" class:measured={done && rec?.output_size != null}>
               {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
             </span>
             <span class="p-num" class:measured={done && rec?.vmaf != null}>
@@ -578,8 +583,13 @@
   /* columns */
   .cols {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    /* the four attention panels form a 2×2: auto-fit wrapped them 3+1 and
+       orphaned the fourth with two-thirds dead ground (round-5 P2) */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
+  }
+  @media (max-width: 640px) {
+    .cols { grid-template-columns: 1fr; }
   }
   .panel.wide { grid-column: 1 / -1; }
 
@@ -624,7 +634,8 @@
   .plan-list { display: flex; flex-direction: column; padding: 4px 14px 14px; }
   .plan-row {
     display: grid;
-    grid-template-columns: minmax(140px, 1.4fr) 110px 40px 50px 70px 50px 1fr;
+    /* SAVED widened 50→62px so '+26.3% larger' stays on one line (round-5) */
+    grid-template-columns: minmax(140px, 1.4fr) 110px 40px 50px 70px 62px 1fr;
     gap: 10px;
     align-items: center;
     padding: 4px 0;

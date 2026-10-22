@@ -41,12 +41,19 @@ export interface EncodeInfo {
  * The schema-v7 fields (generation, bitrates, chain links) make the row
  * a provenance-chain entry; bitrates are None for pre-v7 rows. */
 export interface EncodeRecord extends EncodeInfo {
+  /** the encodes row's primary key — the only safe each-key (timestamps
+   * collide when two runs finish in the same second) */
+  id?: number
   encoded_at: string | null
   input_bitrate?: number | null
   output_bitrate?: number | null
   generation?: number
   source_file?: string | null
   output_file?: string | null
+  /** the library file this row belongs to — chain rows may belong to the
+   * parent encode's file, not the viewed one (schema v7 chain) */
+  file_path?: string | null
+  file_name?: string | null
 }
 
 export interface MovieDetail {

@@ -47,13 +47,29 @@
   let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
 
-  /** This movie's slice of the audit trail, newest first. Derived from the
-   * snapshot the app already holds — no second request on detail-open. */
+  /** This movie's slice of the audit trail, newest first. Jobs may target
+   * the containing FOLDER (plan-all/scan-all) or exact file paths (encode),
+   * so the match is by path containment against both directions: the job
+   * path is the movie's ancestor, or the movie sits under the job's scope.
+   * Derived from the snapshot the app already holds — no extra request. */
   const jobs = $derived.by(() =>
     allJobs
-      .filter((j) => jobPaths(j).includes(movie.path))
+      .filter((j) => {
+        const scope = jobPaths(j)
+        if (scope.length === 0) return false
+        const m = normPath(movie.path)
+        return scope.some((jp) => {
+          const n = normPath(jp)
+          return n === m || m.startsWith(n + '/') || n.startsWith(m + '/')
+        })
+      })
       .sort((a, b) => (b.id ?? 0) - (a.id ?? 0))
   )
+
+  /** Path comparison that survives Windows/Unix separators and case. */
+  function normPath(v: string): string {
+    return v.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+  }
 
   $effect(() => {
     // the one fetch the detail page truly needs: the COMPLETE encode
@@ -122,6 +138,12 @@
 
   /** Newest first for the history table. */
   const encodesDesc = $derived(encodes ? [...encodes].reverse() : [])
+  /** Distinct generations in the chain — the head counts GENERATIONS, not
+   * rows (two encodes of the same original are one generation, and "2
+   * GENERATIONS" over two gen-1 rows was the round-5 finding). */
+  const distinctGenerations = $derived(
+    new Set(encodesDesc.map((r) => r.generation ?? 1)).size
+  )
   /** Deltas between consecutive encodes (newest vs its predecessor). */
   function delta(current: EncodeRecord, previous: EncodeRecord | null): string {
     if (!previous) return ''
@@ -238,7 +260,7 @@
 
     <!-- ══ encode history: the provenance chain (schema v7) ══ -->
     <section class="panel wide">
-      <div class="panel-head"><span class="legend">PROVENANCE CHAIN — {encodesDesc.length || 'NO'} GENERATION{encodesDesc.length === 1 ? '' : 'S'}</span></div>
+      <div class="panel-head"><span class="legend">PROVENANCE CHAIN — {encodesDesc.length || 'NO'} ENCODE{encodesDesc.length === 1 ? '' : 'S'} · {distinctGenerations} GENERATION{distinctGenerations === 1 ? '' : 'S'}</span></div>
       {#if encodes === null}
         <div class="dim pad">loading…</div>
       {:else if encodesDesc.length === 0}
@@ -256,11 +278,12 @@
             <span class="num">TIME</span>
             <span class="delta"></span>
           </div>
-          {#each encodesDesc as rec, i (rec.encoded_at)}
-            {@const producedThis = rec.output_file != null && rec.output_file.replace(/[\\/]/g, '').toLowerCase() === movie.path.replace(/[\\/]/g, '').toLowerCase()}
+          {#each encodesDesc as rec, i (rec.id ?? `${rec.encoded_at}-${i}`)}
+            {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path)}
+            {@const fromElsewhere = rec.file_path != null && normPath(rec.file_path) !== normPath(movie.path)}
             <div class="enc-row">
               <span class="gen" class:current={producedThis} title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}>{rec.generation ?? 1}</span>
-              <span class="dim">{fmtWhen(rec.encoded_at)}</span>
+              <span class="dim">{fmtWhen(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
               <span class="num">{rec.crf ?? '—'}</span>
               <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
               <!-- the drift signal: measured in→out MBit/s (v7); the derived

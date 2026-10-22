@@ -169,7 +169,13 @@
         />
         {selectedCount} SELECTED
       </span>
-      <span class="leader-note mono">→ EST. −{Math.max(0.1, selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE</span>
+      <span class="leader-note mono">
+        {#if selectedEstimate > 0}
+          → EST. −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
+        {:else}
+          → no estimate (selection already encoded)
+        {/if}
+      </span>
       <span class="spacer"></span>
       <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything" aria-label="Plan the {selectedCount} selected titles">
         PLAN SELECTED

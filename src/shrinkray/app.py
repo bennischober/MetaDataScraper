@@ -798,7 +798,9 @@ def movie_detail(path: str, conn=Depends(db_access)):
 
     Returns:
         dict: {"file": {..., "generation": N}, "history": [one entry per
-        encode, oldest first]} — 404 when the path is unknown to the
+        encode touching this title — its own rows plus the chain rows whose
+        output produced it or whose input it produced — in generation
+        order, ties by id]} — 404 when the path is unknown to the
         database.
     """
     p = validate_path(path, "path")
@@ -831,6 +833,11 @@ def movie_detail(path: str, conn=Depends(db_access)):
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
                 "tool_versions": r["tool_versions"],
+                "id": r["id"],
+                # which library file the row belongs to (the chain crosses
+                # files: a row for the parent encode may appear here)
+                "file_path": r["file_path"],
+                "file_name": r["file_name"],
                 # schema v7: the provenance chain (generation + drift data)
                 "input_bitrate": r["input_bitrate"],
                 "output_bitrate": r["output_bitrate"],
@@ -841,13 +848,13 @@ def movie_detail(path: str, conn=Depends(db_access)):
             }
             for r in s.connection.execute(
                 """
-                SELECT preset, chosen_crf, achieved_vmaf, input_size, output_size,
-                       saved_percent, encoder_preset, encode_seconds, probe_count,
-                       probe_seconds, tool_versions, encoded_at, input_bitrate,
-                       output_bitrate, generation, source_file, output_file
-                FROM encodes WHERE file_id = ? ORDER BY id
+                SELECT e.*, f.path AS file_path, f.name AS file_name
+                FROM encodes e
+                JOIN files f ON f.id = e.file_id
+                WHERE e.file_id = ? OR e.output_file = ? OR e.source_file = ?
+                ORDER BY e.generation, e.id
                 """,
-                (row["id"],),
+                (row["id"], str(p), str(p)),
             ).fetchall()
         ]
         # the movie's own generation: its path as a previous row's output

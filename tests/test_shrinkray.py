@@ -628,7 +628,10 @@ class TestDb(unittest.TestCase):
 
     def test_movie_detail_endpoint(self):
         """GET /api/movie returns the file facts plus the COMPLETE encode
-        history (the library list carries only the latest encode)."""
+        history (the library list carries only the latest encode), including
+        the schema-v7 chain: a re-encoded file's page must show the parent
+        row whose output produced it (the round-5 finding — the old query
+        filtered on file_id alone and the parent row vanished)."""
         # real temp dir: the endpoint allowlist-checks the path, so the
         # movie file must live under an allowed root (a fictional D:/x
         # would be rejected before the database is ever consulted)
@@ -672,11 +675,59 @@ class TestDb(unittest.TestCase):
                 self.assertIn("input_bitrate", body["history"][0])
                 self.assertIn("generation", body["history"][0])
                 self.assertIn("source_file", body["history"][0])
+                self.assertIn("id", body["history"][0])  # each-key, unique per row
                 # unknown path inside the allowlist: 404
                 missing = client.get(
                     "/api/movie", params={"path": str(Path(self.tmp.name) / "unknown.mkv")}
                 )
                 self.assertEqual(missing.status_code, 404)
+
+                # ── chain: a gen-2 file must see its parent row ──
+                output_path = str(Path(media_tmp) / "detail-movie_t01.mkv")
+                db.add_encode(
+                    self.connection,
+                    file_id,
+                    "VMAF>95",
+                    "x265",
+                    300,
+                    150,
+                    50.0,
+                    source_file=movie_path,
+                    output_file=output_path,
+                    generation=1,
+                )
+                child_id = db.upsert_file(
+                    self.connection,
+                    db.MovieRecord(
+                        path=Path(output_path),
+                        mtime=200.0,
+                        size=150,
+                        name="detail-movie_t01",
+                        category="Cat",
+                    ),
+                )
+                db.add_encode(
+                    self.connection,
+                    child_id,
+                    "VMAF>95",
+                    "x265",
+                    150,
+                    80,
+                    46.7,
+                    source_file=output_path,
+                    output_file=str(Path(media_tmp) / "detail-movie_t02.mkv"),
+                    generation=2,
+                )
+                self.connection.commit()
+                child = client.get("/api/movie", params={"path": output_path})
+                self.assertEqual(child.status_code, 200)
+                child_body = child.json()
+                self.assertEqual(child_body["file"]["generation"], 2)
+                # the parent's gen-1 row rides in via output_file linkage
+                self.assertEqual(len(child_body["history"]), 2)
+                self.assertEqual(child_body["history"][0]["file_path"], movie_path)
+                self.assertEqual(child_body["history"][0]["generation"], 1)
+                self.assertEqual(child_body["history"][1]["generation"], 2)
             finally:
                 app_module.state.shutdown()
                 app_module.state = None

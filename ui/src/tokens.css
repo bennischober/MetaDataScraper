@@ -151,10 +151,16 @@
 /* untouched as bare swatch (no bordered chip): the 354-row default must
    not out-shout the states that need action */
 .chip.bare-swatch {
+  /* the chip IS the swatch (empty span): size it or nothing paints —
+     0×0 was the round-5 "void" (untouched read as a broken cell) */
   display: inline-block;
+  width: 10px;
+  height: 10px;
   padding: 0;
-  border: none;
-  background: transparent;
+  border: 1px solid var(--row-line);
+  /* legible body, not a void: a hairline dash inside the box — the em-dash
+     vocabulary, so untouched reads as a state, not an absence */
+  background: linear-gradient(var(--ink-dim), var(--ink-dim)) center / 6px 1px no-repeat;
 }
 .chip.failed .swatch { background: var(--red); border-color: var(--red); }
 .chip.neutral .swatch { background: var(--seam); border-color: var(--ink-dim); }

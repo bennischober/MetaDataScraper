@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, jobPaths, type Movie, type Status, type Job } from './lib/api'
+  import { api, fmtGb, jobPaths, type Movie, type Status, type Job } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
   import DuplicatesPage from './lib/pages/DuplicatesPage.svelte'
@@ -269,7 +269,17 @@
     const seconds = (encodeAllSizeGb * 1024 ** 3 * (outSeconds / outBytes))
     const h = Math.round(seconds / 3600)
     const span = h >= 48 ? `~${(h / 24).toFixed(0)} days` : h >= 1 ? `~${h} h` : '~under an hour'
-    return `${span} at measured throughput (basis: ${done.length} title${done.length === 1 ? '' : 's'})`
+    // n=1 is the weakest possible basis: with a single sample the projection
+    // inherits one title's every quirk (a 43 MB episode vs a 40 GB remux),
+    // so it must not wear the confident "measured throughput" voice —
+    // same number, but the sentence says what it is
+    if (done.length === 1) {
+      const basisGb = done[0].size ?? done[0].encode?.output_size ?? 0
+      return basisGb > 0
+        ? `rough extrapolation from a single ${fmtGb(basisGb)} title — real runs will differ`
+        : 'rough extrapolation from a single title — real runs will differ'
+    }
+    return `${span} at measured throughput (basis: ${done.length} titles)`
   })
   function requestEncodeAll() {
     encodeAllTrigger = document.activeElement as HTMLElement | null
