@@ -571,6 +571,7 @@ def execute_encode(
 
     outcomes: list[dict] = []
     total = len(movies)
+    encoded_for_notify: list[Path] = []
     if payload.get("quality", False):
         encoded_paths: set[str] = (
             set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
@@ -606,6 +607,8 @@ def execute_encode(
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
             )
+            if outcome.encoded:
+                encoded_for_notify.append(movie)
             entry = {
                 "movie": movie.name,
                 "state": (
@@ -651,11 +654,15 @@ def execute_encode(
             }
             for o in fixed
         ]
-        for r in results:
-            if not r.success:
-                outcomes.append(
-                    {"movie": r.input.name, "state": "failed", "error": r.error or "failed"}
-                )
+        encoded_for_notify = [
+            r.input for r, o in zip(results, fixed, strict=True) if r.success and o.encoded
+        ]
+
+    # one polite tap on the shoulder after the whole batch (opt-in; never fails)
+    if encoded_for_notify:
+        from shrinkray.integrations import notify_after_encodes
+
+        notify_after_encodes(config, encoded_for_notify)
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 

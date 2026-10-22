@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from shrinkray.config import load_config
 from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
@@ -246,7 +247,7 @@ def watch(
                     log(f"Skipping '{movie.name}': {decision}.")
                     continue
                 log(f"Encoding '{movie.name}'...")
-                encode_movies(
+                results = encode_movies(
                     [movie],
                     output_dir,
                     preset="Fast 1080p30",
@@ -255,6 +256,11 @@ def watch(
                     max_threads=max_threads,
                 )
                 log(f"Done: '{movie.name}' (source left untouched).")
+                if any(r.success for r in results):
+                    # opt-in tap on the media server's shoulder (fire-and-forget)
+                    from shrinkray.integrations import notify_after_encodes
+
+                    notify_after_encodes(load_config(), [movie])
 
             sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
             if once:

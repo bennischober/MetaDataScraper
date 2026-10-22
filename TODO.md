@@ -2,6 +2,24 @@
 
 ## Known limitations / planned work
 
+### Decisions (2026-10-22)
+- [x] **No PyInstaller/packaging - ever.** The distribution IS the uv-based
+      install (install.ps1 on Windows, clone+uv sync or uvx from git on
+      Linux). A plain source checkout stays auditable, patchable in place
+      and dependency-managed by uv; a frozen binary would add a build
+      pipeline, AV false-positive risk and a second artifact to keep fresh
+      for zero benefit on a self-hosted single-user tool.
+- [x] **Secrets never in config.json** (it is a tracked file): integration
+      tokens live in environment variables, config.json only names the env
+      var. Honors the no-secrets-in-commits rule by construction.
+
+### Media-server integration (tier 3, in progress)
+- [ ] Jellyfin library refresh after successful encodes (opt-in, off by
+      default): POST {url}/Library/Refresh with the token from the env var
+      named in config; fire-and-forget with a 5s timeout - a notification
+      failure must never fail an encode. Plex deliberately not implemented
+      until a real Plex server exists to test against.
+
 ### Linux/NAS deployment (verified 2026-10-22, WSL rehearsal)
 - [x] Tier 2: full gate green on Ubuntu 20.04 (WSL), static ffmpeg +
       libvmaf measurement works, send2trash recoverable headless

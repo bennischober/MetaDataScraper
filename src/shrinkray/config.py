@@ -60,6 +60,10 @@ class Conf:
         resources: dict[str, Any] = data.get("resources") or {}
         self.idle_priority: bool = bool(resources.get("idle_priority", DEFAULT_IDLE_PRIORITY))
 
+        # integrations => opt-in media-server hooks (secrets via env vars!)
+        integrations: dict[str, Any] = data.get("integrations") or {}
+        self.integrations: dict[str, Any] = integrations
+
 
 _config: Conf | None = None
 

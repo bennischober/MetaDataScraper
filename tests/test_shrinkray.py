@@ -125,6 +125,80 @@ class TestResources(unittest.TestCase):
         self.assertTrue(conf.idle_priority)
 
 
+class TestIntegrations(unittest.TestCase):
+    """Jellyfin tap-on-the-shoulder: opt-in, env token, never raises."""
+
+    def setUp(self):
+        from shrinkray import integrations
+
+        self.integrations = integrations
+
+    def _conf(self, data: dict):
+        return config_helper.Conf(data)
+
+    def test_unconfigured_is_noop(self):
+        self.assertIsNone(self.integrations.jellyfin_settings(self._conf({})))
+        # notify without configuration: False, never raises
+        self.assertFalse(self.integrations.notify_jellyfin(self._conf({})))
+        self.assertEqual(self.integrations.notify_after_encodes(self._conf({}), []), 0)
+
+    def test_url_without_token_is_skipped(self):
+        conf = self._conf({"integrations": {"jellyfin": {"url": "http://nas:8096"}}})
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(self.integrations.jellyfin_settings(conf))
+
+    def test_token_from_env_var(self):
+        conf = self._conf(
+            {"integrations": {"jellyfin": {"url": "http://nas:8096/", "token_env": "MY_TOKEN_VAR"}}}
+        )
+        with mock.patch.dict(os.environ, {"MY_TOKEN_VAR": " secret "}, clear=True):
+            settings = self.integrations.jellyfin_settings(conf)
+        self.assertEqual(settings, {"url": "http://nas:8096", "token": "secret"})
+
+    def test_notify_posts_to_refresh_endpoint(self):
+        """A configured integration POSTs to {url}/Library/Refresh with the token."""
+        conf = self._conf({"integrations": {"jellyfin": {"url": "http://nas:8096"}}})
+        captured: dict = {}
+
+        class FakeResponse:
+            status = 204
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["method"] = request.get_method()
+            # urllib capitalizes header keys ("X-emby-token") => match loosely
+            captured["token"] = next(
+                (v for k, v in request.headers.items() if k.lower() == "x-emby-token"), None
+            )
+            return FakeResponse()
+
+        with (
+            mock.patch.dict(os.environ, {"SHRINKRAY_JELLYFIN_TOKEN": "tok"}, clear=True),
+            mock.patch("urllib.request.urlopen", fake_urlopen),
+        ):
+            ok = self.integrations.notify_jellyfin(conf)
+        self.assertTrue(ok)
+        self.assertEqual(captured["url"], "http://nas:8096/Library/Refresh")
+        self.assertEqual(captured["token"], "tok")
+        self.assertEqual(captured["method"], "POST")
+
+    def test_notify_never_raises(self):
+        """Server down / bad response => False and a log, no exception."""
+        conf = self._conf({"integrations": {"jellyfin": {"url": "http://127.0.0.1:9"}}})
+        with mock.patch.dict(os.environ, {"SHRINKRAY_JELLYFIN_TOKEN": "tok"}, clear=True):
+            self.assertFalse(self.integrations.notify_jellyfin(conf, timeout=0.2))
+
+    def test_notify_after_encodes_counts(self):
+        conf = self._conf({})
+        self.assertEqual(self.integrations.notify_after_encodes(conf, [Path("a.mkv")]), 1)
+
+
 class TestReadMedia(unittest.TestCase):
     def test_parse_frame_rate(self):
         self.assertEqual(read_media.parse_frame_rate("25/1"), 25.0)
