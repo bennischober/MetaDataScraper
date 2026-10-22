@@ -127,14 +127,17 @@
   )
 
   /** Source bitrate in Mbps (size per second) — the honest "how fat is
-   * this source" figure next to the encode's own bitrate. */
-  function bitrateMbps(size: number | null | undefined, duration: string | null): string | null {
+   * this source" figure next to the encode's own bitrate. Returns a
+   * NUMBER so drift-slot math and .toFixed at the display sites see
+   * real numbers (a string here silently coerced in arithmetic but
+   * crashed on .toFixed — the drift summary was the first caller). */
+  function bitrateMbps(size: number | null | undefined, duration: string | null): number | null {
     if (!size || !duration) return null
     const parts = duration.split(':').map(Number)
     if (parts.length !== 3 || parts.some(Number.isNaN)) return null
     const seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
     if (seconds <= 0) return null
-    return ((size * 8) / 1_000_000 / seconds).toFixed(1)
+    return (size * 8) / 1_000_000 / seconds
   }
 
   /** Newest first for the history table. */
@@ -183,10 +186,17 @@
   const vmafY = (v: number) => 86 - ((Math.min(100, Math.max(70, v)) - 70) / 30) * 20
   const driftSummary = $derived.by(() => {
     if (driftSlots.length < 2) return ''
-    const first = driftSlots[0]
-    const last = driftSlots[driftSlots.length - 1]
-    if (first.inBr != null && last.outBr != null) {
-      return `bitrate ${first.inBr.toFixed(1)} → ${last.outBr.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
+    // the drift story: the oldest measured source bitrate → the newest
+    // measured output bitrate. Slots without bitrates (pre-v7 rows with
+    // no derivable duration) must not erase the sentence — the first
+    // AVAILABLE pair wins, tilde marking the derived endpoint (the
+    // table's own ~ convention).
+    const firstSlot = driftSlots.find((s) => s.inBr != null)
+    const lastSlot = [...driftSlots].reverse().find((s) => s.outBr != null)
+    if (firstSlot?.inBr != null && lastSlot?.outBr != null) {
+      const f = firstSlot.inDerived ? '~' : ''
+      const l = lastSlot.outDerived ? '~' : ''
+      return `bitrate ${f}${firstSlot.inBr.toFixed(1)} → ${l}${lastSlot.outBr.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
     }
     return `${driftSlots.length} encodes, oldest → newest`
   })
@@ -251,10 +261,10 @@
         <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
         <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
-        {#if bitrateMbps(movie.size, movie.duration)}
+        {#if bitrateMbps(movie.size, movie.duration) != null}
           <div class="fact">
             <span class="legend">SOURCE BITRATE</span>
-            <span class="mono">{bitrateMbps(movie.size, movie.duration)} Mbps</span>
+            <span class="mono">{bitrateMbps(movie.size, movie.duration)?.toFixed(1)} Mbps</span>
           </div>
         {/if}
         {#if fileGeneration > 1}
@@ -300,8 +310,8 @@
           {#if encode.encode_seconds != null}
             <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{fmtSeconds(encode.encode_seconds)}</span></div>
           {/if}
-          {#if bitrateMbps(encode.output_size, movie.duration)}
-            <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)} Mbps</span></div>
+          {#if bitrateMbps(encode.output_size, movie.duration) != null}
+            <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)?.toFixed(1)} Mbps</span></div>
           {/if}
           {#if encode.probe_count != null}
             <div class="fact">
@@ -345,7 +355,7 @@
                   <rect x={cx - 9} y={110 - (s.inBr / driftMaxBr) * 52} width="8" height={(s.inBr / driftMaxBr) * 52} class="br-in" class:derived={s.inDerived}></rect>
                 {/if}
                 {#if s.outBr != null}
-                  <rect x={cx + 1} y={110 - (s.outBr / driftMaxBr) * 52} width="8" height={(s.outBr / driftMaxBr) * 52} class="br-out"></rect>
+                  <rect x={cx + 1} y={110 - (s.outBr / driftMaxBr) * 52} width="8" height={(s.outBr / driftMaxBr) * 52} class="br-out" class:derived={s.outDerived}></rect>
                 {/if}
               {/each}
             </svg>
@@ -353,6 +363,7 @@
               <span><span class="sw sw-in"></span> BITRATE IN</span>
               <span><span class="sw sw-out"></span> BITRATE OUT</span>
               <span><span class="sw sw-vmaf"></span> VMAF (70–100)</span>
+              <span title="dashed bar = value derived from size/duration (pre-v7 rows without ffprobe bitrates)">DASHED = DERIVED</span>
               <span class="spacer"></span>
               <span class="dim">{driftSummary}</span>
             </div>
@@ -392,8 +403,8 @@
               >
                 {#if rec.input_bitrate != null && rec.output_bitrate != null}
                   {rec.input_bitrate.toFixed(1)} → {rec.output_bitrate.toFixed(1)}
-                {:else if bitrateMbps(rec.input_size, fileDuration) && bitrateMbps(rec.output_size, fileDuration)}
-                  ~{bitrateMbps(rec.input_size, fileDuration)} → ~{bitrateMbps(rec.output_size, fileDuration)}
+                {:else if bitrateMbps(rec.input_size, fileDuration) != null && bitrateMbps(rec.output_size, fileDuration) != null}
+                  ~{bitrateMbps(rec.input_size, fileDuration)?.toFixed(1)} → ~{bitrateMbps(rec.output_size, fileDuration)?.toFixed(1)}
                 {:else}
                   —
                 {/if}
@@ -546,8 +557,10 @@
   .drift .vmaf-dot { fill: var(--teal); }
   .drift .vmaf-dot.under { fill: var(--amber); }
   .drift .br-in { fill: var(--seam); }
+  /* derived values (pre-v7, size/duration math) draw dashed — a derived
+     bar must not dress up as a measured one (both endpoints, not just in) */
   .drift .br-in.derived { fill: none; stroke: var(--seam); stroke-dasharray: 2 2; }
-  .drift .br-out { fill: var(--teal); opacity: 0.85; }
+  .drift .br-out.derived { fill: none; stroke: var(--teal); stroke-dasharray: 2 2; }
   .drift-legend {
     display: flex;
     gap: 16px;
