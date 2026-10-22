@@ -148,6 +148,14 @@
 .chip.progress .swatch { background: var(--hatch-progress); }
 .chip.skip .swatch { background: var(--hatch-skip); }
 .chip.untouched .swatch { background: transparent; }
+/* untouched as bare swatch (no bordered chip): the 354-row default must
+   not out-shout the states that need action */
+.chip.bare-swatch {
+  display: inline-block;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
 .chip.failed .swatch { background: var(--red); border-color: var(--red); }
 .chip.neutral .swatch { background: var(--seam); border-color: var(--ink-dim); }
 .chip.planned .swatch { background: var(--hatch-select); border-color: var(--teal); }

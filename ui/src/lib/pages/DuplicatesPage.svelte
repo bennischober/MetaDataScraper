@@ -34,13 +34,46 @@
 
   let confirmPath = $state<string | null>(null)
   let confirmEl: HTMLDivElement | null = $state(null)
+  let confirmTrigger: HTMLElement | null = null
 
   $effect(() => {
     if (confirmPath) confirmEl?.focus()
   })
 
+  function openConfirm(path: string) {
+    confirmTrigger = document.activeElement as HTMLElement | null
+    confirmPath = path
+    deleteError = null
+  }
+
+  function closeConfirm() {
+    confirmPath = null
+    // restore focus to the button that opened the dialog — a keyboard
+    // user must not be dropped into nowhere behind the scrim
+    confirmTrigger?.focus()
+    confirmTrigger = null
+  }
+
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') confirmPath = null
+    if (!confirmPath) return
+    if (e.key === 'Escape') {
+      closeConfirm()
+      return
+    }
+    // keep Tab inside the alertdialog (the scrim obscures what's behind)
+    if (e.key === 'Tab' && confirmEl) {
+      const focusables = confirmEl.querySelectorAll<HTMLElement>('button:not(:disabled)')
+      if (focusables.length < 2) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
   }
 
   const totalWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_bytes, 0))
@@ -48,17 +81,12 @@
   let deletingPath = $state<string | null>(null)
   let deleteError = $state<string | null>(null)
 
-  async function copyPath(path: string) {
-    await navigator.clipboard?.writeText(path)
-    confirmPath = null
-  }
-
   async function confirmDelete(path: string) {
     deletingPath = path
     deleteError = null
     try {
       await api.deleteToTrash(path)
-      confirmPath = null
+      closeConfirm()
       onrefresh?.()
     } catch (e) {
       deleteError = e instanceof Error ? e.message : String(e)
@@ -107,7 +135,7 @@
             {#if group.files[0].path !== file.path}
               <button
                 class="delete mono"
-                onclick={() => (confirmPath = file.path)}
+                onclick={() => openConfirm(file.path)}
                 aria-label="Delete {file.name} (moves the file to the recycle bin)"
                 title="moves the file to the recycle bin (recoverable)"
               >
@@ -133,7 +161,7 @@
       <div class="dim">The file is moved to the recycle bin (recoverable). The library entry stays until the next scan flags it missing.</div>
       {#if deleteError}<div class="mono bad">{deleteError}</div>{/if}
       <div class="confirm-actions">
-        <button class="mono" onclick={() => (confirmPath = null)}>KEEP</button>
+        <button class="mono" onclick={closeConfirm}>KEEP</button>
         <button class="mono danger" onclick={() => confirmDelete(confirmPath!)} disabled={deletingPath != null}>
           {deletingPath === confirmPath ? 'MOVING…' : 'MOVE TO RECYCLE BIN'}
         </button>

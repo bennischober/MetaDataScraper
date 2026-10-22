@@ -115,11 +115,15 @@
   const runSummary = $derived.by(() => {
     if (!lastEncodeRun || encodeOutcomes.length === 0) return null
     const encoded = encodeOutcomes.filter((o) => o.state === 'encoded')
-    const savedGb =
-      encoded.reduce(
-        (sum, o) => sum + Math.max(0, (o.input_size ?? 0) - (o.output_size ?? 0)),
-        0
-      ) / 1024 ** 3
+    const savedBytes = encoded.reduce(
+      (sum, o) => sum + Math.max(0, (o.input_size ?? 0) - (o.output_size ?? 0)),
+      0
+    )
+    // adaptive units: a 40 MB win must not read as "−0.0 GB"
+    const savedLabel =
+      savedBytes >= 0.1 * 1024 ** 3
+        ? `−${(savedBytes / 1024 ** 3).toFixed(1)} GB`
+        : `−${(savedBytes / 1024 ** 2).toFixed(0)} MB`
     const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
     const wall = fmtSpan(lastEncodeRun.started_at, lastEncodeRun.finished_at)
     return {
@@ -127,7 +131,7 @@
       state: lastEncodeRun.state,
       count: encoded.length,
       failed: encodeOutcomes.filter((o) => o.state === 'failed').length,
-      savedGb,
+      savedLabel,
       minVmaf: vmafs.length ? Math.min(...vmafs) : null,
       wall,
     }
@@ -253,7 +257,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · −{runSummary.savedGb.toFixed(1)} GB{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="act" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -333,7 +337,7 @@
             <span class="bar-name">{bar.name}</span>
             <div class="bar-track">
               <div class="bar-size" style="width: {(bar.sizeGb / maxCatSize) * 100}%"></div>
-              <div class="bar-reclaimed" style="width: {(bar.reclaimedGb / maxCatSize) * 100}%"></div>
+              <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.2) : 0}%"></div>
             </div>
             <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · −${bar.reclaimedGb.toFixed(1)}` : ''}</span>
           </div>
@@ -354,6 +358,15 @@
           </span>
         </div>
         <div class="plan-list">
+          <div class="plan-row plan-head mono legend" aria-hidden="true">
+            <span class="p-name">TITLE</span>
+            <span>DECISION</span>
+            <span class="p-num">CRF</span>
+            <span class="p-num">VMAF</span>
+            <span class="p-num">EST. SIZE</span>
+            <span class="p-num">SAVED</span>
+            <span class="p-reason"></span>
+          </div>
           {#each planEntries.slice(0, 8) as entry (entry.movie)}
             <div class="plan-row mono">
               <span class="p-name">{entry.movie}</span>
@@ -416,7 +429,7 @@
     border: none;
   }
   .stat:hover { background: var(--panel-raised); }
-  .stat-v { font-size: 17px; font-weight: 600; }
+  .stat-v { font-size: 22px; font-weight: 600; }
   .stat-sub { font-size: 10px; }
 
   /* running band */
@@ -490,6 +503,7 @@
     position: absolute;
     inset: 0 auto 0 0;
     background: repeating-linear-gradient(45deg, var(--teal-glow) 0 3px, transparent 3px 6px);
+    border-right: 1px solid var(--teal);
     box-shadow: inset -1px 0 0 var(--teal);
   }
   .bar-nums { font-size: 10px; text-align: right; white-space: nowrap; }
@@ -506,6 +520,13 @@
     font-size: 11px;
   }
   .plan-row:last-child { border-bottom: none; }
+  .plan-head {
+    border-bottom: 1px solid var(--seam);
+    color: var(--ink-faint);
+    letter-spacing: 1px;
+    font-size: 10px;
+  }
+  .plan-head .p-name { font-weight: 400; }
   .p-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .p-num { text-align: right; }
   .p-reason {

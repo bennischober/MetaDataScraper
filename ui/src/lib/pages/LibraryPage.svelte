@@ -1,6 +1,5 @@
 <script lang="ts">
   import { fmtGb, fmtSaved, type Movie } from '../api'
-  import PosterCard from './PosterCard.svelte'
   import HintButton from './HintButton.svelte'
   import HintMark from './HintMark.svelte'
 
@@ -39,14 +38,6 @@
   // ── search + category (a select, not an exploding chip row) ──
   let query = $state('')
   let category = $state<string | null>(null)
-  // view: the dense table is the default (a catalog is a table); the
-  // poster grid stays as a browsing mode — the choice persists
-  let view = $state<'grid' | 'table'>(
-    localStorage.getItem('ms.view') === 'grid' ? 'grid' : 'table'
-  )
-  $effect(() => {
-    localStorage.setItem('ms.view', view)
-  })
   let hideMissing = $state(false)
   // sorting: persisted per session (the regression the critique caught)
   let sortKey = $state<'name' | 'category' | 'size' | 'vmaf' | 'saved'>('name')
@@ -105,13 +96,15 @@
     selectedMovies.filter((m) => !m.encode).reduce((sum, m) => sum + (m.size ?? 0) * 0.45, 0)
   )
 
-  function decisionOf(movie: Movie): { label: string; cls: string } {
+  function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean } {
     const preset = movie.encode?.preset
     if (movie.missing) return { label: 'MISSING', cls: 'missing' }
     if (preset?.startsWith('skipped')) return { label: 'SKIPPED', cls: 'skip' }
     if (preset) return { label: 'ENCODED', cls: 'done' }
     if (plannedPaths.includes(movie.path)) return { label: 'PLANNED', cls: 'planned' }
-    return { label: 'UNTOUCHED', cls: 'untouched' }
+    // the default state renders as a bare swatch: 354 identical bordered
+    // chips diluted the states that actually need action
+    return { label: 'UNTOUCHED', cls: 'untouched', bare: true }
   }
 </script>
 
@@ -143,10 +136,6 @@
       </label>
     {/if}
     <span class="spacer"></span>
-    <div class="view-toggle" role="group" aria-label="View">
-      <button class="vt" class:active={view === 'grid'} onclick={() => (view = 'grid')} aria-pressed={view === 'grid'}>GRID</button>
-      <button class="vt" class:active={view === 'table'} onclick={() => (view = 'table')} aria-pressed={view === 'table'}>TABLE</button>
-    </div>
     <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning || pending} title="Re-read every source folder: new files are added, changed files re-read, missing files flagged after a grace period">
       {scanning ? 'SCANNING…' : 'RESCAN ALL'}
     </button>
@@ -184,28 +173,8 @@
     </div>
   {/if}
 
-  <!-- ══ grid view ══ -->
-  {#if view === 'grid'}
-    <div class="grid">
-      {#each filtered as movie (movie.path)}
-        {@const decision = decisionOf(movie)}
-        <PosterCard
-          {movie}
-          {decision}
-          selected={selectedPaths.has(movie.path)}
-          inWork={runningMovie != null && movie.path === runningMovie}
-          inWorkPercent={runningPercent}
-          planned={plannedPaths.includes(movie.path)}
-          onopen={() => onopenmovie(movie)}
-          ontoggle={(c) => ontoggle(movie.path, c)}
-        />
-      {:else}
-        <div class="empty dim">no titles match — adjust the search or run a scan</div>
-      {/each}
-    </div>
-  {:else}
-    <!-- ══ table view ══ -->
-    <div class="table-wrap">
+  <!-- ══ table view (the catalog is a table; the grid was demoted away) ══ -->
+  <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -263,7 +232,11 @@
                 {#if runningMovie != null && movie.path === runningMovie}
                   <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
                 {:else}
-                  <span class="chip {decision.cls}"><span class="swatch"></span>{decision.label}</span>
+                  {#if decision.bare}
+                    <span class="chip untouched bare-swatch" title="Untouched"> </span>
+                  {:else}
+                    <span class="chip {decision.cls}"><span class="swatch"></span>{decision.label}</span>
+                  {/if}
                 {/if}
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
@@ -278,7 +251,6 @@
         </tbody>
       </table>
     </div>
-  {/if}
 </div>
 
 <style>
@@ -315,17 +287,6 @@
   }
   .missing-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   .missing-toggle input { accent-color: var(--red); }
-  .view-toggle { display: inline-flex; border: 1px solid var(--seam); border-radius: var(--radius); overflow: hidden; }
-  .vt {
-    background: var(--panel);
-    border: none;
-    color: var(--ink-dim);
-    padding: 6px 14px;
-    cursor: pointer;
-    font-size: var(--fs-legend);
-    letter-spacing: var(--track-legend);
-  }
-  .vt.active { background: var(--panel-active); color: var(--teal-ink); }
   .act.scan {
     background: var(--panel-raised);
     border: 1px solid var(--ink);
@@ -359,7 +320,7 @@
 
   .act {
     background: var(--panel-raised);
-    border: 1px solid var(--ink);
+    border: 1px solid var(--seam);
     border-radius: var(--radius);
     color: var(--ink);
     padding: 5px 14px;
@@ -374,13 +335,7 @@
   .act.quiet { border-color: var(--seam); color: var(--ink-dim); }
   .act:disabled { opacity: 0.4; cursor: default; }
 
-  /* grid */
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 12px;
-  }
-  .empty { padding: 40px; text-align: center; grid-column: 1 / -1; }
+  .empty { padding: 40px; text-align: center; }
 
   /* table */
   .table-wrap {

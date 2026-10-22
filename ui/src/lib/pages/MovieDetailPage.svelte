@@ -64,6 +64,15 @@
   }
 
   const encode = $derived(movie.encode)
+  /** "02:41:41" → "2h 41m" — every duration carries its unit like the rest
+   * of the console; the raw HH:MM:SS string stays the fallback. */
+  function fmtDuration(raw: string | null): string | null {
+    if (!raw) return null
+    const parts = raw.split(':').map(Number)
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return raw
+    const [h, m] = parts
+    return h > 0 ? `${h}h ${m}m` : `${m}m ${parts[2]}s`
+  }
   const est = $derived(
     encode?.saved_percent != null
       ? encode.saved_percent <= 0
@@ -107,7 +116,7 @@
       <div class="panel-head"><span class="legend">SOURCE</span></div>
       <div class="facts">
         <div class="fact"><span class="legend">RESOLUTION</span><span class="mono">{movie.resolution?.join('×') ?? '—'}</span></div>
-        <div class="fact"><span class="legend">DURATION</span><span class="mono">{movie.duration ?? '—'}</span></div>
+        <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
         <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
       </div>
@@ -198,7 +207,7 @@
 
   .act {
     background: var(--panel-raised);
-    border: 1px solid var(--ink);
+    border: 1px solid var(--seam);
     border-radius: var(--radius);
     color: var(--ink);
     padding: 6px 16px;

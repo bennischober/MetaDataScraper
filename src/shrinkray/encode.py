@@ -270,7 +270,17 @@ def _encode_with_command(
                 popen.stdout.close()
                 stderr_thread.join(timeout=5)
                 stderr_bytes = b"".join(stderr_chunks)
-                returncode = popen.returncode
+                # Popen.returncode is None until the process is reaped:
+                # pipes at EOF mean HandBrake has exited, but without an
+                # explicit wait() the attribute never gets set and a
+                # successful encode read as `None != 0` => failed with the
+                # whole log as its error (first full streamed encode, job
+                # #20, exposed this)
+                try:
+                    returncode = popen.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    popen.kill()
+                    returncode = popen.wait(timeout=10)
     except (OSError, subprocess.SubprocessError) as e:
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
 
@@ -280,7 +290,7 @@ def _encode_with_command(
         )
 
     stderr = (stderr_bytes or b"").decode(errors="replace").strip()
-    if returncode != 0:
+    if returncode is None or returncode != 0:
         return EncodeResult(input=input_file, output=output_file, success=False, error=stderr)
 
     # HandBrake may exit with 0 even if the encode failed => the output file

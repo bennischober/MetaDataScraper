@@ -553,7 +553,6 @@ def execute_encode(
     from shrinkray.config import load_config
     from shrinkray.encode import encode_movies
     from shrinkray.quality import encode_with_quality
-    from shrinkray.scanner import scan_movies
     from shrinkray.service import (
         finished_movies,
         record_fixed_results,
@@ -563,10 +562,10 @@ def execute_encode(
     payload = job.payload
     config = load_config()
     output_dir = Path(payload["output_dir"])
-    movies: list = []
-    for path in payload_paths(payload):
-        _, part_movies, _ = scan_movies(path, config, connection=connection, exclude=output_dir)
-        movies.extend(part_movies)
+    # resolve_movies (not a bare scan_movies): a payload path may be a
+    # single movie FILE (per-movie action from the UI) — scanning it as a
+    # directory finds nothing and the job reported done with 0 outcomes
+    movies = resolve_movies(payload, config, connection=connection, exclude=output_dir)
 
     outcomes: list[dict] = []
     total = len(movies)

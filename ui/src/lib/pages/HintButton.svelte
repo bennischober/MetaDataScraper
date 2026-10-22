@@ -20,9 +20,26 @@
 
   // unique id for aria-describedby (one hint per button instance)
   const hintId = `hint-${Math.random().toString(36).slice(2, 9)}`
+
+  // placement awareness: a hint anchored left on a toolbar-end button
+  // overflows the viewport (the ENCODE ALL case) — measure at hover/
+  // focus time and anchor right instead
+  let wrapEl: HTMLElement | null = $state(null)
+  let alignEnd = $state(false)
+  function measure() {
+    if (!wrapEl) return
+    const rect = wrapEl.getBoundingClientRect()
+    alignEnd = rect.right + 330 > window.innerWidth
+  }
 </script>
 
-<span class="wrap">
+<span
+  class="wrap"
+  bind:this={wrapEl}
+  onmouseenter={measure}
+  onfocusin={measure}
+  role="presentation"
+>
   <button
     type="button"
     {onclick}
@@ -33,7 +50,7 @@
   >
     {label}
   </button>
-  <span class="hint" role="note" id={hintId}>{hint}</span>
+  <span class="hint" role="note" id={hintId} class:end={alignEnd}>{hint}</span>
 </span>
 
 <style>
@@ -80,6 +97,11 @@
     transition: opacity 120ms ease;
     white-space: normal;
     text-transform: none;
+  }
+  /* toolbar-end buttons anchor the box to their right edge instead */
+  .hint.end {
+    left: auto;
+    right: 0;
   }
   .wrap:hover .hint,
   .wrap:focus-within .hint {

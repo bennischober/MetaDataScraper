@@ -191,25 +191,66 @@
   // through — movie page, bulk selection and ENCODE ALL all route here.
   let pendingBarsTargets = $state<string[] | null>(null)
   let barsConfirmEl: HTMLDivElement | null = $state(null)
+  let barsTrigger: HTMLElement | null = null
   $effect(() => {
     if (pendingBarsTargets) barsConfirmEl?.focus()
   })
+  function closeBars() {
+    pendingBarsTargets = null
+    // the safe exit returns focus to wherever the encode was launched from
+    barsTrigger?.focus()
+    barsTrigger = null
+  }
+  function barsKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeBars()
+      return
+    }
+    // keep Tab inside the alertdialog
+    if (e.key === 'Tab' && barsConfirmEl) {
+      const focusables = barsConfirmEl.querySelectorAll<HTMLElement>('button:not(:disabled)')
+      if (focusables.length < 2) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+  }
   const barsAffectedList = $derived(
     (pendingBarsTargets ?? []).filter((t) =>
       scanPaths.some((p) => t.toLowerCase().startsWith(p.toLowerCase()))
     )
+  )
+  // the ceremony names its targets honestly: a scan folder is NOT a movie —
+  // folder targets expand to the titles the library holds under them
+  const isMoviePath = (t: string) => /\.(mkv|mp4|avi|m4v|ts|webm|mov|wmv)$/i.test(t)
+  const barsMovieFiles = $derived((pendingBarsTargets ?? []).filter((t) => isMoviePath(t)))
+  const barsFolders = $derived((pendingBarsTargets ?? []).filter((t) => !isMoviePath(t)))
+  const barsTitlesInFolders = $derived(
+    movies.filter((m) =>
+      barsFolders.some((f) => m.path.toLowerCase().startsWith(f.toLowerCase()))
+    ).length
   )
 
   function requestEncode(paths: string[] | undefined, confirmed = false) {
     const targets = paths ?? scanPaths
     if (removeBars && !confirmed) {
       // irreversible work demands explicit per-run confirmation naming
-      // the exact targets
+      // the exact targets; the trigger is remembered so the safe exit
+      // (KEEP BARS / Escape) returns focus there
+      barsTrigger = document.activeElement as HTMLElement | null
       pendingBarsTargets = targets
       return
     }
     void enqueue('encode', paths, true)
   }
+
 
   async function enqueue(
     kind: 'scan' | 'plan' | 'encode' | 'dedupe',
@@ -490,21 +531,23 @@
 
 <!-- ══ irreversible-work confirmation strip (global; echoes the ACTUAL targets) ══ -->
 {#if pendingBarsTargets}
-  <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal" tabindex="-1" bind:this={barsConfirmEl}>
+  <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal" tabindex="-1" bind:this={barsConfirmEl} onkeydown={barsKeydown}>
     <div class="bars-text">
       <strong>BARS WILL BE CROPPED PERMANENTLY.</strong>
-      {#if pendingBarsTargets.length <= 3}
-        {pendingBarsTargets.length} movie{pendingBarsTargets.length === 1 ? '' : 's'}: {pendingBarsTargets.map((t) => t.split(/[\\/]/).pop()).join(' · ')}
-      {:else}
-        {pendingBarsTargets.length} movies across {scanPaths.length} folder{scanPaths.length === 1 ? '' : 's'}
+      {#if barsMovieFiles.length > 0}
+        {barsMovieFiles.length} movie{barsMovieFiles.length === 1 ? '' : 's'}: {barsMovieFiles.map((t) => t.split(/[\\/]/).pop()!.replace(/\.(mkv|mp4|avi|m4v|ts|webm|mov|wmv)$/i, '')).join(' · ')}
+      {/if}
+      {#if barsMovieFiles.length > 0 && barsFolders.length > 0}+{/if}
+      {#if barsFolders.length > 0}
+        {barsFolders.length} folder{barsFolders.length === 1 ? '' : 's'} ({barsTitlesInFolders} title{barsTitlesInFolders === 1 ? '' : 's'}): {barsFolders.join(' · ')}
       {/if}
       — there is no undo.
     </div>
     <div class="bars-buttons">
+      <button class="mono deny" onclick={closeBars}>KEEP BARS</button>
       <button class="mono confirm" onclick={() => { const t = pendingBarsTargets!; pendingBarsTargets = null; enqueue('encode', t, true) }}>
-        CROP {pendingBarsTargets.length} MOVIE{pendingBarsTargets.length === 1 ? '' : 'S'}
+        CROP {barsMovieFiles.length + barsTitlesInFolders} MOVIE{barsMovieFiles.length + barsTitlesInFolders === 1 ? '' : 'S'}
       </button>
-      <button class="mono deny" onclick={() => (pendingBarsTargets = null)}>KEEP BARS</button>
     </div>
   </div>
 {/if}

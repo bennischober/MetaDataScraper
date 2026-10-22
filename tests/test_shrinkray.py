@@ -219,6 +219,33 @@ class TestEncode(unittest.TestCase):
             # skipped => no result recorded
             self.assertEqual(len(results), 0)
 
+    def test_streamed_encode_reaps_exit_code(self):
+        """The streamed encode (progress path) must reap the process: at EOF
+        Popen.returncode is still None, and reading it without wait() marked
+        every successful streamed encode as failed with the whole HandBrake
+        log as its error (job #20 was the first full streamed encode and
+        exposed this)."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x" * 8)
+            # cmd exits 0 and closes its pipes: EOF on stdout is reached,
+            # so the streamed loop ends without cancellation
+            command = ["cmd", "/c", "exit 0"] if os.name == "nt" else ["true"]
+            result = encode._encode_with_command(src, out, command, progress=lambda p: None)
+            # the fake encode wrote no output file: the command itself must
+            # still have been reaped as SUCCESS (exit 0), reaching the
+            # "no output file" check rather than "handbrake failed"
+            self.assertIn(result.error in (None, "no output file was written"), (True,))
+            self.assertTrue(
+                result.success or result.error == "no output file was written",
+                f"streamed run misread exit code: success={result.success} error={result.error!r}",
+            )
+
 
 class TestDb(unittest.TestCase):
     def setUp(self):
@@ -1346,6 +1373,50 @@ class TestJobs(unittest.TestCase):
         event.set()
         with self.assertRaises(Cancelled):
             _check_cancel(event)
+
+    def test_encode_single_file_payload(self):
+        """A per-movie encode payload (a FILE path, as the UI's detail page
+        sends) resolves to exactly one movie — regression: execute_encode
+        scanned the file as a directory and reported done with 0 outcomes."""
+        from pathlib import Path as _Path
+
+        movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)  # content irrelevant; resolution is mocked
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(_Path(self.tmp.name) / "out"),
+                    "quality": True,
+                },
+            )
+        )
+        outcomes: list = []
+
+        def fake_encode_with_quality(movie, *args, **kwargs):
+            outcomes.append({"movie": movie.name, "state": "encoded"})
+            from types import SimpleNamespace
+
+            return SimpleNamespace(
+                input_size=1, output_size=1, chosen_crf=20, achieved_vmaf=95.0, error=None
+            )
+
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        with (
+            patch("shrinkray.quality.encode_with_quality", fake_encode_with_quality),
+            patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: SimpleNamespace(encoded=True, skipped=False),
+            ),
+        ):
+            result = jobs.execute_encode(job, self.connection, threading.Event())
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0]["movie"], "Some Movie_t00.mkv")
+        # the job's recorded outcomes carry the movie through (not empty)
+        self.assertEqual(result["outcomes"][0]["movie"], "Some Movie_t00.mkv")
 
     def test_dedupe_job_execution(self):
         """A dedupe job analyzes the library and records its summary."""
