@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from shrinkray import db
+from shrinkray import __version__, db
 from shrinkray.config import load_config
 from shrinkray.dedupe import find_duplicates
 from shrinkray.encode import cap_threads
@@ -28,7 +28,7 @@ from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
 from shrinkray.watch import watch
 
-app = FastAPI(title="ShrinkRay", version="0.3.0")
+app = FastAPI(title="ShrinkRay", version=__version__)
 
 
 @app.middleware("http")
