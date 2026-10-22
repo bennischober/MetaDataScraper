@@ -35,6 +35,11 @@ export interface EncodeInfo {
   probe_count?: number | null
   probe_seconds?: number | null
   tool_versions?: string | null
+  /** schema v7 drift fields (null for pre-v7 rows); present in the
+   * library list, snapshot and /api/movie alike since 3f77d08 */
+  generation?: number | null
+  input_bitrate?: number | null
+  output_bitrate?: number | null
 }
 
 /** One historical encode of a movie (GET /api/movie history entry).
@@ -79,13 +84,20 @@ export interface Status {
   queue: Job[]
   watcher: 'running' | 'stopped'
   database: string
+  /** the resident app's own memory (MiB), self-measured every 5 min —
+   * staying lean is a measured fact (4534e07); null when unmeasurable */
+  rss_mib?: number | null
 }
 
 export interface Config {
   codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
   file?: { extensions?: string[]; output?: { seperator?: string } }
   ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number } }
-  handbrake?: { preset?: string; encoder?: string }
+  handbrake?: { preset?: string; encoder?: string; max_threads?: number }
+  resources?: { idle_priority?: boolean }
+  integrations?: {
+    jellyfin?: { url?: string; token_env?: string }
+  }
   language?: string
 }
 

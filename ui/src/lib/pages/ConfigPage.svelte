@@ -40,6 +40,26 @@
     vmafDraft = targetVmaf
   })
   let config = $state<Config | null>(null)
+  // guarded config updaters (closures defeat {#if} narrowing; the guards
+  // keep the null-check discipline the same as save())
+  function updateResources(idle: boolean) {
+    if (!config) return
+    config = { ...config, resources: { ...config.resources, idle_priority: idle } }
+  }
+  function updateMaxThreads(value: number) {
+    if (!config) return
+    config = { ...config, handbrake: { ...config.handbrake, max_threads: value } }
+  }
+  function updateJellyfin(patch: { url?: string; token_env?: string }) {
+    if (!config) return
+    config = {
+      ...config,
+      integrations: {
+        ...config.integrations,
+        jellyfin: { ...config.integrations?.jellyfin, ...patch },
+      },
+    }
+  }
   let saveError = $state<string | null>(null)
   let saved = $state(false)
   let busy = $state(false)
@@ -250,6 +270,84 @@
         </span>
       </label>
     </div>
+  </section>
+
+  <!-- ══ resource politeness (config.json; SAVE CONFIG model) ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">RESOURCES — BEHAVIOR ON A SHARED MACHINE</span>
+      <span class="mono dim saved-note">applies on SAVE CONFIG</span>
+    </div>
+    {#if !config}
+      <div class="dim pad">loading…</div>
+    {:else}
+      <div class="pad groups">
+        <label class="bars-option">
+          <input
+            type="checkbox"
+            checked={config.resources?.idle_priority ?? true}
+            onchange={(e) => updateResources(e.currentTarget.checked)}
+          />
+          <span>
+            <strong>IDLE-PRIORITY ENCODES</strong>
+            <span class="mono dim block">encodes and quality probes run below normal priority — they yield instantly to everything else on the machine</span>
+          </span>
+        </label>
+        <label class="field">
+          <span class="dim">max threads per encode (0 = all cores)</span>
+          <input
+            class="mono"
+            type="number"
+            min="0"
+            max="64"
+            step="1"
+            value={config.handbrake?.max_threads ?? 0}
+            onchange={(e) => updateMaxThreads(Math.max(0, Math.min(64, Number(e.currentTarget.value) || 0)))}
+            aria-label="Per-encode thread cap (0 = all cores)"
+          />
+        </label>
+        <p class="mono dim note">e.g. 8 on a 16-core mini PC leaves half the machine for a media server</p>
+      </div>
+    {/if}
+  </section>
+
+  <!-- ══ media-server integration (config.json; SAVE CONFIG model) ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">JELLYFIN — LIBRARY REFRESH AFTER ENCODES</span>
+      <span class="mono dim saved-note">applies on SAVE CONFIG</span>
+    </div>
+    {#if !config}
+      <div class="dim pad">loading…</div>
+    {:else}
+      <div class="pad groups">
+        <label class="field">
+          <span class="dim">server url</span>
+          <input
+            class="mono"
+            placeholder="http://nas:8096"
+            value={config.integrations?.jellyfin?.url ?? ''}
+            onchange={(e) => updateJellyfin({ url: e.currentTarget.value.trim() })}
+            aria-label="Jellyfin server URL"
+          />
+        </label>
+        <label class="field">
+          <span class="dim">token env variable</span>
+          <input
+            class="mono"
+            placeholder="SHRINKRAY_JELLYFIN_TOKEN"
+            value={config.integrations?.jellyfin?.token_env ?? ''}
+            onchange={(e) => updateJellyfin({ token_env: e.currentTarget.value.trim() })}
+            aria-label="Name of the environment variable holding the Jellyfin token"
+          />
+        </label>
+        <p class="mono dim note">
+          opt-in, off by default — one POST /Library/Refresh after a successful encode batch, nothing else.
+          the token itself never lives here: this field names the environment variable that holds it
+          (secrets discipline — config.json is a tracked file). empty url = integration off.
+        </p>
+      </div>
+    {/if}
   </section>
 
   <!-- ══ tool settings ══ -->

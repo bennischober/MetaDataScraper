@@ -911,6 +911,42 @@ class TestDb(unittest.TestCase):
                 app_module.state = None
                 app_module._allowed_roots = []
 
+    def test_config_endpoint_roundtrip(self):
+        """GET /api/config returns the engine's full config shape (including
+        the resource-politeness and integration sections) so the UI can edit
+        them; POST persists what it is given."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            body = client.get("/api/config").json()
+            # the sections the config page edits (defaults when no file exists)
+            self.assertIn("handbrake", body)
+            self.assertIn("max_threads", body["handbrake"])
+            self.assertIn("resources", body)
+            self.assertIn("idle_priority", body["resources"])
+            self.assertIn("integrations", body)
+            # PUT round-trips the new sections (the app's contract is PUT)
+            body["resources"]["idle_priority"] = False
+            body["handbrake"]["max_threads"] = 8
+            body["integrations"] = {"jellyfin": {"url": "http://nas:8096", "token_env": "TOK"}}
+            saved = client.put("/api/config", json=body)
+            self.assertEqual(saved.status_code, 200)
+            reread = client.get("/api/config").json()
+            self.assertFalse(reread["resources"]["idle_priority"])
+            self.assertEqual(reread["handbrake"]["max_threads"], 8)
+            self.assertEqual(reread["integrations"]["jellyfin"]["url"], "http://nas:8096")
+            # the token env NAME persists; no secret value ever does
+            self.assertEqual(reread["integrations"]["jellyfin"]["token_env"], "TOK")
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_snapshot_endpoint(self):
         """One request returns status + jobs + library (ETag-aware), and an
         unchanged library comes back as null while the rest stays fresh."""

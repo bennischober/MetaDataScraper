@@ -416,7 +416,12 @@ def _conf_to_dict(conf) -> dict:
         "handbrake": {
             "preset": conf.handbrake_preset,
             "encoder": conf.handbrake_encoder,
+            "max_threads": conf.handbrake_max_threads,
         },
+        "resources": {
+            "idle_priority": conf.idle_priority,
+        },
+        "integrations": conf.integrations,
         "language": conf.language,
     }
 

@@ -390,6 +390,9 @@
         <div class="fact"><span class="legend">WRITE TO</span><span class="src">{outputDir || '—'}</span></div>
         <div class="fact"><span class="legend">DATABASE</span><span class="src">{status?.database ?? '—'}</span></div>
         <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
+        {#if status?.rss_mib != null}
+          <div class="fact"><span class="legend">RESIDENT MEMORY</span><span class="src">{status.rss_mib.toFixed(1)} MiB</span></div>
+        {/if}
       </div>
     </section>
 

@@ -247,6 +247,7 @@
                 <button class="name-btn" onclick={() => onopenmovie(movie)}>
                   {movie.name}
                   {#if movie.hdr}<span class="mono hdr">HDR</span>{/if}
+                  {#if (movie.encode?.generation ?? 1) >= 2}<span class="mono gen-badge" title="Generation {movie.encode?.generation}: this file is itself the output of a previous encode">GEN {movie.encode?.generation}</span>{/if}
                 </button>
               </td>
               <td class="dim">{movie.category}</td>
@@ -445,6 +446,17 @@
     color: var(--amber);
     font-size: 10px;
     border: 1px solid var(--seam);
+    padding: 0 4px;
+    border-radius: 2px;
+  }
+  /* generation badge: only on gen >= 2 files (a "GEN 1" on every encoded
+     row would be noise - generation only means something when the file is
+     an encode of an encode, same rule as the detail hero chip) */
+  .gen-badge {
+    margin-left: 8px;
+    color: var(--teal-ink);
+    font-size: 10px;
+    border: 1px solid var(--teal);
     padding: 0 4px;
     border-radius: 2px;
   }
