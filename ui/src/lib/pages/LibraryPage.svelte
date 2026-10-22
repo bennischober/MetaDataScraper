@@ -35,14 +35,24 @@
   } = $props()
 
   // ── search + category (a select, not an exploding chip row) ──
-  let query = $state('')
-  let category = $state<string | null>(null)
-  // decision filter: the state dimension ("untouched, ≥ 30 GB" is
-  // answerable now) — replaces the narrower hide-missing toggle, which is
-  // a strict subset (filtering missing is reachable via decision=missing)
-  let decision = $state<'all' | 'untouched' | 'planned' | 'encoded' | 'skipped' | 'missing'>('all')
+  // Filter state persists per session: opening a detail page DESTROYS
+  // this component ({#if detailMovie} unmounts every page), so in-memory
+  // state died on the round-trip — the user lost their filtered view by
+  // looking at a title and coming back (round-6 user report). Same
+  // sessionStorage contract as sort.
+  let query = $state(sessionStorage.getItem('ms.query') ?? '')
+  let category = $state<string | null>(sessionStorage.getItem('ms.category'))
+  let decision = $state<'all' | 'untouched' | 'planned' | 'encoded' | 'skipped' | 'missing'>(
+    (sessionStorage.getItem('ms.decision') as DecisionState | null) ?? 'all'
+  )
+  $effect(() => {
+    sessionStorage.setItem('ms.query', query)
+    sessionStorage.setItem('ms.category', category ?? '')
+    sessionStorage.setItem('ms.decision', decision)
+  })
   // sorting: persisted per session via sessionStorage
   type SortKey = 'name' | 'category' | 'size' | 'vmaf' | 'saved'
+  type DecisionState = 'all' | 'untouched' | 'planned' | 'encoded' | 'skipped' | 'missing'
   const storedKey = sessionStorage.getItem('ms.sortKey')
   let sortKey = $state<SortKey>(
     storedKey === 'name' || storedKey === 'category' || storedKey === 'size' || storedKey === 'vmaf' || storedKey === 'saved'

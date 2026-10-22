@@ -179,6 +179,12 @@
   })
   const maxCatSize = $derived(Math.max(...catBars.map((b) => b.sizeGb), 0.001))
 
+  // the chart is never amputated: the top-8 cap orders, the expander
+  // reveals the rest inline — a "more →" that jumps to the library left
+  // the chart literally cut off (round-6, user report)
+  let showAllCats = $state(false)
+  const visibleCats = $derived(showAllCats ? catBars : catBars.slice(0, 8))
+
   // plan results of the latest finished plan job
   interface PlanEntry {
     movie: string
@@ -440,17 +446,22 @@
       <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
       <!-- the two visual encodings, stated once (round-6: the bars were
            never explained — grey vs teal hatch was tribal knowledge) -->
-      <span class="legend bar-legend">BAR = SIZE · HATCH = RECLAIMED</span>
+      <span class="legend bar-legend">BAR = SIZE · TEAL HATCH = RECLAIMED</span>
       <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
     </div>
     <div class="bars">
-      <!-- top-8 cap: a 22-row inventory was the tallest panel on the
-           at-a-glance page with 2 data-bearing rows (round-5 P2) -->
-      {#each catBars.slice(0, 8) as bar (bar.name)}
+      <!-- top-8 cap orders the chart; the expander reveals the rest IN
+           PANEL — a "more →" jump left the graph cut off (round-6) -->
+      {#each visibleCats as bar (bar.name)}
         <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
           <span class="bar-name">{bar.name}</span>
           <div class="bar-track">
             <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
+            <!-- hatch overlays the BAR's extent (same global-max scale):
+                 share-of-category scaling let the hatch outrun the grey
+                 bar it belongs to — claiming track space the category
+                 does not have. The 1.5% floor keeps sub-1% wins findable
+                 (exact figures live in the nums + row title). -->
             <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
           </div>
           <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
@@ -459,7 +470,9 @@
         <div class="dim pad">no titles scanned yet</div>
       {/each}
       {#if catBars.length > 8}
-        <button class="link legend more" onclick={() => ongoto('library')}>{catBars.length - 8} more →</button>
+        <button class="link legend more" onclick={() => (showAllCats = !showAllCats)}>
+          {showAllCats ? 'SHOW LESS' : `SHOW ${catBars.length - 8} MORE`}
+        </button>
       {/if}
     </div>
   </section>
@@ -559,18 +572,24 @@
   }
   .sysline .spacer { flex: 1; }
 
-  /* stat band — dense, tile-sized, data-first; capped so three cards
-     don't stretch to 440px each on a wide screen (round-6: sparse read) */
+  /* stat band — dense, tile-sized, data-first; the band hugs its cards
+     (a capped auto-fit left the unused tracks as dead seam ground —
+     the "whitespace in the bar", round-6 user report) */
   .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(128px, 220px));
+    display: flex;
+    flex-wrap: wrap;
     gap: 1px;
     background: var(--seam);
     border: 1px solid var(--seam);
     border-radius: var(--radius);
     overflow: hidden;
+    width: fit-content;
+    max-width: 100%;
   }
   .stat {
+    flex: 0 0 auto;
+    min-width: 128px;
+    max-width: 220px;
     display: flex;
     flex-direction: column;
     gap: 2px;
