@@ -16,6 +16,18 @@
       new path while the old row ages out; a hash match could reconnect the
       encode history instead of starting fresh
 
+### API/polling (optional — only if the system grows)
+- [ ] Delta library sync via `GET /api/snapshot?since=<iso>`: today's snapshot
+      is fingerprint-skip (unchanged library = null, changed = the WHOLE
+      library re-sent — no row-level deltas). The `since=` variant would send
+      files WHERE scanned_at/encoded_at/missing_since > since plus tombstones
+      for hard-prunes (or: only flag, never hard-prune), with a periodic full
+      resync as the safety net. Sketch is ~80 lines + merge tests. Trigger
+      condition: library payload exceeds ~1 MB (~5k movies) or long batch
+      runs feel laggy. Until then the fingerprint design is correct — change
+      events fire per encode completion, not per second, so the all-or-
+      nothing cost is rare and bursty on localhost
+
 ### UI (next round)
 - [x] Critique round 2026-10-21 (impeccable dual-agent, 20/40): evidence wall
       shipped — the zone ramp plots every movie's measured VMAF as ticks;
