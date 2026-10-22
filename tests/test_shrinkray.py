@@ -499,6 +499,71 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_snapshot_endpoint(self):
+        """One request returns status + jobs + library (ETag-aware), and an
+        unchanged library comes back as null while the rest stays fresh."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        file_id = db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=Path("D:/x/snap.mkv"), mtime=100.0, size=1000, name="snap", category="Cat"
+            ),
+        )
+        db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>95",
+            "x265",
+            1000,
+            300,
+            70.0,
+            chosen_crf=22,
+            achieved_vmaf=95.4,
+        )
+        self.connection.commit()
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            first = client.get("/api/snapshot")
+            self.assertEqual(first.status_code, 200)
+            body = first.json()
+            # status shape (same contract as /api/status)
+            self.assertIn("watcher", body["status"])
+            self.assertIn("queue", body["status"])
+            self.assertIn("database", body["status"])
+            # the library is fully present on the first call
+            self.assertIsInstance(body["library"], list)
+            movie = next(m for m in body["library"] if m["name"] == "snap")
+            self.assertEqual(movie["encode"]["crf"], 22)
+            # job history included
+            self.assertIsInstance(body["jobs"], list)
+
+            # second call with the ETag: library null, rest fresh
+            second = client.get("/api/snapshot", headers={"If-None-Match": body["library_etag"]})
+            self.assertEqual(second.status_code, 200)
+            body2 = second.json()
+            self.assertIsNone(body2["library"])
+            self.assertEqual(body2["library_etag"], body["library_etag"])
+            self.assertIn("status", body2)
+            self.assertIn("jobs", body2)
+
+            # a change re-validates the library in the next snapshot
+            db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1, 1, 0.0)
+            self.connection.commit()
+            third = client.get("/api/snapshot", headers={"If-None-Match": body["library_etag"]})
+            body3 = third.json()
+            self.assertIsInstance(body3["library"], list)
+            self.assertNotEqual(body3["library_etag"], body["library_etag"])
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_reveal_rejects_outside_root(self):
         """The reveal endpoint uses the same path allowlist as everything
         else (a file manager window must never open outside the roots)."""

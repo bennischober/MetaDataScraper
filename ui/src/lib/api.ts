@@ -78,10 +78,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** The library ETag: kept across polls, sent as If-None-Match; a 304
- * keeps the previous array (the 3-second poll becomes nearly free). */
+ * keeps the previous array (the poll becomes nearly free). */
 let libraryEtag: string | null = null
 
+export interface Snapshot {
+  status: Status
+  jobs: Job[]
+  /** null when the library is unchanged (client keeps its copy). */
+  library: Movie[] | null
+  library_etag: string
+}
+
 export const api = {
+  /** One round-trip for the whole poll: status + jobs + library (ETag-aware). */
+  snapshot: async (): Promise<Snapshot> => {
+    const response = await fetch('/api/snapshot', {
+      headers: libraryEtag ? { 'If-None-Match': libraryEtag } : {},
+    })
+    if (!response.ok) throw new Error(`API ${response.status}: snapshot`)
+    const snap = (await response.json()) as Snapshot
+    libraryEtag = snap.library_etag
+    return snap
+  },
   status: () => request<Status>('/api/status'),
   /** Fetches the library with ETag caching: returns null on 304 (unchanged). */
   libraryChanged: async (): Promise<Movie[] | null> => {

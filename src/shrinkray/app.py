@@ -592,6 +592,110 @@ def cancel_job(job_id: int):
     return {"cancelled": job_id}
 
 
+@app.get("/api/snapshot")
+def snapshot(
+    jobs_limit: int = 100,
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+):
+    """Returns the full UI state in one request: status, jobs and library.
+
+    The poll endpoint: instead of three requests (status, jobs, library)
+    per tick, the UI fetches everything with one round-trip and one lock
+    pass. The library part is ETag-cached — send the last ETag as
+    If-None-Match and an unchanged library comes back as `"library": null`
+    (client keeps its copy) while status and jobs stay fresh. The three
+    individual endpoints remain available (curl, scripts, tests).
+
+    Args:
+        jobs_limit (int): Maximum number of jobs in the history.
+        if_none_match (str | None): The client's library ETag.
+
+    Returns:
+        dict: {"status": ..., "jobs": [...], "library": [...] | None,
+        "library_etag": str}
+    """
+    import hashlib
+
+    s = get_state()
+
+    def read(c) -> dict:
+        """Reads jobs, status and the library fingerprint in one pass."""
+        jobs = s.queue.all_jobs(limit=jobs_limit)
+        running = [j for j in jobs if j.state.value in ("running", "queued")]
+        fingerprint = c.execute(
+            """
+            SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
+                   COALESCE((SELECT MAX(id) FROM encodes), 0),
+                   COALESCE((SELECT MAX(mtime) FROM files), 0),
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+            FROM files f
+            """
+        ).fetchone()
+        return {"jobs": jobs, "running": running, "fingerprint": tuple(fingerprint)}
+
+    data = s.with_lock(read)
+
+    etag = '"lib-' + hashlib.md5(str(data["fingerprint"]).encode()).hexdigest()[:16] + '"'
+    library_unchanged = if_none_match == etag
+    library = None
+    if not library_unchanged:
+        library = s.with_lock(
+            lambda c: [
+                {
+                    "path": r["path"],
+                    "name": r["name"],
+                    "category": r["category"],
+                    "duration": r["duration"],
+                    "codec": r["codec"],
+                    "resolution": [r["width"], r["height"]],
+                    "size": r["size"],
+                    "hdr": bool(r["hdr"]),
+                    "missing": bool(r["missing_scans"]),
+                    "missing_since": r["missing_since"],
+                    "encode": {
+                        "preset": r["preset"],
+                        "crf": r["chosen_crf"],
+                        "vmaf": r["achieved_vmaf"],
+                        "input_size": r["input_size"],
+                        "output_size": r["output_size"],
+                        "saved_percent": r["saved_percent"],
+                        "encoder_preset": r["encoder_preset"],
+                        "encode_seconds": r["encode_seconds"],
+                        "probe_count": r["probe_count"],
+                        "probe_seconds": r["probe_seconds"],
+                        "tool_versions": r["tool_versions"],
+                    }
+                    if r["preset"]
+                    else None,
+                }
+                for r in c.execute(
+                    """
+                    SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
+                           f.size, f.hdr, f.missing_scans, f.missing_since,
+                           e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
+                           e.saved_percent, e.encoder_preset, e.encode_seconds,
+                           e.probe_count, e.probe_seconds, e.tool_versions
+                    FROM files f
+                    LEFT JOIN encodes e ON e.id = (
+                        SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+                    )
+                    ORDER BY f.category, f.name
+                    """
+                ).fetchall()
+            ]
+        )
+    return {
+        "status": {
+            "queue": [j.to_dict() for j in data["running"]],
+            "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
+            "database": str(s.db_file),
+        },
+        "jobs": [j.to_dict() for j in data["jobs"]],
+        "library": library,
+        "library_etag": etag,
+    }
+
+
 @app.get("/api/library")
 def library(
     conn=Depends(db_access),

@@ -126,18 +126,30 @@
   // ── refresh loop ──
   async function refresh() {
     try {
-      const [s, lib, jobs] = await Promise.all([
-        api.status(),
-        api.libraryChanged(),
-        api.jobs(100),
-      ])
-      status = s
-      if (lib !== null) movies = lib // 304: keep the current array
-      history = jobs
+      const snap = await api.snapshot()
+      status = snap.status
+      history = snap.jobs
+      if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       error = null
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
+  }
+
+  // adaptive polling: one snapshot request per tick, fast (1s) while work
+  // is queued/running, relaxed (3s) when idle, paused entirely while the
+  // tab is hidden (the browser throttles it anyway — this is explicit)
+  const POLL_ACTIVE = 1000
+  const POLL_IDLE = 3000
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  async function poll() {
+    await refresh()
+    const busy = history.some((j) => j.state === 'queued' || j.state === 'running')
+    const hidden = document.hidden
+    schedule(busy ? POLL_ACTIVE : POLL_IDLE, hidden)
+  }
+  function schedule(interval: number, hidden: boolean) {
+    pollTimer = setTimeout(poll, hidden ? 10000 : interval)
   }
 
   async function refreshDuplicates() {
@@ -305,10 +317,11 @@
   const missingMovies = $derived(movies.filter((m) => m.missing))
 
   onMount(() => {
-    refresh()
+    poll()
     refreshDuplicates()
-    const timer = setInterval(refresh, 3000)
-    return () => clearInterval(timer)
+    return () => {
+      if (pollTimer !== null) clearTimeout(pollTimer)
+    }
   })
 
   const savedTotalGb = $derived(
