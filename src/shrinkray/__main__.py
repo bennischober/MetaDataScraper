@@ -383,6 +383,7 @@ def encode(
             target_vmaf,
             remove_bars,
             workers,
+            db_file,
         )
     finally:
         connection.close()
@@ -399,6 +400,7 @@ def _record_encodes(
     target_vmaf,
     remove_bars,
     workers,
+    db_file,
 ):
     """Runs the encoding and records the results in the database.
 
@@ -413,6 +415,7 @@ def _record_encodes(
         target_vmaf (float): VMAF quality floor for quality mode.
         remove_bars (bool): Crop stable baked-in black bars (quality mode).
         workers (int): Number of concurrent encodes (fixed mode).
+        db_file (Path): The database file (failure-evidence logs location).
     """
     from shrinkray.encode import encode_movies
     from shrinkray.quality import encode_with_quality
@@ -435,6 +438,7 @@ def _record_encodes(
                     target_vmaf=target_vmaf,
                     encoder=config.handbrake_encoder,
                     remove_bars=remove_bars,
+                    db_file=db_file,
                 )
                 if result.success:
                     saved = result.saved_percent
@@ -541,6 +545,7 @@ def plan(
                 target_vmaf=target_vmaf,
                 encoder=config.handbrake_encoder,
                 remove_bars=remove_bars,
+                db_file=db_file,
             )
         except (RuntimeError, FileNotFoundError) as e:
             table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))

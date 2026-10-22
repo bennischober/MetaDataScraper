@@ -891,6 +891,53 @@ class TestMain(unittest.TestCase):
 
 
 class TestQuality(unittest.TestCase):
+    def test_telemetry_saves_failure_bundle(self):
+        """A failure bundle keeps stderr, command, context and artifacts."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "test.db"
+            workdir = Path(tmp) / "work"
+            workdir.mkdir()
+            (workdir / "vmaf.json").write_text('{"pooled_metrics": {}}', encoding="utf-8")
+
+            bundle = quality.save_failure(
+                db_file=db_file,
+                kind="vmaf-measure",
+                command=["ffmpeg", "-i", "x.mkv"],
+                stderr="",
+                workdir=workdir,
+                artifacts=["vmaf.json"],
+                context={"hdr": True, "returncode": 1},
+            )
+            self.assertIsNotNone(bundle)
+            # empty stderr is still recorded as an empty file (evidence of
+            # the emptiness — yesterday's bug was exactly this blindness)
+            self.assertTrue((bundle / "stderr.txt").exists())
+            self.assertEqual(
+                (bundle / "command.txt").read_text(encoding="utf-8"), "ffmpeg\n-i\nx.mkv\n"
+            )
+            self.assertTrue((bundle / "traceback.txt").exists())
+            context = (bundle / "context.json").read_text(encoding="utf-8")
+            self.assertIn('"hdr": true', context)
+            # the partial artifact was copied (not moved)
+            self.assertTrue((bundle / "artifact-vmaf.json").exists())
+            self.assertTrue((workdir / "vmaf.json").exists())
+
+    def test_telemetry_never_raises(self):
+        """Telemetry must not break the error path it reports on."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # a file where the logs dir should be => mkdir fails => None
+            blocker = Path(tmp) / "logs"
+            blocker.write_text("not a directory", encoding="utf-8")
+            bundle = quality.save_failure(
+                db_file=Path(tmp) / "test.db",
+                kind="encode",
+            )
+            self.assertIsNone(bundle)
+
     def test_sample_offsets(self):
         # 3 samples spread over 10%-90% of a 100s movie
         offsets = quality.sample_offsets(100.0, 3)

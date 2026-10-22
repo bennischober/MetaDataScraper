@@ -213,6 +213,7 @@ def _encode_with_command(
     returncode: int
     stderr_bytes: bytes | None = None
     cancelled = False
+    stderr_chunks: list[bytes] = []
     try:
         if progress is None:
             proc = subprocess.run(command, capture_output=True)
@@ -224,7 +225,25 @@ def _encode_with_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            assert popen.stdout is not None  # stdout=PIPE guarantees it
+            assert popen.stdout is not None and popen.stderr is not None
+
+            # stderr must be drained WHILE stdout is being read: HandBrake
+            # writes work warnings to stderr and would block on a full pipe
+            # buffer even though we keep reading stdout (the classic
+            # communicate-vs-stream deadlock)
+            def _drain_stderr() -> None:
+                """Reads the stderr pipe to EOF into stderr_chunks."""
+                stream = popen.stderr
+                if stream is None:
+                    return
+                try:
+                    for chunk in iter(lambda: stream.read(4096), b""):
+                        stderr_chunks.append(chunk)
+                except (ValueError, OSError):
+                    pass  # pipe closed during shutdown (cancellation race)
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
             for raw in iter(popen.stdout.readline, b""):
                 if cancel is not None and cancel.is_set():
                     popen.terminate()
@@ -249,8 +268,8 @@ def _encode_with_command(
                     )
             if not cancelled:
                 popen.stdout.close()
-                _, stderr_raw = popen.communicate()
-                stderr_bytes = stderr_raw
+                stderr_thread.join(timeout=5)
+                stderr_bytes = b"".join(stderr_chunks)
                 returncode = popen.returncode
     except (OSError, subprocess.SubprocessError) as e:
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
@@ -267,7 +286,6 @@ def _encode_with_command(
     # HandBrake may exit with 0 even if the encode failed => the output file
     # must exist, be non-empty and have the full duration
     if not output_file.is_file() or output_file.stat().st_size == 0:
-        stderr = proc.stderr.decode(errors="replace").strip()
         return EncodeResult(
             input=input_file,
             output=output_file,

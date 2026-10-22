@@ -36,6 +36,7 @@ from shrinkray.encode import (
     probe_duration_seconds,
 )
 from shrinkray.logger import log
+from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
 
@@ -318,6 +319,10 @@ def _run(
 
     With a cancel event, the process is polled and terminated when the
     event fires; the returncode -1 signals the cancellation to the caller.
+    Both pipes are drained by daemon threads while the process runs: a
+    child writing more than the ~64K pipe buffer (HandBrake progress on
+    stdout, libvmaf/ffmpeg warnings on stderr) would otherwise block
+    forever while this loop only polls for exit — a silent deadlock.
 
     Args:
         command (list[str]): The command to run.
@@ -331,6 +336,25 @@ def _run(
         proc = subprocess.run(command, capture_output=True, cwd=cwd)
         return proc.returncode, proc.stderr.decode(errors="replace").strip()
     popen = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+    assert popen.stdout is not None and popen.stderr is not None
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    def _drain(pipe, chunks: list[bytes]) -> None:
+        """Reads a pipe to its EOF into chunks (runs in a daemon thread)."""
+        try:
+            for chunk in iter(lambda: pipe.read(4096), b""):
+                chunks.append(chunk)
+        except (ValueError, OSError):
+            pass  # pipe closed during shutdown (cancellation race)
+
+    drainers = [
+        threading.Thread(target=_drain, args=(popen.stdout, stdout_chunks), daemon=True),
+        threading.Thread(target=_drain, args=(popen.stderr, stderr_chunks), daemon=True),
+    ]
+    for drainer in drainers:
+        drainer.start()
+    cancelled = False
     try:
         while popen.poll() is None:
             if cancel.is_set():
@@ -340,10 +364,15 @@ def _run(
                 except subprocess.TimeoutExpired:
                     popen.kill()
                     popen.wait(timeout=5)
-                return -1, "cancelled by user"
+                cancelled = True
+                break
             time.sleep(0.2)
-        stderr_bytes = popen.stderr.read() if popen.stderr else b""
-        return popen.returncode, stderr_bytes.decode(errors="replace").strip()
+        for drainer in drainers:
+            drainer.join(timeout=5)
+        if cancelled:
+            return -1, "cancelled by user"
+        stderr = b"".join(stderr_chunks).decode(errors="replace").strip()
+        return popen.returncode, stderr
     finally:
         if popen.stdout:
             popen.stdout.close()
@@ -615,6 +644,7 @@ def measure_vmaf(
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
@@ -630,6 +660,8 @@ def measure_vmaf(
             the reference so it matches the distorted geometry.
         hdr (bool): Tone-map both sides for the measurement.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file, used to locate the logs
+            directory for failure evidence (None => cwd metadata.db).
 
     Returns:
         float: The mean VMAF score.
@@ -656,6 +688,24 @@ def measure_vmaf(
         raise Cancelled("cancelled during vmaf measurement")
     log_file = workdir / "vmaf.json"
     if code != 0 or not log_file.is_file():
+        # preserve the evidence (a failure with an EMPTY stderr is the
+        # worst case: the bundle keeps stderr, command and any partial
+        # vmaf.json alive for diagnosis)
+        save_failure(
+            db_file=db_file or Path("metadata.db"),
+            kind="vmaf-measure",
+            command=build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr),
+            stderr=err,
+            workdir=workdir,
+            artifacts=["vmaf.json"],
+            context={
+                "distorted": str(distorted),
+                "reference": str(reference),
+                "hdr": hdr,
+                "crop": crop,
+                "returncode": code,
+            },
+        )
         raise RuntimeError(f"libvmaf failed: {err[-400:]}")
 
     try:
@@ -789,6 +839,7 @@ def probe_crf(
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
@@ -806,6 +857,7 @@ def probe_crf(
             so the decision matches the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
@@ -827,7 +879,11 @@ def probe_crf(
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
         _check_cancel(cancel)
-        scores.append(measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr))
+        scores.append(
+            measure_vmaf(
+                encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file
+            )
+        )
         encoded.unlink()
     return min(scores)
 
@@ -842,6 +898,7 @@ def estimate_size_factor(
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -859,6 +916,7 @@ def estimate_size_factor(
         crop (tuple | None): Crop bars applied to the probe encode.
         hdr (bool): Tone-map for the measurement.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
 
     Returns:
         float: The size ratio of the probe encode (encoded / sample source).
@@ -879,7 +937,7 @@ def estimate_size_factor(
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
     try:
-        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel)
+        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file)
         factor = encoded.stat().st_size / sample.stat().st_size
     finally:
         encoded.unlink()
@@ -899,6 +957,7 @@ def find_optimal_crf(
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -934,7 +993,16 @@ def find_optimal_crf(
     def check(crf: int) -> bool:
         _check_cancel(cancel)
         vmaf = probe_crf(
-            samples, crf, workdir, handbrake, encoder, encoder_preset, crop=crop, cancel=cancel
+            samples,
+            crf,
+            workdir,
+            handbrake,
+            encoder,
+            encoder_preset,
+            crop=crop,
+            hdr=hdr,
+            cancel=cancel,
+            db_file=db_file,
         )
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
         return vmaf >= target_vmaf
@@ -958,6 +1026,7 @@ def find_optimal_crf_and_skip(
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -989,7 +1058,15 @@ def find_optimal_crf_and_skip(
 
     # cheapest CRF (largest size) of the search range as the pessimistic bound
     factor = estimate_size_factor(
-        samples, workdir, handbrake, crf_range[1], encoder, encoder_preset, crop=crop, cancel=cancel
+        samples,
+        workdir,
+        handbrake,
+        crf_range[1],
+        encoder,
+        encoder_preset,
+        crop=crop,
+        cancel=cancel,
+        db_file=db_file,
     )
     if factor >= 1.0:
         log(
@@ -1011,6 +1088,7 @@ def find_optimal_crf_and_skip(
         crop=crop,
         hdr=hdr,
         cancel=cancel,
+        db_file=db_file,
     )
     return chosen, achieved, probes, False
 
@@ -1025,6 +1103,7 @@ def plan_quality(
     encoder_preset: str = "medium",
     remove_bars: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1043,6 +1122,8 @@ def plan_quality(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars (opt-in).
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file, used to locate the logs
+            directory for failure evidence (None => cwd metadata.db).
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -1099,6 +1180,7 @@ def plan_quality(
             crop=crop,
             hdr=hdr,
             cancel=cancel,
+            db_file=db_file,
         )
 
         input_size = input_file.stat().st_size
@@ -1111,6 +1193,7 @@ def plan_quality(
             encoder_preset,
             crop=crop,
             cancel=cancel,
+            db_file=db_file,
         )
 
         if skip:
@@ -1172,6 +1255,7 @@ def _probe_movie(
     remove_bars: bool,
     hdr: bool = False,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -1186,6 +1270,7 @@ def _probe_movie(
         remove_bars (bool): Detect and crop stable black bars.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
 
     Returns:
         tuple: The chosen CRF, its VMAF, all probes and the crop bars
@@ -1225,6 +1310,7 @@ def _probe_movie(
             crop=crop,
             hdr=hdr,
             cancel=cancel,
+            db_file=db_file,
         )
         if skip:
             raise SkipEncode("re-encode would not shrink the file")
@@ -1276,6 +1362,7 @@ def encode_with_quality(
     remove_bars: bool = False,
     progress=None,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1298,6 +1385,8 @@ def encode_with_quality(
             of the running encode's percentage.
         cancel (threading.Event | None): Cooperative cancellation (checked
             between probe steps; the final encode aborts by termination).
+        db_file (Path | None): The database file, used to locate the logs
+            directory for failure evidence (None => cwd metadata.db).
 
     Returns:
         QualityResult: The result of the encode.
@@ -1342,6 +1431,7 @@ def encode_with_quality(
             remove_bars,
             hdr=hdr,
             cancel=cancel,
+            db_file=db_file,
         )
     except SkipEncode as e:
         return QualityResult(

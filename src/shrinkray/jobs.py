@@ -381,6 +381,20 @@ def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list
     return movies
 
 
+def _db_file_of(connection: sqlite3.Connection) -> Path:
+    """Returns the database file a connection is bound to.
+
+    Args:
+        connection (sqlite3.Connection): The connection.
+
+    Returns:
+        Path: The database file path (relative as stored; the logs helper
+            treats it as user data location).
+    """
+    row = connection.execute("PRAGMA database_list").fetchone()
+    return Path(row[2]) if row and row[2] else Path("metadata.db")
+
+
 def execute_scan(
     job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
 ) -> dict:
@@ -502,6 +516,7 @@ def execute_plan(
                 encoder=config.handbrake_encoder,
                 remove_bars=payload.get("remove_bars", False),
                 cancel=cancel,
+                db_file=_db_file_of(connection),
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -584,6 +599,7 @@ def execute_encode(
                 remove_bars=payload.get("remove_bars", False),
                 progress=progress,
                 cancel=cancel,
+                db_file=_db_file_of(connection),
             )
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
@@ -759,6 +775,13 @@ class JobWorker:
             # partial probe/output artifacts are cleaned by the engine
             self.queue.mark_cancelled(job)
         except Exception as e:
+            from shrinkray.telemetry import save_failure
+
+            save_failure(
+                db_file=_db_file_of(self.connection),
+                kind=f"job-{job.kind.value}",
+                context={"job_id": job.id, "payload": job.payload},
+            )
             self.queue.fail(job, f"{type(e).__name__}: {e}")
         finally:
             self.queue.unregister_cancel_event(job.id)
