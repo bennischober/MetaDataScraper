@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb } from '../api'
+  import { api, fmtGb } from '../api'
 
   interface DuplicateFile {
     path: string
@@ -45,9 +45,26 @@
 
   const totalWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_bytes, 0))
 
+  let deletingPath = $state<string | null>(null)
+  let deleteError = $state<string | null>(null)
+
   async function copyPath(path: string) {
     await navigator.clipboard?.writeText(path)
     confirmPath = null
+  }
+
+  async function confirmDelete(path: string) {
+    deletingPath = path
+    deleteError = null
+    try {
+      await api.deleteToTrash(path)
+      confirmPath = null
+      onrefresh?.()
+    } catch (e) {
+      deleteError = e instanceof Error ? e.message : String(e)
+    } finally {
+      deletingPath = null
+    }
   }
 </script>
 
@@ -91,8 +108,8 @@
               <button
                 class="delete mono"
                 onclick={() => (confirmPath = file.path)}
-                aria-label="Delete {file.name} (copies the path; deletion is manual for now)"
-                title="backend pending — copies the path for manual deletion"
+                aria-label="Delete {file.name} (moves the file to the recycle bin)"
+                title="moves the file to the recycle bin (recoverable)"
               >
                 DELETE
               </button>
@@ -101,7 +118,7 @@
         {/each}
       </div>
     {/each}
-    <p class="note dim mono">deleting a duplicate is irreversible — confirm per file; the source stays yours (deletion endpoint pending: the button copies the path)</p>
+    <p class="note dim mono">deleting sends the file to the recycle bin (recoverable) — confirm per file; the source stays yours</p>
     <button class="act rescan" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
       {analyzing ? 'ANALYZING…' : 'RE-ANALYZE LIBRARY'}
     </button>
@@ -113,11 +130,12 @@
     <div class="confirm" role="alertdialog" aria-label="Confirm deletion" tabindex="-1" bind:this={confirmEl}>
       <div class="legend">DELETE FILE?</div>
       <div class="mono confirm-path">{confirmPath}</div>
-      <div class="dim">Deletion is not wired to the backend yet — this copies the path so you can delete it manually.</div>
+      <div class="dim">The file is moved to the recycle bin (recoverable). The library entry stays until the next scan flags it missing.</div>
+      {#if deleteError}<div class="mono bad">{deleteError}</div>{/if}
       <div class="confirm-actions">
         <button class="mono" onclick={() => (confirmPath = null)}>KEEP</button>
-        <button class="mono danger" onclick={() => copyPath(confirmPath!)}>
-          COPY PATH (delete manually)
+        <button class="mono danger" onclick={() => confirmDelete(confirmPath!)} disabled={deletingPath != null}>
+          {deletingPath === confirmPath ? 'MOVING…' : 'MOVE TO RECYCLE BIN'}
         </button>
       </div>
     </div>
@@ -218,6 +236,7 @@
   }
   .confirm-path { word-break: break-all; }
   .confirm-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .bad { color: var(--red); }
   .confirm-actions button {
     background: transparent;
     border: 1px solid var(--seam);

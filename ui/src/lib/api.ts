@@ -134,6 +134,12 @@ export const api = {
     request<{ cancelled: number }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   reveal: (path: string) =>
     request<{ revealed: string }>('/api/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
+  /** Moves a duplicate to the OS recycle bin (recoverable, backend-confirmed). */
+  deleteToTrash: (path: string) =>
+    request<{ deleted: string; to: string }>('/api/duplicates/delete', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   watch: (action: 'start' | 'stop', inbox?: string, output_dir?: string) =>
     request<{ watcher: string }>(`/api/watch/${action}`, {
       method: 'POST',

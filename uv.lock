@@ -1415,6 +1415,15 @@ wheels = [
 ]
 
 [[package]]
+name = "send2trash"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/f0/184b4b5f8d00f2a92cf96eec8967a3d550b52cf94362dad1100df9e48d57/send2trash-2.1.0.tar.gz", hash = "sha256:1c72b39f09457db3c05ce1d19158c2cbef4c32b8bedd02c155e49282b7ea7459", size = 17255, upload-time = "2026-01-14T06:27:36.056Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/78/504fdd027da3b84ff1aecd9f6957e65f35134534ccc6da8628eb71e76d3f/send2trash-2.1.0-py3-none-any.whl", hash = "sha256:0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c", size = 17610, upload-time = "2026-01-14T06:27:35.218Z" },
+]
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1433,6 +1442,7 @@ dependencies = [
     { name = "rapidfuzz", version = "3.14.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "rapidfuzz", version = "3.14.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "rich" },
+    { name = "send2trash" },
     { name = "typer" },
     { name = "uvicorn" },
 ]
@@ -1446,6 +1456,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "requests" },
     { name = "ruff" },
+    { name = "types-send2trash" },
 ]
 
 [package.metadata]
@@ -1454,6 +1465,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "rapidfuzz", specifier = ">=3.14.5" },
     { name = "rich", specifier = ">=15.0.0" },
+    { name = "send2trash", specifier = ">=2.1.0" },
     { name = "typer", specifier = ">=0.27.3" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
@@ -1467,6 +1479,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "ruff", specifier = ">=0.14" },
+    { name = "types-send2trash", specifier = ">=2.1.0.20260408" },
 ]
 
 [[package]]
@@ -1598,6 +1611,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/03/51/d33db42cc72ffd8c30777547b42d01f0cbf9d95a770457698d0174b3ed71/typer-0.27.3.tar.gz", hash = "sha256:d0396f770a560ab1b0a8504e13b5f254b728cedb05c61cf0359e944e50ce8901", size = 205303, upload-time = "2026-10-06T17:24:16.61Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/ea/2e31b67051e91a133189e9c000c222502ddc6969856416de0d095de4c0b0/typer-0.27.3-py3-none-any.whl", hash = "sha256:e50022f28b82a86313e54501317a1db64bf8f8d036ff8cfe5ca7e47675454aff", size = 123312, upload-time = "2026-10-06T17:24:15.054Z" },
+]
+
+[[package]]
+name = "types-send2trash"
+version = "2.1.0.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/6f/b9d32edd71063a3eb516aeb5090a42119ddaa6c8371c5ed20e24b2cc8894/types_send2trash-2.1.0.20260408.tar.gz", hash = "sha256:caeea92ff46e6a5a5333f2558a773d8962c04d9b7a8fc5b4cb3d34f2962aba08", size = 7673, upload-time = "2026-04-08T04:32:33.673Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/6e/a5b49858cd85a4f207255b7f3482ea6e061c289b230e2e2401c0e558651e/types_send2trash-2.1.0.20260408-py3-none-any.whl", hash = "sha256:b118d896ec324436a554c2ae1b1dfda9487fd1a51b9049e209c2d42b9644ad61", size = 8277, upload-time = "2026-04-08T04:32:32.943Z" },
 ]
 
 [[package]]

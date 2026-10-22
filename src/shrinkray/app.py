@@ -811,6 +811,38 @@ def reveal(request: RevealRequest):
     return {"revealed": folder}
 
 
+@app.post("/api/duplicates/delete")
+def duplicates_delete(request: RevealRequest):
+    """Moves a duplicate file to the OS trash (recycle bin).
+
+    This is the product's first destructive endpoint, deliberately scoped
+    and deliberately reversible: the file goes to the recycle bin (never
+    permanent deletion), the path must pass the same allowlist as every
+    endpoint, and the database record is intentionally NOT removed here —
+    the next scan flags the row as missing and the soft-missing grace
+    period (MISSING_GRACE) handles history retention.
+
+    Args:
+        request (RevealRequest): The file to move to the trash.
+
+    Returns:
+        dict: The acknowledged path.
+    """
+    from send2trash import TrashPermissionError, send2trash
+
+    path = validate_path(request.path, "path")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    try:
+        send2trash(str(path))
+    except TrashPermissionError as e:
+        raise HTTPException(status_code=500, detail=f"permission denied: {e}") from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not move to trash: {e}") from e
+    log(f"Moved duplicate to trash: {path}")
+    return {"deleted": str(path), "to": "trash"}
+
+
 @app.get("/report")
 def report_page():
     """Serves the generated HTML report (regenerating it first).
