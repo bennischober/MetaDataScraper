@@ -187,7 +187,7 @@
     </div>
   {:else}
     <div class="bulk-bar idle">
-      <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work, or</span>
+      <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
       <HintMark text="PLAN predicts what an encode would achieve per movie (CRF, VMAF, size) by probing short samples — nothing is written. ENCODE actually re-encodes: every movie is measured (VMAF) and written to the output folder." />
       <span class="spacer"></span>
       <HintButton label="PLAN ALL" hint="Probe every title and predict the outcome: which movies are worth encoding, at which CRF, saving how much. Nothing is written — a dry measurement pass." onclick={() => onenqueue('plan')} disabled={pending} />

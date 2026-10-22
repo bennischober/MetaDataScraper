@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtWhen, fmtSpan, type Job } from '../api'
+  import { fmtGb, fmtWhen, fmtSpan, humanizeError, type Job } from '../api'
 
   /** The run log as an event log: every job with its timestamps, wall
    * duration, and expandable payload/result — the tool's audit trail. */
@@ -105,16 +105,52 @@
     expanded = next
   }
   const expandedJobs = $derived(history.filter((j) => j.id !== null && expanded.has(j.id)))
+
+  // kind/state filter: 19 entries and 6 failures made the scan manual
+  // (round-5 H7) — two selects, the same pattern as the library toolbar
+  let kindFilter = $state<'all' | 'scan' | 'plan' | 'encode' | 'dedupe'>('all')
+  let stateFilter = $state<'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'>('all')
+  const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
+  const filteredHistory = $derived(
+    history.filter((j) => {
+      if (kindFilter !== 'all' && j.kind !== kindFilter) return false
+      if (stateFilter === 'partial') return isPartial(j)
+      if (stateFilter !== 'all' && j.state !== stateFilter) return false
+      return true
+    })
+  )
 </script>
 
 <div class="page page-in">
   <header class="page-head">
     <h2>Jobs</h2>
-    <p class="legend">{history.length} ENTRIES · THE FULL AUDIT TRAIL</p>
+    <p class="legend">{filteredHistory.length} OF {history.length} ENTRIES · THE FULL AUDIT TRAIL</p>
+    {#if history.length > 0}
+      <div class="filters">
+        <select class="mono" bind:value={kindFilter} aria-label="Filter by kind">
+          <option value="all">all kinds</option>
+          <option value="scan">scan</option>
+          <option value="plan">plan</option>
+          <option value="encode">encode</option>
+          <option value="dedupe">dedupe</option>
+        </select>
+        <select class="mono" bind:value={stateFilter} aria-label="Filter by state">
+          <option value="all">all states</option>
+          <option value="running">running</option>
+          <option value="queued">queued</option>
+          <option value="done">done</option>
+          <option value="partial">partial</option>
+          <option value="failed">failed</option>
+          <option value="cancelled">cancelled</option>
+        </select>
+      </div>
+    {/if}
   </header>
 
   {#if history.length === 0}
     <div class="empty dim">no jobs yet — enqueue a scan to open the log</div>
+  {:else if filteredHistory.length === 0}
+    <div class="empty dim">no entries match this filter</div>
   {:else}
     <div class="log">
       <div class="log-head legend">
@@ -125,8 +161,8 @@
         <span>DURATION</span>
         <span></span>
       </div>
-      {#each history as job (job.id)}
-        <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed' || (job.state === 'done' && failedOutcomeNote(job) !== '')} class:open={job.id !== null && expanded.has(job.id)}>
+      {#each filteredHistory as job (job.id)}
+        <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
             <span class="kind">{job.kind}</span>
@@ -166,7 +202,9 @@
               <button class="mini" onclick={() => onretry(job)}>RETRY</button>
             </div>
           {:else if job.error}
-            <div class="mono error">{job.error}</div>
+            <!-- translated for the row (the operator's language); the raw
+                 exception stays in the DETAIL expansion for diagnosis -->
+            <div class="mono error">{humanizeError(null, job.error)}</div>
           {/if}
 
           {#if job.id !== null && expanded.has(job.id)}
@@ -197,6 +235,15 @@
   .page { display: flex; flex-direction: column; gap: 12px; }
   .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
   .page-head .legend { margin-top: 2px; }
+  .filters { display: flex; gap: 8px; margin-top: 8px; }
+  .filters select {
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--seam);
+    border-radius: var(--radius);
+    padding: 3px 8px;
+    font-size: 11px;
+  }
   .dim { color: var(--ink-dim); }
   .ok { color: var(--teal-ink); }
   .partial { color: var(--amber); }
@@ -224,7 +271,16 @@
   .entry { padding: 0 14px; border-bottom: 1px solid var(--row-line); }
   .entry:last-child { border-bottom: none; }
   .entry.running { background: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.08) 0 4px, transparent 4px 8px), var(--panel); }
-  .entry.failed { background: repeating-linear-gradient(45deg, rgba(242, 114, 101, 0.07) 0 4px, transparent 4px 8px), var(--panel); }
+  .entry.failed {
+    /* the hatch follows the row's dominant truth: red hatch = failed run,
+       amber hatch = PARTIAL (a done with failed outcomes) — the state text
+       and the ground must agree (round-5: amber text on red hatch blurred
+       two hue semantics on one row) */
+    background: repeating-linear-gradient(45deg, rgba(242, 114, 101, 0.07) 0 4px, transparent 4px 8px), var(--panel);
+  }
+  .entry.partial {
+    background: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.08) 0 4px, transparent 4px 8px), var(--panel);
+  }
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;

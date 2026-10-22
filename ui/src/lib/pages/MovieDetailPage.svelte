@@ -228,11 +228,17 @@
           <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
           <div class="fact">
             <span class="legend">VMAF</span>
-            <span class="gauge" role="img" aria-label="VMAF {encode.vmaf?.toFixed(1)} of target {targetVmaf}">
-              <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf ?? 0)}%"></span>
-              <span class="gauge-target" style="left: {targetVmaf}%"></span>
-            </span>
-            <span class="mono measured">{encode.vmaf?.toFixed(2) ?? '—'}</span>
+            {#if encode.vmaf != null}
+              <span class="gauge" role="img" aria-label="VMAF {encode.vmaf.toFixed(1)} of target {targetVmaf}">
+                <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf)}%"></span>
+                <span class="gauge-target" style="left: {targetVmaf}%"></span>
+              </span>
+              <span class="mono measured">{encode.vmaf.toFixed(2)}</span>
+            {:else}
+              <!-- no gauge for an unmeasured row: an empty instrument track
+                   next to the dash read as a broken meter (round-5) -->
+              <span class="mono">— fixed mode, not measured</span>
+            {/if}
           </div>
           <div class="fact"><span class="legend">CRF</span><span class="mono">{encode.crf ?? '—'}</span></div>
           <div class="fact"><span class="legend">PRESET</span><span class="mono">{encode.preset}</span></div>
@@ -282,13 +288,22 @@
             {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path)}
             {@const fromElsewhere = rec.file_path != null && normPath(rec.file_path) !== normPath(movie.path)}
             <div class="enc-row">
-              <span class="gen" class:current={producedThis} title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}>{rec.generation ?? 1}</span>
+              <span
+                class="gen"
+                class:current={producedThis}
+                title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}
+                aria-label={producedThis ? `generation ${rec.generation ?? 1}: this row produced the file being viewed` : `generation ${rec.generation ?? 1}`}
+              >{rec.generation ?? 1}</span>
               <span class="dim">{fmtWhen(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
               <span class="num">{rec.crf ?? '—'}</span>
               <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
               <!-- the drift signal: measured in→out MBit/s (v7); the derived
                    fallback keeps pre-v7 rows honest without pretending -->
-              <span class="num" title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}>
+              <span
+                class="num"
+                title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}
+                aria-label={rec.input_bitrate != null ? `bitrate ${rec.input_bitrate.toFixed(1)} to ${rec.output_bitrate?.toFixed(1)} MBit/s, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
+              >
                 {#if rec.input_bitrate != null && rec.output_bitrate != null}
                   {rec.input_bitrate.toFixed(1)} → {rec.output_bitrate.toFixed(1)}
                 {:else if bitrateMbps(rec.input_size, fileDuration) && bitrateMbps(rec.output_size, fileDuration)}

@@ -329,7 +329,15 @@
 </div>
 
 <style>
-  .page { display: flex; flex-direction: column; gap: 14px; max-width: 760px; }
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 760px;
+    /* composed, not hugged to the rail: ~640px dead ground at 1440 read
+       as unfinished (round-5 minor) */
+    margin-inline: auto;
+  }
   .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
   .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }

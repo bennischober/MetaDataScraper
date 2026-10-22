@@ -24,12 +24,14 @@
     pending = false,
     onanalyze,
     onrefresh,
+    onopenmovie,
   }: {
     duplicates?: DuplicateGroup[]
     analyzing?: boolean
     pending?: boolean
     onanalyze?: () => void
     onrefresh?: () => void
+    onopenmovie?: (file: DuplicateFile) => void
   } = $props()
 
   let confirmPath = $state<string | null>(null)
@@ -132,7 +134,11 @@
         {#each group.files as file (file.path)}
           <div class="file-row" class:best={group.files[0].path === file.path}>
             <div class="file-main">
-              <span class="name">{file.name}</span>
+              <!-- a real button into the provenance page: a duplicate is a
+                   title, and the detail page carries its full record -->
+              <button class="name-btn" onclick={() => onopenmovie?.(file)} title="Open the provenance page for this file">
+                <span class="name">{file.name}</span>
+              </button>
               <span class="mono dim path">{file.path}</span>
             </div>
             <span class="mono">{fmtGb(file.size)}</span>
@@ -229,6 +235,16 @@
   .file-row:last-child { border-bottom: none; }
   .file-row.best { background: var(--panel-active); }
   .file-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .name-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--ink);
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .name-btn:hover .name { color: var(--teal-ink); }
   .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .path {
     overflow: hidden;

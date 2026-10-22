@@ -525,6 +525,10 @@
 
 <svelte:window onkeydown={handleShortcuts} />
 
+<!-- skip link: the first focusable element — keyboard users reach page
+     content in one Tab instead of walking seven rail controls -->
+<a class="skip-link" href="#main-content">SKIP TO CONTENT</a>
+
 <div class="console">
   <!-- ══ sidebar rail ══ -->
   <aside class="rail">
@@ -571,7 +575,7 @@
   </aside>
 
   <!-- ══ main column ══ -->
-  <main class="main">
+  <main class="main" id="main-content" tabindex="-1">
     {#if error}
       <div class="api-error mono" role="alert">
         {error}
@@ -661,6 +665,11 @@
           pending={pendingKind !== null}
           onanalyze={() => enqueue('dedupe')}
           onrefresh={refreshDuplicates}
+          onopenmovie={(file) => {
+            // the duplicate's file record → its library movie (path-keyed)
+            const movie = movies.find((m) => m.path === file.path)
+            if (movie) openDetail(movie, 'library')
+          }}
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
@@ -726,6 +735,27 @@
 {/if}
 
 <style>
+  /* skip link: invisible until keyboard-focused, then a console-styled
+     jump label over the content */
+  .skip-link {
+    position: fixed;
+    top: -48px;
+    left: 190px;
+    z-index: 100;
+    padding: 8px 14px;
+    background: var(--panel-active);
+    border: 1px solid var(--teal);
+    border-radius: var(--radius);
+    color: var(--teal-ink);
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-decoration: none;
+    transition: top 0.1s ease;
+  }
+  .skip-link:focus-visible {
+    top: 10px;
+  }
+
   .console {
     display: flex;
     min-height: 100vh;
@@ -833,6 +863,14 @@
     flex-direction: column;
     gap: 14px;
     max-width: 1500px;
+  }
+  /* skip-link target: focusable via the link, never Tab-stops on it */
+  .main:focus {
+    outline: none;
+  }
+  .main:focus-visible {
+    outline: 1px solid var(--teal);
+    outline-offset: -1px;
   }
   /* pages stay mounted (state survives tab switches); only one visible */
   .pages { display: flex; flex-direction: column; gap: 14px; min-height: 0; }

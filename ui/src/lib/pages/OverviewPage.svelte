@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, type Movie, type Status, type Job } from '../api'
+  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job } from '../api'
+
+  /** Path equality that survives separator and case differences. */
+  function pathEq(a: string, b: string): boolean {
+    return a.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase() === b.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+  }
 
   let {
     movies,
@@ -256,7 +261,7 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
       <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
-      <span class="stat-sub mono dim">source {totalSizeGb.toFixed(0)} GB</span>
+      <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB library</span>
     </button>
     <button class="stat" onclick={() => ongoto('duplicates')}>
       <span class="legend">DUPLICATES</span>
@@ -297,7 +302,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -322,7 +327,9 @@
       {:else}
         {#each failedJobs.slice(0, 4) as job (job.id)}
           {@const failedOutcome = (job.result as { outcomes?: { state: string; error?: string }[] } | null)?.outcomes?.find((o) => o.state === 'failed')}
-          {@const errText = job.error ?? failedOutcome?.error ?? ''}
+          {@const rawErr = job.error ?? failedOutcome?.error ?? ''}
+          {@const errText = rawErr ? humanizeError(null, rawErr) : ''}
+          {@const target = movies.find((m) => jobPaths(job).some((jp) => pathEq(m.path, jp)))}
           <div class="fail-row">
             <span class="mono bad">#{job.id} {job.kind}</span>
             <!-- the error is the diagnosis: a long one becomes a button that
@@ -334,14 +341,20 @@
                 aria-expanded={expandedErr === job.id}
                 title={errText}
               >
-                {expandedErr === job.id ? errText : errText}
+                {errText}
               </button>
             {:else}
               <span class="mono dim err">{errText}</span>
             {/if}
+            {#if target}
+              <button class="link mono" onclick={() => onopenmovie(target)} aria-label="Open details for {target.name}">DETAILS</button>
+            {/if}
             <button class="link mono" onclick={() => ondismiss(job.id)} aria-label="Dismiss failed job #{job.id} from the overview">DISMISS</button>
           </div>
         {/each}
+        {#if failedJobs.length > 4}
+          <button class="link legend more" onclick={() => ongoto('jobs')}>{failedJobs.length - 4} more →</button>
+        {/if}
       {/if}
     </section>
 
@@ -471,7 +484,9 @@
                   ? 'encoded (fixed mode — no VMAF measurement)'
                   : savedDelta != null && savedDelta < -2
                     ? `plan ${plannedSaved?.toFixed(0)}% → measured ${rec.saved_percent?.toFixed(1)}%`
-                    : 'measured as planned'
+                    : plannedSaved != null
+                      ? `plan ${plannedSaved.toFixed(0)}% · measured ${rec.saved_percent?.toFixed(1)}%`
+                      : 'measured'
           }
           <div class="plan-row mono" class:plan-done={done} title={done ? 'the prediction has been overtaken by a measurement — the row shows the measured values' : ''}>
             <span class="p-name">{entry.movie}</span>

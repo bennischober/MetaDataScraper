@@ -96,9 +96,55 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     const detail = await response.text().catch(() => response.statusText)
-    throw new Error(`API ${response.status}: ${detail}`)
+    throw new Error(humanizeError(response.status, detail))
   }
   return response.json() as Promise<T>
+}
+
+/** Raw error text → operator language. The audit trail keeps the raw
+ * exception (diagnosis needs it); the surfaces that INTERRUPT (the red
+ * strip, the preflight) translate known cases into what happened and what
+ * to do. Unknown text passes through untouched — never invented. */
+const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [
+  [
+    /API (\d+): [\s\S]*?"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/,
+    (m) => `${m[1]} — ${m[2].replace(/\\(.)/g, '$1')}`,
+  ],
+  [/API 503:/, () => 'the app is still starting — try again in a moment'],
+  [
+    /'(\w+)' object has no attribute '(\w+)'/,
+    (m) => `internal data mismatch (${m[1]} field '${m[2]}' missing) — likely a pre-v7 database row; rescan the title`,
+  ],
+  [
+    /\[Errno 22\] Invalid argument/,
+    () => 'a file could not be read (invalid path or unreadable source) — check the title in FOLDER',
+  ],
+  [
+    /\[Errno 2\] No such file or directory: '([^']+)'/,
+    (m) => `file not found: ${m[1].split(/[\\/]/).pop()} — rescan the library`,
+  ],
+  [
+    /\[WinError 32\] The process cannot access the file/,
+    () => 'the file is locked by another program — close it and retry',
+  ],
+  [
+    /HTTPConnectionPool|ReadTimeout|ConnectionError/,
+    () => 'an external tool did not answer in time — retry; if it persists, check the tool install',
+  ],
+  [
+    /interrupted by app restart/,
+    () => 'the run was interrupted by an app restart — RETRY resumes it',
+  ],
+]
+
+export function humanizeError(status: number | null, raw: string): string {
+  const text = raw.trim()
+  for (const [pattern, say] of ERROR_TRANSLATIONS) {
+    const m = text.match(pattern)
+    if (m) return say(m)
+  }
+  if (status != null) return `API ${status}: ${text}`
+  return text
 }
 
 /** The library ETag: kept across polls, sent as If-None-Match; a 304
