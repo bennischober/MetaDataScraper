@@ -59,7 +59,7 @@ packages = ["src/shrinkray"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --cov=metadata_scrapper --cov-report=term-missing"
+addopts = "-ra --cov=shrinkray --cov-report=term-missing"
 
 [tool.mypy]
 python_version = "3.10"
@@ -68,6 +68,7 @@ check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
+known-first-party = ["shrinkray"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -102,11 +103,11 @@ ignore = [
 "src/shrinkray/app.py" = ["B008"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["metadata_scrapper"]
+known-first-party = ["shrinkray"]
 
 [tool.coverage.run]
 branch = true
-source = ["metadata_scrapper"]
+source = ["shrinkray"]
 
 [tool.coverage.report]
 show_missing = true

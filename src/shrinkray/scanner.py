@@ -133,8 +133,10 @@ def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) 
             # absolute paths: the db cache is keyed by absolute path, so a
             # relative scan root must not produce relative cache misses
             movies.append(candidate.resolve())
-    # on windows glob is case insensitive => the same file is found twice
-    return list(dict.fromkeys(movies))
+    # on windows glob is case insensitive => the same file is found twice.
+    # sorted(): os.walk order is filesystem-dependent (alphabetical on NTFS,
+    # hash order on ext4) => sort for deterministic output on every platform
+    return sorted(dict.fromkeys(movies))
 
 
 def movie_record_from_data(filename: Path, data: dict) -> MovieRecord:

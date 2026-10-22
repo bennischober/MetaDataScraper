@@ -17,6 +17,7 @@ instead of unlikely.
 
 import contextlib
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -59,11 +60,8 @@ def _pid_alive(pid: int) -> bool:
         return False
     try:
         if os.name == "nt":
-            # a Windows process exists iff tasklist finds its pid; run with
-            # an argument list and decode lossily (the console codepage is
-            # not utf-8 and its table lines contain non-utf8 bytes)
-            import subprocess
-
+            # a Windows process exists iff tasklist finds its pid; decode
+            # lossily (the console codepage is not utf-8)
             listing = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True,
