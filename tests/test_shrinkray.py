@@ -2076,9 +2076,38 @@ class TestApiPathValidation(unittest.TestCase):
                     asset_name = next(dist.iterdir()).name
                     ok = client.get(f"/assets/{asset_name}")
                     self.assertEqual(ok.status_code, 200)
+                    # hashed assets are immutable: the browser never needs to
+                    # revalidate them (the entry page is the freshness point)
+                    self.assertEqual(
+                        ok.headers.get("cache-control"),
+                        "public, max-age=31536000, immutable",
+                    )
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
+
+    def test_index_no_cache(self):
+        """The entry page revalidates on every load (no-cache): a rebuilt UI
+        must reach an open tab with a plain reload — a resident app's UI
+        updates underneath the tab, and a hard-refresh ritual is a bug."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        dist = Path(__file__).parent.parent / "ui" / "dist"
+        if not (dist / "index.html").is_file():
+            self.skipTest("UI not built")
+        app_module.state = AppState(Path(tempfile.gettempdir()) / "shrinkray-test-cache.db")
+        try:
+            client = TestClient(fast_app)
+            response = client.get("/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get("cache-control"), "no-cache")
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
 
 
 class TestEncodeLock(unittest.TestCase):

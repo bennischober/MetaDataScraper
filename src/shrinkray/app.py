@@ -267,7 +267,13 @@ def index():
             status_code=404,
             detail="UI not built. Run: npm install && npm run build in ui/",
         )
-    return FileResponse(index_path)
+    # no-cache, not no-store: the entry revalidates on every load so a
+    # rebuilt UI reaches an open tab with a plain reload. The app is
+    # resident — its UI updates underneath the tab (fixes, rebuilds) —
+    # and a user should never need a hard-refresh ritual to see the
+    # current build. Hashed assets under /assets are immutable (below),
+    # so revalidation is one cheap 304, not a refetch.
+    return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
 
 
 def _ui_dist() -> Path:
@@ -303,7 +309,13 @@ def ui_asset(asset_path: str):
         raise HTTPException(status_code=404, detail="asset not found")
     if not os.path.isfile(normalized):
         raise HTTPException(status_code=404, detail="asset not found")
-    return FileResponse(normalized)
+    # Vite fingerprints asset filenames with a content hash, so a new build
+    # produces new URLs; content at a given URL never changes. immutable
+    # lets the browser skip revalidation entirely — the entry page (no-cache)
+    # is the single point of freshness.
+    return FileResponse(
+        normalized, headers={"Cache-Control": "public, max-age=31536000, immutable"}
+    )
 
 
 @app.get("/api/duplicates")
