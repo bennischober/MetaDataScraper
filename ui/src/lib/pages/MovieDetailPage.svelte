@@ -11,12 +11,14 @@
     onclose,
     onencode,
     onplan,
+    backTo = 'library',
   }: {
     movie: Movie
     targetVmaf: number
     onclose: () => void
     onencode: (path: string) => void
     onplan: (path: string) => void
+    backTo?: 'overview' | 'library'
   } = $props()
 
   let history = $state<Job[]>([])
@@ -75,7 +77,7 @@
 
 <div class="page page-in" tabindex="-1" bind:this={pageEl}>
   <header class="page-head">
-    <button class="back legend" onclick={onclose}>← LIBRARY</button>
+    <button class="back legend" onclick={onclose}>← {backTo === 'overview' ? 'OVERVIEW' : 'LIBRARY'}</button>
   </header>
 
   <!-- ══ hero: the title as the page header ══ -->

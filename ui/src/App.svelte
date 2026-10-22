@@ -15,7 +15,6 @@
   let history: Job[] = $state([])
   let duplicates: DuplicateGroup[] = $state([])
   let error = $state<string | null>(null)
-  let detailMovie = $state<Movie | null>(null)
 
   // theme: dark default, toggle persisted
   let theme = $state<'dark' | 'light'>(
@@ -33,10 +32,27 @@
     return (PAGES as string[]).includes(h) ? (h as Page) : 'overview'
   }
   let page = $state<Page>(pageFromHash())
+  // the single navigation gate: any page change closes the movie detail
+  // (the detail page replaces the page stack, so a rail click that only
+  // changed `page` behind the overlay looked like nothing happened)
+  let detailMovie = $state<Movie | null>(null)
+  // where the detail was opened from — the back button returns there
+  let detailFrom = $state<'overview' | 'library'>('overview')
   function goto(next: Page) {
+    detailMovie = null
     page = next
     location.hash = `/${next}`
   }
+  function openDetail(movie: Movie, from: 'overview' | 'library') {
+    detailMovie = movie
+    detailFrom = from
+  }
+  function closeDetail() {
+    detailMovie = null
+    page = detailFrom
+    location.hash = `/${detailFrom}`
+  }
+
   // back/forward support
   window.addEventListener('hashchange', () => (page = pageFromHash()))
 
@@ -286,12 +302,6 @@
     await enqueue(job.kind, paths)
   }
 
-  function openDetail(movie: Movie) {    detailMovie = movie
-  }
-  function closeDetail() {
-    detailMovie = null
-  }
-
   // per-movie actions (encode/plan a single title from its page)
   async function encodeOne(path: string) {
     if (pendingKind !== null) return
@@ -395,6 +405,7 @@
         onclose={closeDetail}
         onencode={encodeOne}
         onplan={(p) => enqueue('plan', [p])}
+        backTo={detailFrom}
       />
     {:else}
       <div class="pages" class:hidden={page !== 'overview'}>
@@ -414,7 +425,7 @@
           {outputDir}
           ondismiss={dismissFailed}
           ongoto={goto}
-          onopenmovie={openDetail}
+          onopenmovie={(m) => openDetail(m, 'overview')}
           oncancel={cancelJob}
           cancelling={pendingKind === 'cancel'}
         />
@@ -431,7 +442,7 @@
           runningPercent={runningProgress?.percent ?? null}
           plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
           onenqueue={enqueue}
-          onopenmovie={openDetail}
+          onopenmovie={(m) => openDetail(m, 'library')}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
             if (checked) next.add(path)

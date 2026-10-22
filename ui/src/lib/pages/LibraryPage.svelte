@@ -39,7 +39,14 @@
   // ── search + category (a select, not an exploding chip row) ──
   let query = $state('')
   let category = $state<string | null>(null)
-  let view = $state<'grid' | 'table'>('grid')
+  // view: the dense table is the default (a catalog is a table); the
+  // poster grid stays as a browsing mode — the choice persists
+  let view = $state<'grid' | 'table'>(
+    localStorage.getItem('ms.view') === 'grid' ? 'grid' : 'table'
+  )
+  $effect(() => {
+    localStorage.setItem('ms.view', view)
+  })
   let hideMissing = $state(false)
   // sorting: persisted per session (the regression the critique caught)
   let sortKey = $state<'name' | 'category' | 'size' | 'vmaf' | 'saved'>('name')

@@ -256,12 +256,12 @@
           {runSummary.count} encoded · −{runSummary.savedGb.toFixed(1)} GB{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
-        <button class="act" onclick={() => ongoto('jobs')}>RUN LOG</button>
+        <button class="act" onclick={() => ongoto('jobs')}>JOBS →</button>
       </div>
     {:else}
       <div class="quiet-strip">
         <span class="mono dim">no active work</span>
-        <button class="act" onclick={() => ongoto('library')}>GO TO LIBRARY</button>
+        <button class="act" onclick={() => ongoto('library')}>LIBRARY →</button>
       </div>
     {/if}
   {/if}
@@ -271,7 +271,7 @@
     <section class="panel">
       <div class="panel-head">
         <span class="legend">ATTENTION — FAILURES</span>
-        {#if failedJobs.length > 0}<button class="link legend" onclick={() => ongoto('jobs')}>ALL JOBS →</button>{/if}
+        {#if failedJobs.length > 0}<button class="link legend" onclick={() => ongoto('jobs')}>JOBS →</button>{/if}
       </div>
       {#if failedJobs.length === 0}
         <div class="dim pad">nothing failed — the last runs are clean</div>
