@@ -117,15 +117,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * exception (diagnosis needs it); the surfaces that INTERRUPT (the red
  * strip, the preflight) translate known cases into what happened and what
  * to do. Unknown text passes through untouched — never invented. */
-const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [
-  [
+const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [  [
     /API (\d+): [\s\S]*?"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/,
     (m) => `${m[1]} — ${m[2].replace(/\\(.)/g, '$1')}`,
   ],
   [/API 503:/, () => 'the app is still starting — try again in a moment'],
   [
     /'(\w+)' object has no attribute '(\w+)'/,
-    (m) => `internal data mismatch (${m[1]} field '${m[2]}' missing) — likely a pre-v7 database row; rescan the title`,
+    (m) => `a stored record is missing a field (${m[2]}) — likely a pre-v7 database row; rescan the title`,
   ],
   [
     /\[Errno 22\] Invalid argument/,
@@ -150,13 +149,44 @@ const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [
 ]
 
 export function humanizeError(status: number | null, raw: string): string {
-  const text = raw.trim()
+  const text = stripErrorTelemetry(raw)
   for (const [pattern, say] of ERROR_TRANSLATIONS) {
     const m = text.match(pattern)
     if (m) return say(m)
   }
   if (status != null) return `API ${status}: ${text}`
   return text
+}
+
+/** Strips the noise that is not a diagnosis: ffmpeg/HandBrake banner
+ * telemetry ("[11:59:15] Compile-time hardening features are enabled")
+ * used to pass through and print AS the diagnosis (round-6 P2). Leading
+ * `[HH:MM:SS]` timestamps are removed; known banner lines dropped; when
+ * several lines remain, the last one wins (exceptions print last). */
+export function stripErrorTelemetry(raw: string): string {
+  const lines = raw
+    .split(/[\r\n]+/)
+    .map((l) => l.replace(/^\[\d{1,2}:\d{2}:\d{2}(\.\d+)?\]\s*/, '').trim())
+    .filter(
+      (l) =>
+        l.length > 0 &&
+        !/compile-time hardening/i.test(l) &&
+        !/^ffmpeg version /i.test(l) &&
+        !/^built with /i.test(l) &&
+        !/^configuration: /i.test(l) &&
+        !/^libav|^\s+libav/i.test(l) &&
+        !/^handbrake/i.test(l) &&
+        !/^press \[q\]/i.test(l)
+    )
+  if (lines.length === 0) return raw.trim()
+  return lines[lines.length - 1]
+}
+
+/** The raw exception for surfaces that DIAGNOSE (the jobs DETAIL JSON) —
+ * deliberately not humanized; translation is for the interrupting strip,
+ * the raw text is for the operator reading a log. */
+export function rawErrorText(raw: string): string {
+  return raw.trim()
 }
 
 /** The library ETag: kept across polls, sent as If-None-Match; a 304

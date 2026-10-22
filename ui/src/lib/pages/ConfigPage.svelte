@@ -282,7 +282,7 @@
       <div class="dim pad">loading…</div>
     {:else}
       <div class="pad groups">
-        <label class="bars-option">
+        <label class="option-row">
           <input
             type="checkbox"
             checked={config.resources?.idle_priority ?? true}
@@ -343,8 +343,8 @@
         </label>
         <p class="mono dim note">
           opt-in, off by default — one POST /Library/Refresh after a successful encode batch, nothing else.
-          the token itself never lives here: this field names the environment variable that holds it
-          (secrets discipline — config.json is a tracked file). empty url = integration off.
+          empty url = integration off. the token itself never lives here: this field names the environment
+          variable that holds it (secrets discipline — config.json is a tracked file).
         </p>
       </div>
     {/if}
@@ -465,8 +465,18 @@
     align-items: flex-start;
     cursor: pointer;
   }
+  /* red accent ONLY on the dangerous panel's toggle — the shared geometry
+     moved to .option-row so politeness checkboxes (RESOURCES) inherit a
+     neutral accent instead of the failure hue (round-6 Red Lock breach) */
   .bars-option input { accent-color: var(--red); margin-top: 2px; }
-  .bars-option .block { display: block; margin-top: 2px; font-size: 11px; }
+  .option-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    cursor: pointer;
+  }
+  .option-row input { margin-top: 2px; }
+  .bars-option .block, .option-row .block { display: block; margin-top: 2px; font-size: 11px; }
 
   .path-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .path-chip {
@@ -544,7 +554,9 @@
   }
   .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .field:last-child { margin-bottom: 0; }
-  .field span { width: 120px; flex-shrink: 0; }
+  /* 150px slot: at 120px "max threads per encode (0 = all cores)" wrapped
+     to three cramped lines (round-6) */
+  .field span { width: 150px; flex-shrink: 0; }
   .field input {
     background: var(--panel-raised);
     border: 1px solid var(--seam);

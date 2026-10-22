@@ -1,7 +1,6 @@
 <script lang="ts">
   import { fmtGb, fmtSavedHonest, type Movie } from '../api'
   import HintButton from './HintButton.svelte'
-  import HintMark from './HintMark.svelte'
 
   let {
     movies,
@@ -64,7 +63,16 @@
     const list = movies.filter((m) => {
       if (category && m.category !== category) return false
       if (decision !== 'all' && decisionOf(m).label.toLowerCase() !== decision) return false
-      if (q && !m.name.toLowerCase().includes(q)) return false
+      // search answers "which title is this?" across the identifying
+      // fields — a category or folder fragment must reach its titles too
+      // (round-6: name-only search left category/path unreachable)
+      if (
+        q &&
+        !m.name.toLowerCase().includes(q) &&
+        !m.category.toLowerCase().includes(q) &&
+        !m.path.toLowerCase().includes(q)
+      )
+        return false
       return true
     })
     const dir = sortAsc ? 1 : -1
@@ -133,9 +141,9 @@
     <input
       class="search mono"
       type="search"
-      placeholder="search titles…"
+      placeholder="search titles · categories · paths…"
       bind:value={query}
-      aria-label="Search titles"
+      aria-label="Search titles, categories and paths"
     />
     <select class="cat mono" bind:value={category} aria-label="Filter by category">
       <option value={null}>All categories ({movies.length})</option>
@@ -188,9 +196,10 @@
   {:else}
     <div class="bulk-bar idle">
       <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
-      <HintMark text="PLAN predicts what an encode would achieve per movie (CRF, VMAF, size) by probing short samples — nothing is written. ENCODE actually re-encodes: every movie is measured (VMAF) and written to the output folder." />
       <span class="spacer"></span>
-      <HintButton label="PLAN ALL" hint="Probe every title and predict the outcome: which movies are worth encoding, at which CRF, saving how much. Nothing is written — a dry measurement pass." onclick={() => onenqueue('plan')} disabled={pending} />
+      <!-- the hint rides inside PLAN ALL's title (round-6: the idle
+           toolbar carried 7 interactive elements — 6 now) -->
+      <HintButton label="PLAN ALL" hint="Probe every title and predict the outcome: which movies are worth encoding, at which CRF, saving how much. Nothing is written — a dry measurement pass. ENCODE (next to it) actually re-encodes: every movie is measured (VMAF) and written to the output folder." onclick={() => onenqueue('plan')} disabled={pending} />
       <HintButton label="ENCODE ALL" hint="Re-encode every title with the largest CRF that still meets the VMAF target. Sources are never touched; results land in the output folder." variant="primary" onclick={() => onenqueue('encode')} disabled={pending} />
     </div>
   {/if}

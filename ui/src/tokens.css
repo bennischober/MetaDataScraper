@@ -74,12 +74,17 @@
 
   --ink: #1e2328;
   --ink-dim: #5b6470;
-  --ink-faint: #6d757d;
+  /* round-6: #6d757d measured 3.62:1 on the light rail — below the 4.5:1
+     floor. #565d66 holds ≥ 4.5:1 on every light ground (rail/panel/ground)
+     and keeps faint visually lighter than --ink-dim on the panel. */
+  --ink-faint: #565d66;
 
   --teal: #0f766e;
   --teal-ink: #0b5952;
   --teal-glow: rgba(15, 118, 110, 0.1);
-  --amber: #b45309;
+  /* round-6: #b45309 measured 3.89:1 on the light rail (warn badges);
+     #8a4307 clears 4.5:1 there and stays amber. */
+  --amber: #8a4307;
   --red: #b3382c;
   --ok: #15803d;
 

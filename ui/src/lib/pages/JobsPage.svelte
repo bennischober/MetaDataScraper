@@ -63,7 +63,7 @@
     const parts: string[] = []
     if (r.groups != null) parts.push(`${r.groups} group${r.groups === 1 ? '' : 's'}`)
     if (r.wasted_bytes != null) parts.push(`${fmtGb(r.wasted_bytes)} wasted`)
-    if (r.excluded_missing) parts.push(`${r.excluded_missing} retired ignored`)
+    if (r.excluded_missing) parts.push(`${r.excluded_missing} retired file${r.excluded_missing === 1 ? '' : 's'} ignored`)
     return parts.join(' · ')
   }
 
@@ -107,14 +107,33 @@
   const expandedJobs = $derived(history.filter((j) => j.id !== null && expanded.has(j.id)))
 
   // kind/state filter: 19 entries and 6 failures made the scan manual
-  // (round-5 H7) — two selects, the same pattern as the library toolbar
-  let kindFilter = $state<'all' | 'scan' | 'plan' | 'encode' | 'dedupe'>('all')
-  let stateFilter = $state<'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'>('all')
+  // (round-5 H7) — two selects, the same pattern as the library toolbar.
+  // Filter state persists per session (library sort persists; the jobs
+  // filters resetting on F5 was the round-6 granularity inconsistency)
+  type KindFilter = 'all' | 'scan' | 'plan' | 'encode' | 'dedupe'
+  type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
+  const storedKind = sessionStorage.getItem('ms.jobsKind')
+  const storedState = sessionStorage.getItem('ms.jobsState')
+  let kindFilter = $state<KindFilter>(
+    ['all', 'scan', 'plan', 'encode', 'dedupe'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
+  )
+  let stateFilter = $state<StateFilter>(
+    ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
+      ? (storedState as StateFilter)
+      : 'all'
+  )
+  $effect(() => {
+    sessionStorage.setItem('ms.jobsKind', kindFilter)
+    sessionStorage.setItem('ms.jobsState', stateFilter)
+  })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
   const filteredHistory = $derived(
     history.filter((j) => {
       if (kindFilter !== 'all' && j.kind !== kindFilter) return false
       if (stateFilter === 'partial') return isPartial(j)
+      // "done" means clean-done: a DONE with failed outcomes is its own
+      // partial state (round-6: the done filter hid the failures it held)
+      if (stateFilter === 'done') return j.state === 'done' && !isPartial(j)
       if (stateFilter !== 'all' && j.state !== stateFilter) return false
       return true
     })

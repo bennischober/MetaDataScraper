@@ -4,6 +4,7 @@
     fmtGb,
     fmtSeconds,
     fmtWhen,
+    humanizeError,
     jobPaths,
     type Movie,
     type Job,
@@ -315,7 +316,7 @@
               <span class="num">{fmtGb(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
-              <span class="delta dim">{i < encodesDesc.length - 1 ? delta(rec, encodesDesc[i + 1]) : 'first run'}</span>
+              <span class="delta dim" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">{i < encodesDesc.length - 1 ? delta(rec, encodesDesc[i + 1]) : 'first run'}</span>
             </div>
           {/each}
         </div>
@@ -334,7 +335,10 @@
             <span>{job.kind}</span>
             <span class={job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>{job.state}</span>
             <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
-            <span class="dim err">{job.error ?? ''}</span>
+            <!-- same translation voice as the jobs page (two audit trails
+                 must speak one language, round-6 P2); the raw exception
+                 stays reachable as the hover title -->
+            <span class="dim err" title={job.error ?? ''}>{job.error ? humanizeError(null, job.error) : ''}</span>
           </div>
         {/each}
       {/if}
@@ -472,6 +476,8 @@
   .delta { text-align: right; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   @media (max-width: 820px) {
-    .cols { grid-template-columns: 1fr; }
+    /* same min-content clamp as the overview's 640px rule (round-6 P1
+       class): a bare `1fr` track lets nowrap content set the track width */
+    .cols { grid-template-columns: minmax(0, 1fr); }
   }
 </style>

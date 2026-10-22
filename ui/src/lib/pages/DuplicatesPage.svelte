@@ -10,12 +10,18 @@
     codec: string | null
     hash: string | null
     resolution: [number, number] | null
+    /** derived size/duration bitrate (MBit/s, null without a duration) —
+     * the drift signal the engine's keep-rationale reads (7db76c0) */
+    bitrate_mbps?: number | null
   }
 
   interface DuplicateGroup {
     reason: string
     files: DuplicateFile[]
     wasted_bytes: number
+    /** one honest sentence on why files[0] is the keeper — engine-computed
+     * (7db76c0), says so itself when no signal separates the files */
+    keep_rationale?: string
   }
 
   let {
@@ -131,6 +137,11 @@
           <span class="chip neutral"><span class="swatch"></span>{group.reason.toUpperCase()}</span>
           <span class="mono dim">{fmtGb(group.wasted_bytes)} wasted</span>
         </div>
+        <!-- the engine explains its pick: keep_rationale documents why
+             files[0] is the keeper without changing it (7db76c0) -->
+        {#if group.keep_rationale}
+          <p class="keep-note mono dim">keep: {group.keep_rationale}</p>
+        {/if}
         {#each group.files as file (file.path)}
           <div class="file-row" class:best={group.files[0].path === file.path}>
             <div class="file-main">
@@ -143,6 +154,9 @@
             </div>
             <span class="mono">{fmtGb(file.size)}</span>
             <span class="mono dim">{file.resolution?.join('×') ?? '—'}</span>
+            <!-- bitrate in MBit/s (engine-derived): the drift signal that
+                 separates generations of re-encodes, next to resolution -->
+            <span class="mono dim" title="bitrate derived from size and duration">{file.bitrate_mbps != null ? `${file.bitrate_mbps.toFixed(1)} Mbps` : '—'}</span>
             <span class="chip {group.files[0].path === file.path ? 'done' : 'neutral'}">
               <span class="swatch"></span>{group.files[0].path === file.path ? 'KEEP (BEST)' : 'DUPLICATE'}
             </span>
@@ -185,8 +199,10 @@
   .page { display: flex; flex-direction: column; gap: 12px; }
   .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
   .page-head .legend { margin-top: 2px; }
-  /* the page's one action lives in the head, not under nine groups */
-  .page-head { position: relative; }
+  /* the page's one action lives in the head, not under nine groups —
+     inline (not absolute): over the legend line it collided around 900px
+     (round-6, untested collision → measured risk) */
+  .page-head { padding-right: 200px; }
   .head-action { position: absolute; right: 0; top: 2px; }
   .dim { color: var(--ink-dim); }
   .empty {
@@ -225,6 +241,9 @@
     align-items: center;
     margin-bottom: 8px;
   }
+  /* the engine's keep-rationale: one dim sentence under the group head —
+     the pick documents itself, never invented */
+  .keep-note { margin: 0 0 8px; font-size: 10.5px; }
   .file-row {
     display: flex;
     align-items: center;

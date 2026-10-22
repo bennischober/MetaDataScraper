@@ -244,7 +244,7 @@
   <!-- system line: the console's own telemetry (only what's not already
        on the rail badges and the stat band — those carry the counts) -->
   <div class="sysline mono dim">
-    <span>POLL 3s</span>
+    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
     <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
     <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
     <span class="spacer"></span>
@@ -320,12 +320,15 @@
     <section class="panel">
       <div class="panel-head">
         <span class="legend">ATTENTION — FAILURES</span>
-        {#if failedJobs.length > 0}<button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>{/if}
+        <span class="head-tools">
+          {#if failedJobs.length > 1}<button class="link legend" onclick={() => failedJobs.forEach((j) => ondismiss(j.id))} aria-label="Dismiss all {failedJobs.length} failed jobs from the overview">DISMISS ALL</button>{/if}
+          {#if failedJobs.length > 0}<button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>{/if}
+        </span>
       </div>
       {#if failedJobs.length === 0}
         <div class="dim pad">nothing failed — the last runs are clean</div>
       {:else}
-        {#each failedJobs.slice(0, 4) as job (job.id)}
+        {#each failedJobs.slice(0, 4) as job, i (job.id)}
           {@const failedOutcome = (job.result as { outcomes?: { state: string; error?: string }[] } | null)?.outcomes?.find((o) => o.state === 'failed')}
           {@const rawErr = job.error ?? failedOutcome?.error ?? ''}
           {@const errText = rawErr ? humanizeError(null, rawErr) : ''}
@@ -357,7 +360,6 @@
         {/if}
       {/if}
     </section>
-
     <!-- ══ missing files ══ -->
     <section class="panel">
       <div class="panel-head">
@@ -410,7 +412,12 @@
           <div class="q-head">
             <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{meanVmaf?.toFixed(1)}</span>
             <span class="q-label legend">MEAN</span>
-            <span class="q-sub mono dim">min {minVmaf?.toFixed(1)} · {measured.length} measured</span>
+            {#if measured.length > 1}
+              <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
+                   the single row carrying exactly that) — the sub-line only
+                   earns its place with a spread to summarize -->
+              <span class="q-sub mono dim">min {minVmaf?.toFixed(1)} · {measured.length} measured</span>
+            {/if}
           </div>
           {#each measured.slice(0, 6) as m (m.path)}
             <div class="q-row" title="{m.name}: VMAF {m.encode?.vmaf?.toFixed(1)} (target {targetVmaf})">
@@ -431,6 +438,9 @@
   <section class="panel wide">
     <div class="panel-head">
       <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
+      <!-- the two visual encodings, stated once (round-6: the bars were
+           never explained — grey vs teal hatch was tribal knowledge) -->
+      <span class="legend bar-legend">BAR = SIZE · HATCH = RECLAIMED</span>
       <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
     </div>
     <div class="bars">
@@ -462,6 +472,10 @@
         <span class="mono dim">{planSummary}</span>
       </div>
       <div class="plan-list">
+        <!-- SR context: the visual head row is aria-hidden (the round-4
+             pattern), so screen readers get the column contract here —
+             same pattern as the library table's sr-only caption -->
+        <span class="sr-only">The plan table: per title the planned state, CRF, VMAF, size and saving, and the measured values once encoded. Measured cells name their predicted value in the tooltip.</span>
         <div class="plan-row plan-head mono legend" aria-hidden="true">
           <span class="p-name">TITLE</span>
           <span>STATE</span>
@@ -484,7 +498,11 @@
               : entry.state === 'skip'
                 ? 'planned skip — encoded anyway'
                 : rec.vmaf == null
-                  ? 'encoded (fixed mode — no VMAF measurement)'
+                  ? plannedSaved != null && rec.saved_percent != null
+                    ? // fixed-mode rows kept their measured truth dormant —
+                      // the juxtaposition must fire for them too (round-6 P3)
+                      `plan ${plannedSaved.toFixed(0)}% → fixed-mode ${rec.saved_percent.toFixed(1)}% (unmeasured)`
+                    : 'encoded (fixed mode — no VMAF measurement)'
                   : savedDelta != null && savedDelta < -2
                     ? `plan ${plannedSaved?.toFixed(0)}% → measured ${rec.saved_percent?.toFixed(1)}%`
                     : plannedSaved != null
@@ -496,16 +514,16 @@
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
               <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
             </span>
-            <span class="p-num" class:measured={done && rec?.crf != null}>
+            <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null}>
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + (entry.vmaf?.toFixed(1) ?? '—') : 'planned value'}>
               {#if done}{rec?.vmaf?.toFixed(1) ?? '—'}{:else}{entry.vmaf?.toFixed(1) ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.output_size != null}>
+            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—') : 'planned value'}>
               {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null}>
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + (plannedSaved != null ? plannedSaved.toFixed(0) + '%' : '—') : 'planned value'}>
               {#if done}
                 {@const saved = fmtSavedHonest(rec?.saved_percent)}
                 {saved.text}
@@ -541,10 +559,11 @@
   }
   .sysline .spacer { flex: 1; }
 
-  /* stat band — dense, tile-sized, data-first */
+  /* stat band — dense, tile-sized, data-first; capped so three cards
+     don't stretch to 440px each on a wide screen (round-6: sparse read) */
   .stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(128px, 220px));
     gap: 1px;
     background: var(--seam);
     border: 1px solid var(--seam);
@@ -607,7 +626,12 @@
     gap: 10px;
   }
   @media (max-width: 640px) {
-    .cols { grid-template-columns: 1fr; }
+    /* single column below 640px — with the 2-col clamps repeated: a bare
+       `1fr` track does NOT clamp min-content, so the nowrap error text
+       blew the page out to a 90,000px horizontal scroll (round-6 P1) */
+    .cols {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
   .panel.wide { grid-column: 1 / -1; }
 
@@ -652,8 +676,10 @@
   .plan-list { display: flex; flex-direction: column; padding: 4px 14px 14px; }
   .plan-row {
     display: grid;
-    /* SAVED widened 50→62px so '+26.3% larger' stays on one line (round-5) */
-    grid-template-columns: minmax(140px, 1.4fr) 110px 40px 50px 70px 62px 1fr;
+    /* SAVED at 88px: '+26.3% larger' measures ~86px in 11px mono — 62px
+       wrapped it onto two lines despite the round-5 comment claiming one
+       (and 74px still wrapped the longest honest-growth label) */
+    grid-template-columns: minmax(140px, 1.4fr) 110px 40px 50px 70px 88px 1fr;
     gap: 10px;
     align-items: center;
     padding: 4px 0;
@@ -674,6 +700,18 @@
   .plan-head .p-name { font-weight: 400; }
   .p-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .p-num { text-align: right; }
+  /* sr-only column context (plan/enc heads are aria-hidden by design) */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .p-reason {
     font-size: 10px;
     overflow: hidden;
@@ -693,7 +731,9 @@
     align-items: center;
     padding: 9px 14px;
     border-bottom: 1px solid var(--row-line);
+    gap: 12px;
   }
+  .bar-legend { color: var(--ink-faint); white-space: nowrap; }
   .pad { padding: 16px 14px; }
   .fail-row {
     display: flex;
@@ -705,6 +745,14 @@
   }
   .fail-row:last-of-type { border-bottom: none; }
   .err { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  /* long diagnoses must wrap when the grid collapses to one column — the
+     nowrap ellipsis only works above the 640px breakpoint (round-6 P1) */
+  @media (max-width: 640px) {
+    .err {
+      white-space: normal;
+      word-break: break-word;
+    }
+  }
   /* keyboard-expandable error: the button resets to the span look, expanded
      state wraps the full diagnosis */
   button.err-expandable {
@@ -744,6 +792,7 @@
     white-space: nowrap;
   }
   .nav-link:hover { text-decoration: underline; }
+  .head-tools { display: flex; gap: 12px; align-items: center; }
   .more { padding: 8px 14px; text-align: left; }
   .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
   .fact { display: flex; justify-content: space-between; gap: 12px; }

@@ -63,6 +63,13 @@
     sessionStorage.removeItem('sr.detail')
     page = detailFrom
     location.hash = `/${detailFrom}`
+    // Escape must not drop focus to BODY (round-6 P3, measured): the page
+    // we return to has a rail item — keyboard users resume there, same
+    // contract as the dialogs restoring their trigger
+    queueMicrotask(() => {
+      const items = document.querySelectorAll<HTMLElement>('.rail-item')
+      items[detailFrom === 'overview' ? 0 : 1]?.focus()
+    })
   }
   // F5 on #/movie: restore the detail from sessionStorage (the poll may
   // not have delivered the library yet — resolve lazily when it arrives)
@@ -275,9 +282,11 @@
     // same number, but the sentence says what it is
     if (done.length === 1) {
       const basisGb = done[0].size ?? done[0].encode?.output_size ?? 0
+      // the missing wall-time figure gets its explanation — silence next
+      // to a multi-TB scope read as an oversight, not an honesty rule
       return basisGb > 0
-        ? `rough extrapolation from a single ${fmtGb(basisGb)} title — real runs will differ`
-        : 'rough extrapolation from a single title — real runs will differ'
+        ? `rough extrapolation from a single ${fmtGb(basisGb)} title — real runs will differ; basis too thin to project wall time`
+        : 'rough extrapolation from a single title — real runs will differ; basis too thin to project wall time'
     }
     return `${span} at measured throughput (basis: ${done.length} titles)`
   })
@@ -695,7 +704,10 @@
 
 <!-- ══ encode-all preflight: scope + measured estimate before the loudest verb ══ -->
 {#if pendingEncodeAll}
-  <div class="bars-confirm" role="alertdialog" aria-label="Confirm whole-library encode" tabindex="-1" bind:this={encodeAllEl} onkeydown={encodeAllKeydown}>
+  <!-- amber ceremony, not the red one: encoding is reversible (sources
+       untouched) — red is the destruction hue and must stay frightening
+       for the bars crop and the recycle bin (round-6 P1) -->
+  <div class="bars-confirm encode-preflight" role="alertdialog" aria-label="Confirm whole-library encode" tabindex="-1" bind:this={encodeAllEl} onkeydown={encodeAllKeydown}>
     <div class="bars-text">
       <strong>ENCODE THE ENTIRE LIBRARY?</strong>
       {encodeAllTitles} titles · {encodeAllSizeGb.toFixed(1)} GB source
@@ -704,7 +716,7 @@
     </div>
     <div class="bars-buttons">
       <button class="mono deny" onclick={closeEncodeAll}>NOT NOW</button>
-      <button class="mono confirm" onclick={() => { pendingEncodeAll = false; requestEncode(undefined, true) }}>
+      <button class="mono confirm primary" onclick={() => { pendingEncodeAll = false; requestEncode(undefined, true) }}>
         ENCODE ALL
       </button>
     </div>
@@ -941,6 +953,22 @@
   .bars-buttons .confirm { border-color: var(--red); color: var(--red); }
   .bars-buttons .confirm:hover { background: var(--red); color: var(--ground); }
   .bars-buttons .deny:hover { border-color: var(--ink-dim); }
+
+  /* the preflight variant: an amber ceremony for a REVERSIBLE verb.
+     Encoding never touches a source, so it must not rent red's alarm —
+     that would teach the eye to ignore the real red ceremonies
+     (bars crop, recycle bin). Amber = work in progress; the confirm
+     button keeps its primary teal fill. */
+  .bars-confirm.encode-preflight {
+    border-top-color: var(--amber);
+    background: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.08) 0 4px, transparent 4px 8px), var(--panel);
+  }
+  .bars-confirm.encode-preflight .bars-buttons .confirm {
+    border-color: var(--teal);
+    color: var(--ground);
+    background: var(--teal);
+  }
+  .bars-confirm.encode-preflight .bars-buttons .confirm:hover { filter: brightness(1.08); background: var(--teal); color: var(--ground); }
 
   @media (max-width: 900px) {
     .console { flex-direction: column; }
