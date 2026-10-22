@@ -13,7 +13,7 @@
 !config.json
 !.devcontainer/devcontainer.json
 !.vscode/settings.json
-!src/metadata_scrapper/models/*.json
+!src/shrinkray/models/*.json
 # ui manifests (npm ci requires package.json + lockfile together; the
 # tsconfigs are needed by svelte-check)
 !ui/package.json

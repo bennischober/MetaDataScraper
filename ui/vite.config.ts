@@ -5,7 +5,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [svelte()],
   server: {
-    // dev: proxy API calls to the resident app (uv run metadata-scrapper app)
+    // dev: proxy API calls to the resident app (uv run shrinkray app)
     proxy: {
       '/api': 'http://127.0.0.1:8420',
       '/report': 'http://127.0.0.1:8420',
