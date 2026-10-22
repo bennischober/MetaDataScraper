@@ -105,6 +105,14 @@
       {duplicates.length} GROUPS · {fmtGb(totalWasted)} WASTED
       {#if duplicates.length > 0}· DETECTION IS READ-ONLY{/if}
     </p>
+    <button
+      class="act rescan head-action"
+      onclick={() => onanalyze?.()}
+      disabled={analyzing || pending}
+      title="Re-run duplicate detection on the whole library (hash-based, read-only)"
+    >
+      {analyzing ? 'ANALYZING…' : 'RE-ANALYZE LIBRARY'}
+    </button>
   </header>
 
   {#if duplicates.length === 0}
@@ -147,9 +155,6 @@
       </div>
     {/each}
     <p class="note dim mono">deleting sends the file to the recycle bin (recoverable) — confirm per file; the source stays yours</p>
-    <button class="act rescan" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
-      {analyzing ? 'ANALYZING…' : 'RE-ANALYZE LIBRARY'}
-    </button>
   {/if}
 </div>
 
@@ -174,6 +179,9 @@
   .page { display: flex; flex-direction: column; gap: 12px; }
   .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
   .page-head .legend { margin-top: 2px; }
+  /* the page's one action lives in the head, not under nine groups */
+  .page-head { position: relative; }
+  .head-action { position: absolute; right: 0; top: 2px; }
   .dim { color: var(--ink-dim); }
   .empty {
     padding: 60px 20px;

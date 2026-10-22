@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtSeconds, fmtSpan, fmtWhen, type Movie, type Status, type Job } from '../api'
+  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, type Movie, type Status, type Job } from '../api'
 
   let {
     movies,
@@ -200,12 +200,30 @@
         m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
         m.encode != null
     )
+  /** The library record for a plan entry (path-suffix join, plan entries
+   * store bare filenames) — the measured truth an ENCODED row shows. */
+  const movieFor = (movie: string) =>
+    movies.find(
+      (m) =>
+        m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase())
+    )
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
     const span = fmtSpan(lastPlan.finished_at, new Date().toISOString())
     if (!span) return ''
     return `finished ${span} ago`
+  })
+  /** Head summary in real terms: what happened SINCE the plan ran. */
+  const planSummary = $derived.by(() => {
+    const encoded = planEntries.filter((p) => alreadyEncoded(p.movie)).length
+    const open = planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie)).length
+    const skipped = planEntries.filter((p) => p.state === 'skip' && !alreadyEncoded(p.movie)).length
+    const parts: string[] = []
+    if (encoded > 0) parts.push(`${encoded} encoded since`)
+    if (open > 0) parts.push(`${open} to encode`)
+    if (skipped > 0) parts.push(`${skipped} skipped`)
+    return parts.join(' · ')
   })
 
   /** The fail-row error currently expanded (one at a time). */
@@ -420,38 +438,64 @@
     <section class="panel wide">
       <div class="panel-head">
         <span class="legend">LAST PLAN — RUN #{lastPlan?.id}{planAge ? ` · ${planAge}` : ''}</span>
-        <span class="mono dim">
-          {planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie)).length} to encode ·
-          {planEntries.filter((p) => p.state === 'skip').length} skipped
-        </span>
+        <span class="mono dim">{planSummary}</span>
       </div>
-        <div class="plan-list">
-          <div class="plan-row plan-head mono legend" aria-hidden="true">
-            <span class="p-name">TITLE</span>
-            <span>DECISION</span>
-            <span class="p-num">CRF</span>
-            <span class="p-num">VMAF</span>
-            <span class="p-num">EST. SIZE</span>
-            <span class="p-num">SAVED</span>
-            <span class="p-reason"></span>
-          </div>
-          {#each planEntries.slice(0, 8) as entry (entry.movie)}
-            {@const done = alreadyEncoded(entry.movie)}
-            <div class="plan-row mono" class:plan-done={done} title={done ? 'encoded since this plan ran — the prediction has been overtaken by a measurement' : ''}>
-              <span class="p-name">{entry.movie}</span>
-              <span class="chip {done ? 'progress' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
-                <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
-              </span>
-              <span class="p-num">{entry.crf ?? '—'}</span>
-              <span class="p-num">{entry.vmaf?.toFixed(1) ?? '—'}</span>
-              <span class="p-num">{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}</span>
-              <span class="p-num">{entry.saved_percent != null ? `${entry.saved_percent.toFixed(0)}%` : '—'}</span>
-              <span class="dim p-reason">{done ? 'measured since' : entry.reason ?? entry.error ?? ''}</span>
-            </div>
-          {/each}
+      <div class="plan-list">
+        <div class="plan-row plan-head mono legend" aria-hidden="true">
+          <span class="p-name">TITLE</span>
+          <span>STATE</span>
+          <span class="p-num">CRF</span>
+          <span class="p-num">VMAF</span>
+          <span class="p-num">SIZE</span>
+          <span class="p-num">SAVED</span>
+          <span class="p-reason"></span>
         </div>
-      </section>
-    {/if}
+        {#each planEntries.slice(0, 8) as entry (entry.movie)}
+          {@const done = alreadyEncoded(entry.movie)}
+          {@const rec = done ? movieFor(entry.movie)?.encode : null}
+          {@const plannedCrf = entry.crf ?? null}
+          {@const crfDelta = rec?.crf != null && plannedCrf != null ? rec.crf - plannedCrf : null}
+          {@const plannedSaved = entry.saved_percent ?? null}
+          {@const savedDelta = rec?.saved_percent != null && plannedSaved != null ? rec.saved_percent - plannedSaved : null}
+          {@const verdict =
+            rec == null
+              ? entry.reason ?? entry.error ?? ''
+              : entry.state === 'skip'
+                ? 'planned skip — encoded anyway'
+                : rec.vmaf == null
+                  ? 'encoded (fixed mode — no VMAF measurement)'
+                  : savedDelta != null && savedDelta < -2
+                    ? `plan ${plannedSaved?.toFixed(0)}% → measured ${rec.saved_percent?.toFixed(1)}%`
+                    : 'measured as planned'
+          }
+          <div class="plan-row mono" class:plan-done={done} title={done ? 'the prediction has been overtaken by a measurement — the row shows the measured values' : ''}>
+            <span class="p-name">{entry.movie}</span>
+            <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
+              <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
+            </span>
+            <span class="p-num" class:measured={done}>
+              {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
+            </span>
+            <span class="p-num" class:measured={done}>
+              {#if done}{rec?.vmaf?.toFixed(1) ?? '—'}{:else}{entry.vmaf?.toFixed(1) ?? '—'}{/if}
+            </span>
+            <span class="p-num" class:measured={done}>
+              {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
+            </span>
+            <span class="p-num" class:measured={done && rec?.vmaf != null}>
+              {#if done}
+                {@const saved = fmtSavedHonest(rec?.saved_percent)}
+                {saved.text}
+              {:else}
+                {plannedSaved != null ? `${plannedSaved.toFixed(0)}%` : '—'}
+              {/if}
+            </span>
+            <span class="dim p-reason">{verdict}</span>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -588,8 +632,10 @@
     font-size: 11px;
   }
   .plan-row:last-child { border-bottom: none; }
-  /* a plan row overtaken by a measurement: history, not a queue */
-  .plan-row.plan-done { opacity: 0.55; }
+  /* a plan row overtaken by a measurement: shows the MEASURED values */
+  .plan-row.plan-done { opacity: 0.8; }
+  .p-num.measured { color: var(--teal-ink); }
+  .delta-mark { color: var(--ink-faint); font-size: 10px; }
   .plan-head {
     border-bottom: 1px solid var(--seam);
     color: var(--ink-faint);
