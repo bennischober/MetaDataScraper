@@ -660,11 +660,18 @@ def execute_dedupe(
         progress(
             {"stage": "dedupe", "detail": "matching titles and hashes", "done": 0, "total": None}
         )
-    groups = find_duplicates(connection)
+    # rows flagged missing (deleted/vanished files) do not occupy groups
+    missing_paths = {
+        row["path"] for row in connection.execute("SELECT path FROM files WHERE missing_scans > 0")
+    }
+    groups = [
+        g for g in find_duplicates(connection) if not any(f.path in missing_paths for f in g.files)
+    ]
     return {
         "groups": len(groups),
         "wasted_bytes": sum(g.wasted_bytes for g in groups),
         "cancelled": cancel.is_set(),
+        "excluded_missing": len(missing_paths),
     }
 
 

@@ -148,7 +148,13 @@ def find_duplicates(connection: sqlite3.Connection) -> list[DuplicateGroup]:
     scan's --hash option), same-title files (normalized name + duration
     within tolerance) and similar-title files (fuzzy match for typos and
     variants; also duration-gated). A file can appear in several passes;
-    groups are merged when they share members.
+    groups are merged when they share members. The caller decides which
+    rows to consider (e.g. the API excludes rows flagged missing) — this
+    function is pure grouping over the rows it is given.
+
+    Note: the API endpoint feeds this function a temp table named `files`
+    that shadows the real one and carries fewer columns; do not reference
+    schema-v6 columns here.
 
     Args:
         connection (sqlite3.Connection): The database connection.

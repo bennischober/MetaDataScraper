@@ -325,7 +325,9 @@ def duplicates():
         return c.execute(
             """
             SELECT path, name, category, size, duration_raw, codec, hash, width, height
-            FROM files ORDER BY size DESC
+            FROM files
+            WHERE missing_scans = 0
+            ORDER BY size DESC
             """
         ).fetchall()
 
@@ -839,6 +841,23 @@ def duplicates_delete(request: RevealRequest):
         raise HTTPException(status_code=500, detail=f"permission denied: {e}") from e
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"could not move to trash: {e}") from e
+    # retire the database row immediately (the same soft-missing state a
+    # scan sets): the UI shows the MISSING badge at once and the duplicates
+    # view drops the file without waiting for the next scan. History is
+    # retained; a restored file recovers automatically on the next scan.
+    s = get_state()
+    s.with_lock(
+        lambda c: c.execute(
+            """
+            UPDATE files
+            SET missing_scans = 1,
+                missing_since = datetime('now')
+            WHERE path = ?
+              AND missing_scans = 0
+            """,
+            (str(path),),
+        )
+    )
     log(f"Moved duplicate to trash: {path}")
     return {"deleted": str(path), "to": "trash"}
 

@@ -601,6 +601,14 @@ class TestDb(unittest.TestCase):
 
             app_module.state = AppState(root / "test.db")
             app_module.allow_roots([root])
+            # the file was scanned before: a db row exists for it
+            app_module.state.with_lock(
+                lambda c: c.execute(
+                    "INSERT INTO files (path, mtime, size, name, category)"
+                    " VALUES (?, 1.0, 15, 'duplicate', 'Cat')",
+                    (str(victim),),
+                )
+            )
             try:
                 client = TestClient(fast_app)
                 # outside the allowlist => rejected before any file work
@@ -619,6 +627,16 @@ class TestDb(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["to"], "trash")
                 self.assertFalse(victim.is_file())
+                # the row is retired at once: MISSING state without waiting
+                # for the next scan (history retained, not hard-deleted)
+                row = app_module.state.with_lock(
+                    lambda c: c.execute(
+                        "SELECT missing_scans, missing_since FROM files WHERE path = ?",
+                        (str(victim),),
+                    ).fetchone()
+                )
+                self.assertEqual(row["missing_scans"], 1)
+                self.assertIsNotNone(row["missing_since"])
             finally:
                 app_module._allowed_roots = []
                 app_module.state.shutdown()
@@ -1517,6 +1535,41 @@ class TestDedupe(unittest.TestCase):
         # same name + same duration + same hash => both passes merge
         self.assertEqual(groups[0].reason, "identical + same title")
         self.assertEqual(groups[0].wasted_bytes, 1000)
+
+    def test_missing_rows_are_excluded(self):
+        """A trash-ed (retired) duplicate leaves its group at once — the
+        API endpoint excludes rows flagged missing (the delete endpoint
+        retires them immediately)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        self._add("D:/a/movie.mkv", "movie", 1000, 100.0, hash="abc")
+        self._add("D:/b/movie.mkv", "movie", 1000, 100.0, hash="abc")
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        # point the app state at this test's connection (same db file)
+        app_module.state.connection.close()
+        app_module.state.connection = self.connection
+        app_module.state.queue = __import__("shrinkray.jobs", fromlist=["JobQueue"]).JobQueue(
+            self.connection
+        )
+        try:
+            client = TestClient(fast_app)
+            groups = client.get("/api/duplicates").json()
+            self.assertEqual(len(groups), 1)
+            # retire one member the way the delete endpoint does
+            self.connection.execute(
+                "UPDATE files SET missing_scans = 1, missing_since = datetime('now')"
+                " WHERE path = 'D:/b/movie.mkv'"
+            )
+            self.connection.commit()
+            self.assertEqual(client.get("/api/duplicates").json(), [])
+        finally:
+            app_module.state.worker.stop()
+            app_module.state = None
 
     def test_same_title_duration_match(self):
         from shrinkray.dedupe import find_duplicates
