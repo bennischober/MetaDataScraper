@@ -327,6 +327,14 @@ Seam border, panel or raised-panel fill, 4px radius, mono text (paths, numbers, 
 ### Browser Surfaces
 The chrome itself is themed per `[data-theme]`: `color-scheme: dark|light` (native controls follow), `::selection` in `--teal-glow`, input carets teal, placeholders faint ink, thin scrollbars with seam thumbs (hover: faint ink), and a global `:focus-visible` — a 2px solid teal outline at 1px offset. Keyboard operators are first-class.
 
+## Data Retrieval Architecture
+
+Two tiers, one discipline (the snapshot's own docstring is the contract):
+
+- **Tier 1 — the poll.** `/api/snapshot` is the only endpoint the UI polls (adaptive 1s/3s/10s): status + jobs + library in **one round-trip under one lock pass**, library ETag-cached (`"library": null` when unchanged). Nothing else ever polls.
+- **Tier 2 — on-demand detail.** Data only one view needs, fetched once when that view opens, never polled, no ETag: `/api/duplicates` (duplicates page), `/api/movie` (provenance page — file facts + COMPLETE encode history), `/api/config`. `POST` verbs (`encode`, `plan`, `reveal`, delete) are commands, not retrieval.
+- **Discipline every retrieval endpoint follows:** one request = one lock pass (a write between two separate reads would return data that never coexisted), argument lists and allowlist validation for anything path-shaped, and **no refetching what the snapshot already delivered** — the provenance page filters the app's in-memory job list locally instead of re-hitting `/api/jobs`.
+
 ## Do's and Don'ts
 
 ### Do:

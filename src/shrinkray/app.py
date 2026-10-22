@@ -798,8 +798,11 @@ def movie_detail(path: str, conn=Depends(db_access)):
     """
     p = validate_path(path, "path")
     s = get_state()
-    row = s.with_lock(
-        lambda c: c.execute(
+    # one lock pass for both reads — the snapshot's discipline applies to
+    # every endpoint: a write between two separate reads would hand back a
+    # file row and an encode history that never coexisted
+    with s.db_lock:
+        row = s.connection.execute(
             """
             SELECT f.id, f.path, f.name, f.category, f.duration, f.codec,
                    f.width, f.height, f.size, f.hdr, f.missing_scans,
@@ -808,11 +811,9 @@ def movie_detail(path: str, conn=Depends(db_access)):
             """,
             (str(p),),
         ).fetchone()
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="movie not found in the library")
-    history = s.with_lock(
-        lambda c: [
+        if row is None:
+            raise HTTPException(status_code=404, detail="movie not found in the library")
+        history = [
             {
                 "preset": r["preset"],
                 "crf": r["chosen_crf"],
@@ -827,7 +828,7 @@ def movie_detail(path: str, conn=Depends(db_access)):
                 "tool_versions": r["tool_versions"],
                 "encoded_at": r["encoded_at"],
             }
-            for r in c.execute(
+            for r in s.connection.execute(
                 """
                 SELECT preset, chosen_crf, achieved_vmaf, input_size, output_size,
                        saved_percent, encoder_preset, encode_seconds, probe_count,
@@ -837,7 +838,6 @@ def movie_detail(path: str, conn=Depends(db_access)):
                 (row["id"],),
             ).fetchall()
         ]
-    )
     return {
         "file": {
             "path": row["path"],

@@ -484,6 +484,7 @@
       <MovieDetailPage
         movie={detailMovie}
         {targetVmaf}
+        allJobs={history}
         onclose={closeDetail}
         onencode={encodeOne}
         onplan={(p) => enqueue('plan', [p])}

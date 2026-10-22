@@ -18,6 +18,7 @@
   let {
     movie,
     targetVmaf,
+    allJobs,
     onclose,
     onencode,
     onplan,
@@ -25,30 +26,36 @@
   }: {
     movie: Movie
     targetVmaf: number
+    /** The snapshot's job list — filtering it locally beats refetching
+     * /api/jobs per detail-open (zero extra round-trips). */
+    allJobs: Job[]
     onclose: () => void
     onencode: (path: string) => void
     onplan: (path: string) => void
     backTo?: 'overview' | 'library'
   } = $props()
 
-  let jobs = $state<Job[]>([])
   let encodes = $state<EncodeRecord[] | null>(null)
   let encodeBusy = $state(false)
   let revealBusy = $state(false)
   let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
 
+  /** This movie's slice of the audit trail, newest first. Derived from the
+   * snapshot the app already holds — no second request on detail-open. */
+  const jobs = $derived.by(() =>
+    allJobs
+      .filter((j) => jobPaths(j).includes(movie.path))
+      .sort((a, b) => (b.id ?? 0) - (a.id ?? 0))
+  )
+
   $effect(() => {
-    // full encode history from the dedicated endpoint (the library list
-    // carries only the latest encode per title) + this movie's job trail
+    // the one fetch the detail page truly needs: the COMPLETE encode
+    // history (the library list carries only the latest encode per title)
     api
       .movie(movie.path)
       .then((d) => (encodes = d.history))
       .catch(() => (encodes = []))
-    api
-      .jobs(100)
-      .then((all) => (jobs = all.filter((j) => jobPaths(j).includes(movie.path))))
-      .catch(() => {})
     pageEl?.focus()
   })
 
