@@ -189,6 +189,16 @@
   // ── selection (bulk ops live on the library page) ──
   let selectedPaths = $state<Set<string>>(new Set())
 
+  // ── resident-memory samples (the overview's sparkline buffer) ──
+  // Accumulated in the poll path, never in an $effect: an effect that
+  // read AND wrote its buffer looped itself to death (round-6.6). Pure
+  // write-on-new-sample; capped at 40 (the sparkline's window).
+  let rssSamples = $state<number[]>([])
+  function rememberRss(v: number | null | undefined) {
+    if (v == null) return
+    rssSamples = [...rssSamples, v].slice(-40)
+  }
+
   // ── refresh loop ──
   async function refresh() {
     try {
@@ -196,6 +206,7 @@
       status = snap.status
       history = snap.jobs
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
+      rememberRss(snap.status?.rss_mib)
       error = null
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -624,6 +635,7 @@
           {failedJobs}
           {scanPaths}
           {outputDir}
+          sparkSamples={rssSamples}
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}

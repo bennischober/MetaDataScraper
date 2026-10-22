@@ -20,6 +20,7 @@
     failedJobs,
     scanPaths,
     outputDir,
+    sparkSamples = [],
     ondismiss,
     ongoto,
     onopenmovie,
@@ -39,6 +40,10 @@
     failedJobs: Job[]
     scanPaths: string[]
     outputDir: string
+    /** resident-memory samples accumulated by the poll (App.svelte) —
+     * the sparkline's buffer lives at app level so it survives page
+     * switches and never writes what it reads */
+    sparkSamples?: number[]
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'duplicates' | 'jobs' | 'config') => void
     onopenmovie: (movie: Movie) => void
@@ -237,9 +242,62 @@
     return parts.join(' · ')
   })
 
+  // ── the "what's left" figure: plan-predicted savings not yet realized ──
+  // The RECLAIMED stat answers "what did we win"; the operator's next
+  // question is "what remains" — the last plan predicted an outcome for
+  // every open (not-yet-encoded) title, and that predicted total is a
+  // plan figure, not a guess (it names its own age + basis in the panel).
+  const reclaimable = $derived.by(() => {
+    if (planEntries.length === 0) return null
+    // open titles = plan said "encode" and reality has not overtaken it
+    const open = planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie))
+    if (open.length === 0) return null
+    // predicted savings per open title: saved_percent × its library size.
+    // When the library join fails (suffix collisions) or size is unknown,
+    // the entry's own estimated_size back-computes the source
+    // (estimated = source × (1 − saved%)) — an understatement is also a
+    // lie; the sub-line says "plan-predicted" throughout.
+    const gb = open.reduce((sum, p) => {
+      const m = movieFor(p.movie)
+      const pct = p.saved_percent ?? 45
+      const sizeGb = m?.size != null && m.size > 0 ? m.size / 1024 ** 3 : p.estimated_size != null && pct < 100 ? p.estimated_size / (1 - pct / 100) / 1024 ** 3 : 0
+      return sum + (sizeGb * pct) / 100
+    }, 0)
+    return { count: open.length, gb }
+  })
+
+  // ── resident-memory sparkline: the app watching itself ──
+  // rss_mib arrives live on every snapshot; the client keeps a small
+  // buffer so the SETUP panel shows the trend, not just the instant.
+  // A slow leak becomes visible before it becomes a problem.
+  // Samples accumulate in App.svelte's poll path (an $effect that read
+  // AND wrote rssSamples looped itself to death — Svelte 5 forbids
+  // self-reading effects, round-6.6 lesson).
+  const rssSpark = $derived.by(() => {
+    const samples = sparkSamples
+    if (samples.length < 2) return null
+    const min = Math.min(...samples)
+    const max = Math.max(...samples)
+    const span = Math.max(max - min, 2) // ≥2 MiB span: a flat line stays readable
+    const w = 180
+    const h = 30
+    const pts = samples.map(
+      (v, i) =>
+        `${((i / (samples.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`
+    )
+    return {
+      points: pts.join(' '),
+      min,
+      max,
+      last: samples[samples.length - 1],
+      n: samples.length,
+      w,
+      h,
+    }
+  })
+
   /** The fail-row error currently expanded (one at a time). */
-  let expandedErr = $state<number | null>(null)
-</script>
+  let expandedErr = $state<number | null>(null)</script>
 
 <div class="page page-in">
   <header class="page-head">
@@ -274,6 +332,13 @@
       <span class="stat-v mono" class:warn={duplicates > 0}>{duplicates}</span>
       <span class="stat-sub mono dim">{duplicateWastedGb.toFixed(2)} GB wasted</span>
     </button>
+    {#if reclaimable}
+      <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode">
+        <span class="legend">RECLAIMABLE</span>
+        <span class="stat-v mono">{reclaimable.gb.toFixed(1)} GB</span>
+        <span class="stat-sub mono dim">{reclaimable.count} planned · plan #{lastPlan?.id}</span>
+      </button>
+    {/if}
     {#if missingMovies.length > 0}
       <button class="stat" onclick={() => ongoto('library')}>
         <span class="legend">MISSING</span>
@@ -399,7 +464,21 @@
         <div class="fact"><span class="legend">DATABASE</span><span class="src">{status?.database ?? '—'}</span></div>
         <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
         {#if status?.rss_mib != null}
-          <div class="fact"><span class="legend">RESIDENT MEMORY</span><span class="src">{status.rss_mib.toFixed(1)} MiB</span></div>
+          <div class="fact rss-fact">
+            <span class="legend">RESIDENT MEMORY</span>
+            {#if rssSpark}
+              <!-- the trend, not just the instant: a leak announces
+                   itself here before the log does -->
+              <span class="rss-wrap" title="resident {rssSpark.last.toFixed(1)} MiB · min {rssSpark.min.toFixed(1)} · max {rssSpark.max.toFixed(1)} MiB · {rssSpark.n} samples this session">
+                <svg viewBox="0 0 {rssSpark.w} {rssSpark.h}" preserveAspectRatio="none" aria-hidden="true">
+                  <polyline points={rssSpark.points} class="rss-line" fill="none"></polyline>
+                </svg>
+                <span class="mono">{rssSpark.last.toFixed(1)} MiB</span>
+              </span>
+            {:else}
+              <span class="src">{status.rss_mib.toFixed(1)} MiB</span>
+            {/if}
+          </div>
         {/if}
       </div>
     </section>
@@ -816,6 +895,11 @@
   .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
   .fact { display: flex; justify-content: space-between; gap: 12px; }
   .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+  /* the memory sparkline: trend beside the instant figure */
+  .rss-fact { align-items: center; }
+  .rss-wrap { display: inline-flex; align-items: center; gap: 8px; }
+  .rss-wrap svg { width: 90px; height: 16px; }
+  .rss-line { stroke: var(--teal); stroke-width: 1.5; }
 
   /* measured quality panel */
   .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }

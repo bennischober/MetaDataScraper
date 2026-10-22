@@ -139,6 +139,57 @@
 
   /** Newest first for the history table. */
   const encodesDesc = $derived(encodes ? [...encodes].reverse() : [])
+
+  // ── drift chart: the provenance chain as a shape ──
+  // The chain table carries the numbers; the chart carries the SHAPE —
+  // rip 5.0 MBit/s collapsing to 1.0 across generations is the product's
+  // thesis, and a column of numbers hides a collapse. Oldest → newest
+  // left to right, per-encode slots: bitrate in (seam) vs out (teal)
+  // bars, VMAF as points on a fixed 70–100 track (the target clamp's
+  // domain) with the amber target mark. Rendered only from ≥2 rows —
+  // one encode is a row, not a trend. Pre-v7 rows fall back to the
+  // size/duration derivation (marked); unmeasurable slots stay empty
+  // (an em-dash vocabulary, not a fabricated bar).
+  interface DriftSlot {
+    gen: number
+    label: string
+    inBr: number | null
+    outBr: number | null
+    inDerived: boolean
+    outDerived: boolean
+    vmaf: number | null
+    i: number
+  }
+  const driftSlots = $derived.by<DriftSlot[]>(() => {
+    if (!encodes || encodesDesc.length < 2) return []
+    return [...encodesDesc].reverse().map((rec, i) => {
+      const inDerived = rec.input_bitrate == null
+      const outDerived = rec.output_bitrate == null
+      return {
+        gen: rec.generation ?? 1,
+        label: `GEN ${rec.generation ?? 1}`,
+        inBr: rec.input_bitrate ?? bitrateMbps(rec.input_size, fileDuration),
+        outBr: rec.output_bitrate ?? bitrateMbps(rec.output_size, fileDuration),
+        inDerived,
+        outDerived,
+        vmaf: rec.vmaf ?? null,
+        i,
+      }
+    })
+  })
+  const driftMaxBr = $derived(Math.max(...driftSlots.map((s) => Math.max(s.inBr ?? 0, s.outBr ?? 0)), 0.1))
+  /** VMAF track: fixed 70–100 domain (the target's clamp range) — a
+   * min-max scale would let one bad encode silently stretch the axis. */
+  const vmafY = (v: number) => 86 - ((Math.min(100, Math.max(70, v)) - 70) / 30) * 20
+  const driftSummary = $derived.by(() => {
+    if (driftSlots.length < 2) return ''
+    const first = driftSlots[0]
+    const last = driftSlots[driftSlots.length - 1]
+    if (first.inBr != null && last.outBr != null) {
+      return `bitrate ${first.inBr.toFixed(1)} → ${last.outBr.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
+    }
+    return `${driftSlots.length} encodes, oldest → newest`
+  })
   /** Distinct generations in the chain — the head counts GENERATIONS, not
    * rows (two encodes of the same original are one generation, and "2
    * GENERATIONS" over two gen-1 rows was the round-5 finding). */
@@ -273,6 +324,40 @@
       {:else if encodesDesc.length === 0}
         <div class="dim pad">no encode recorded — the title is untouched</div>
       {:else}
+        {#if driftSlots.length >= 2}
+          <!-- the drift chart: bitrate in→out per encode (bars, oldest →
+               newest) + VMAF points on the fixed 70-100 target track -->
+          <div class="drift mono" role="img" aria-label="Drift chart: bitrate and VMAF across {driftSlots.length} encodes, oldest to newest. {driftSummary}">
+            <svg viewBox="0 0 560 110" preserveAspectRatio="none" aria-hidden="true">
+              <g class="vmaf-track">
+                <line x1="0" y1="86" x2="560" y2="86" class="track-rule"></line>
+                <line x1="0" y1="66" x2="560" y2="66" class="track-rule faint"></line>
+                <line x1="0" y1="{vmafY(targetVmaf)}" x2="560" y2="{vmafY(targetVmaf)}" class="target-rule"></line>
+                {#each driftSlots as s, i (s.i)}
+                  {#if s.vmaf != null}
+                    <circle cx={((i + 0.5) / driftSlots.length) * 560} cy={vmafY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
+                  {/if}
+                {/each}
+              </g>
+              {#each driftSlots as s, i (s.i)}
+                {@const cx = ((i + 0.5) / driftSlots.length) * 560}
+                {#if s.inBr != null}
+                  <rect x={cx - 9} y={110 - (s.inBr / driftMaxBr) * 52} width="8" height={(s.inBr / driftMaxBr) * 52} class="br-in" class:derived={s.inDerived}></rect>
+                {/if}
+                {#if s.outBr != null}
+                  <rect x={cx + 1} y={110 - (s.outBr / driftMaxBr) * 52} width="8" height={(s.outBr / driftMaxBr) * 52} class="br-out"></rect>
+                {/if}
+              {/each}
+            </svg>
+            <div class="drift-legend legend">
+              <span><span class="sw sw-in"></span> BITRATE IN</span>
+              <span><span class="sw sw-out"></span> BITRATE OUT</span>
+              <span><span class="sw sw-vmaf"></span> VMAF (70–100)</span>
+              <span class="spacer"></span>
+              <span class="dim">{driftSummary}</span>
+            </div>
+          </div>
+        {/if}
         <div class="enc-table mono">
           <div class="enc-row enc-head legend" aria-hidden="true">
             <span>GEN</span>
@@ -451,7 +536,38 @@
 
   /* encode history table */
   .enc-table { display: flex; flex-direction: column; padding: 6px 14px 12px; }
-  .enc-row {
+
+  /* ── drift chart: the chain as a shape ── */
+  .drift { padding: 10px 14px 8px; border-bottom: 1px solid var(--row-line); }
+  .drift svg { display: block; width: 100%; height: 110px; }
+  .drift .track-rule { stroke: var(--row-line); stroke-width: 1; }
+  .drift .track-rule.faint { stroke: var(--row-line); stroke-dasharray: 2 3; }
+  .drift .target-rule { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 4 3; }
+  .drift .vmaf-dot { fill: var(--teal); }
+  .drift .vmaf-dot.under { fill: var(--amber); }
+  .drift .br-in { fill: var(--seam); }
+  .drift .br-in.derived { fill: none; stroke: var(--seam); stroke-dasharray: 2 2; }
+  .drift .br-out { fill: var(--teal); opacity: 0.85; }
+  .drift-legend {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 9.5px;
+    letter-spacing: 0.8px;
+  }
+  .drift-legend .spacer { flex: 1; }
+  .drift-legend .sw {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 4px;
+    vertical-align: middle;
+    border-radius: 1px;
+  }
+  .drift-legend .sw-in { background: var(--seam); }
+  .drift-legend .sw-out { background: var(--teal); opacity: 0.85; }
+  .drift-legend .sw-vmaf { border-radius: 50%; background: var(--teal); }  .enc-row {
     display: grid;
     grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 70px 1fr;
     gap: 10px;
