@@ -254,7 +254,9 @@
         </div>
 
         <div class="group">
-          <div class="legend">HANDBRAKE (FIXED MODE)</div>
+          <div class="legend">HANDBRAKE (FIXED MODE)
+            <HintMark text="These settings apply to fixed-mode runs (the CLI's encode --fixed-preset path). Encodes started in this console always run quality mode: HandBrake probes short samples, searches for the largest CRF that still meets the VMAF target, and measures the result." />
+          </div>
           <label class="field">
             <span class="dim">preset</span>
             <input class="mono" bind:value={config.handbrake!.preset} />

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtSaved, type Movie } from '../api'
+  import { fmtGb, fmtSavedHonest, type Movie } from '../api'
   import HintButton from './HintButton.svelte'
   import HintMark from './HintMark.svelte'
 
@@ -38,10 +38,24 @@
   // ── search + category (a select, not an exploding chip row) ──
   let query = $state('')
   let category = $state<string | null>(null)
-  let hideMissing = $state(false)
-  // sorting: persisted per session (the regression the critique caught)
-  let sortKey = $state<'name' | 'category' | 'size' | 'vmaf' | 'saved'>('name')
-  let sortAsc = $state(true)
+  // decision filter: the state dimension ("untouched, ≥ 30 GB" is
+  // answerable now) — replaces the narrower hide-missing toggle, which is
+  // a strict subset (filtering missing is reachable via decision=missing)
+  let decision = $state<'all' | 'untouched' | 'planned' | 'encoded' | 'skipped' | 'missing'>('all')
+  // sorting: persisted per session via sessionStorage
+  type SortKey = 'name' | 'category' | 'size' | 'vmaf' | 'saved'
+  const storedKey = sessionStorage.getItem('ms.sortKey')
+  let sortKey = $state<SortKey>(
+    storedKey === 'name' || storedKey === 'category' || storedKey === 'size' || storedKey === 'vmaf' || storedKey === 'saved'
+      ? storedKey
+      : 'name'
+  )
+  let sortAsc = $state(sessionStorage.getItem('ms.sortAsc') !== 'false')
+
+  $effect(() => {
+    sessionStorage.setItem('ms.sortKey', sortKey)
+    sessionStorage.setItem('ms.sortAsc', String(sortAsc))
+  })
 
   const categories = $derived([...new Set(movies.map((m) => m.category))].sort())
 
@@ -49,12 +63,12 @@
     const q = query.trim().toLowerCase()
     const list = movies.filter((m) => {
       if (category && m.category !== category) return false
-      if (hideMissing && m.missing) return false
+      if (decision !== 'all' && decisionOf(m).label.toLowerCase() !== decision) return false
       if (q && !m.name.toLowerCase().includes(q)) return false
       return true
     })
     const dir = sortAsc ? 1 : -1
-    list.sort((a, b) => {
+    list.sort((a, b): number => {
       switch (sortKey) {
         case 'name':
           return a.name.localeCompare(b.name) * dir
@@ -129,12 +143,14 @@
         <option value={cat}>{cat} ({movies.filter((m) => m.category === cat).length})</option>
       {/each}
     </select>
-    {#if movies.some((m) => m.missing)}
-      <label class="missing-toggle mono dim">
-        <input type="checkbox" bind:checked={hideMissing} />
-        hide missing
-      </label>
-    {/if}
+    <select class="cat mono" bind:value={decision} aria-label="Filter by decision state">
+      <option value="all">All states</option>
+      <option value="untouched">Untouched</option>
+      <option value="planned">Planned</option>
+      <option value="encoded">Encoded</option>
+      <option value="skipped">Skipped</option>
+      <option value="missing">Missing</option>
+    </select>
     <span class="spacer"></span>
     <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning || pending} title="Re-read every source folder: new files are added, changed files re-read, missing files flagged after a grace period">
       {scanning ? 'SCANNING…' : 'RESCAN ALL'}
@@ -155,10 +171,10 @@
       </span>
       <span class="leader-note mono">→ EST. −{Math.max(0.1, selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE</span>
       <span class="spacer"></span>
-      <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything">
+      <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything" aria-label="Plan the {selectedCount} selected titles">
         PLAN SELECTED
       </button>
-      <button class="act primary" onclick={() => onenqueue('encode', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Re-encode the selected titles at their measured best CRF (sources untouched, output to the configured folder)">
+      <button class="act primary" onclick={() => onenqueue('encode', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Re-encode the selected titles at their measured best CRF (sources untouched, output to the configured folder)" aria-label="Encode the {selectedCount} selected titles">
         ENCODE SELECTED
       </button>
       <button class="act quiet" onclick={onclear}>CLEAR</button>
@@ -176,6 +192,7 @@
   <!-- ══ table view (the catalog is a table; the grid was demoted away) ══ -->
   <div class="table-wrap">
       <table>
+        <caption class="sr-only">The library catalog: one row per title with size, decision state and encode metrics. Column heads are sort buttons.</caption>
         <thead>
           <tr>
             <th class="chk">
@@ -233,7 +250,14 @@
                   <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
                 {:else}
                   {#if decision.bare}
-                    <span class="chip untouched bare-swatch" title="Untouched"> </span>
+                    <!-- bare swatch: the state stays visible to sighted users via
+                         the legend, but the cell must not be silent for SR users -->
+                    <span
+                      class="chip untouched bare-swatch"
+                      role="img"
+                      aria-label="Decision: untouched"
+                      title="Untouched"
+                    ></span>
                   {:else}
                     <span class="chip {decision.cls}"><span class="swatch"></span>{decision.label}</span>
                   {/if}
@@ -241,8 +265,13 @@
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
               <td class="mono num measured">{movie.encode?.vmaf?.toFixed(2) ?? '—'}</td>
-              <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0}>
-                {movie.encode ? fmtSaved(movie.encode.saved_percent) : '—'}
+              <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
+                {#if movie.encode}
+                  {@const saved = fmtSavedHonest(movie.encode.saved_percent)}
+                  <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
+                {:else}
+                  —
+                {/if}
               </td>
             </tr>
           {:else}
@@ -285,8 +314,18 @@
     padding: 6px 10px;
     max-width: 260px;
   }
-  .missing-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-  .missing-toggle input { accent-color: var(--red); }
+  /* visually hidden, SR-audible (table caption) */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .act.scan {
     background: var(--panel-raised);
     border: 1px solid var(--ink);

@@ -207,6 +207,9 @@
     if (!span) return ''
     return `finished ${span} ago`
   })
+
+  /** The fail-row error currently expanded (one at a time). */
+  let expandedErr = $state<number | null>(null)
 </script>
 
 <div class="page page-in">
@@ -215,14 +218,14 @@
     <p class="legend">THE LIBRARY AT A GLANCE · VMAF TARGET {targetVmaf}</p>
   </header>
 
-  <!-- system line: the console's own telemetry -->
+  <!-- system line: the console's own telemetry (only what's not already
+       on the rail badges and the stat band — those carry the counts) -->
   <div class="sysline mono dim">
     <span>POLL 3s</span>
     <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
     <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
-    <span>Q {runningJobs.length} · FAIL {failedJobs.length} · DUPES {duplicates}</span>
     <span class="spacer"></span>
-    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'} → {outputDir || '—'}</span>
+    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
   </div>
 
   <!-- ══ stat band ══ -->
@@ -300,10 +303,25 @@
         <div class="dim pad">nothing failed — the last runs are clean</div>
       {:else}
         {#each failedJobs.slice(0, 4) as job (job.id)}
+          {@const failedOutcome = (job.result as { outcomes?: { state: string; error?: string }[] } | null)?.outcomes?.find((o) => o.state === 'failed')}
+          {@const errText = job.error ?? failedOutcome?.error ?? ''}
           <div class="fail-row">
             <span class="mono bad">#{job.id} {job.kind}</span>
-            <span class="mono dim err">{job.error}</span>
-            <button class="link mono" onclick={() => ondismiss(job.id)}>dismiss</button>
+            <!-- the error is the diagnosis: a long one becomes a button that
+                 expands inline, so keyboard users can actually read it -->
+            {#if errText.length > 60}
+              <button
+                class="mono dim err err-expandable"
+                onclick={() => (expandedErr = expandedErr === job.id ? null : job.id)}
+                aria-expanded={expandedErr === job.id}
+                title={errText}
+              >
+                {expandedErr === job.id ? errText : errText}
+              </button>
+            {:else}
+              <span class="mono dim err">{errText}</span>
+            {/if}
+            <button class="link mono" onclick={() => ondismiss(job.id)} aria-label="Dismiss failed job #{job.id} from the overview">DISMISS</button>
           </div>
         {/each}
       {/if}
@@ -321,7 +339,7 @@
           <div class="fail-row">
             <span class="mono bad">{movie.name}</span>
             <span class="mono dim err">absent since {movie.missing_since?.slice(0, 10) ?? 'last scan'}</span>
-            <button class="link mono" onclick={() => onopenmovie(movie)}>details</button>
+            <button class="link mono" onclick={() => onopenmovie(movie)} aria-label="Open details for missing file {movie.name}">DETAILS</button>
           </div>
         {/each}
         {#if missingMovies.length > 4}
@@ -345,6 +363,8 @@
     </section>
 
     <!-- ══ measured quality: the score that justifies the whole product ══ -->
+    <!-- lives in the attention row (4th panel): the user asked for the avg
+         VMAF "as a small card like the attention cards" -->
     <section class="panel">
       <div class="panel-head">
         <span class="legend">MEASURED QUALITY — VMAF {targetVmaf} TARGET</span>
@@ -371,39 +391,40 @@
         </div>
       {/if}
     </section>
+  </div>
 
-    <!-- ══ per-category bars: where the bytes live ══ -->
+  <!-- ══ per-category bars: where the bytes live ══ -->
+  <section class="panel wide">
+    <div class="panel-head">
+      <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
+      <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
+    </div>
+    <div class="bars">
+      {#each catBars as bar (bar.name)}
+        <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
+          <span class="bar-name">{bar.name}</span>
+          <div class="bar-track">
+            <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
+            <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
+          </div>
+          <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
+        </div>
+      {:else}
+        <div class="dim pad">no titles scanned yet</div>
+      {/each}
+    </div>
+  </section>
+
+  <!-- ══ plan results: the prediction, visible ══ -->
+  {#if planEntries.length > 0}
     <section class="panel wide">
       <div class="panel-head">
-        <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
-        <button class="nav-link" onclick={() => ongoto('library')}>LIBRARY →</button>
+        <span class="legend">LAST PLAN — RUN #{lastPlan?.id}{planAge ? ` · ${planAge}` : ''}</span>
+        <span class="mono dim">
+          {planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie)).length} to encode ·
+          {planEntries.filter((p) => p.state === 'skip').length} skipped
+        </span>
       </div>
-      <div class="bars">
-        {#each catBars as bar (bar.name)}
-          <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
-            <span class="bar-name">{bar.name}</span>
-            <div class="bar-track">
-              <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
-              <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
-            </div>
-            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
-          </div>
-        {:else}
-          <div class="dim pad">no titles scanned yet</div>
-        {/each}
-      </div>
-    </section>
-
-    <!-- ══ plan results: the prediction, visible ══ -->
-    {#if planEntries.length > 0}
-      <section class="panel wide">
-        <div class="panel-head">
-          <span class="legend">LAST PLAN — RUN #{lastPlan?.id}{planAge ? ` · ${planAge}` : ''}</span>
-          <span class="mono dim">
-            {planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie)).length} to encode ·
-            {planEntries.filter((p) => p.state === 'skip').length} skipped
-          </span>
-        </div>
         <div class="plan-list">
           <div class="plan-row plan-head mono legend" aria-hidden="true">
             <span class="p-name">TITLE</span>
@@ -431,7 +452,6 @@
         </div>
       </section>
     {/if}
-  </div>
 </div>
 
 <style>
@@ -609,7 +629,19 @@
     font-size: var(--fs-data);
   }
   .fail-row:last-of-type { border-bottom: none; }
-  .err { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .err { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  /* keyboard-expandable error: the button resets to the span look, expanded
+     state wraps the full diagnosis */
+  button.err-expandable {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--ink-dim);
+    cursor: pointer;
+    text-align: left;
+  }
+  button.err-expandable[aria-expanded='true'] { white-space: normal; word-break: break-word; }
   .link {
     background: transparent;
     border: none;

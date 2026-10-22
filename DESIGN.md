@@ -341,7 +341,10 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Do** set every measurement in mono tabular figures with its unit and an em-dash for absent values (`4.12 GB`, `95.25`, `2h 14m`, `—`).
 - **Do** use the legend voice for all labels: 10.5px, 1.4px tracking, uppercase, dim ink.
 - **Do** express state as density — solid green = done, amber hatch = in progress, coarse amber hatch = skipped, teal hatch = selected/planned, empty swatch = untouched, dashed red = missing.
-- **Do** keep every domain one click away in the rail, with badges that carry counts and turn amber/red only when attention is needed.
+- **Do** keep every domain one click away in the rail, with badges that carry counts and turn amber/red only when attention is needed. Counts live on exactly one surface each — the rail badges and the stat band; the sysline carries only what neither shows.
+- **Do** separate failure from feedback: errors wear the red `role="alert"` strip; informational notes ("already queued", "select at least one") get the quiet seam-bordered notice. Red is for failure only.
+- **Do** make the keyboard layer discoverable: the rail foot carries the shortcut legend (`1–5 pages · / search`) — invisible shortcuts are no shortcuts.
+- **Do** let the library answer state questions: a decision filter (all/untouched/planned/encoded/skipped/missing) sits beside the category filter; sort state survives reload.
 - **Do** show the leader-note estimate before any bulk verb, and keep bulk verbs in the bulk bar, per-movie verbs on the provenance page.
 - **Do** make the overview answer failures, missing files, duplicates and active work in one glance — with honest empty states ("nothing failed", "no active work", "the library is clean").
 - **Do** theme through tokens only: both grounds must render the same structure, and `color-scheme` must follow `[data-theme]`.

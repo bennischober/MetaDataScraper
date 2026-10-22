@@ -15,6 +15,9 @@
   let history: Job[] = $state([])
   let duplicates: DuplicateGroup[] = $state([])
   let error = $state<string | null>(null)
+  /** Informational feedback ("already queued") — never red; red is for
+   * failure only (the console's own Red Lock Rule). */
+  let notice = $state<string | null>(null)
 
   // theme: dark default, toggle persisted
   let theme = $state<'dark' | 'light'>(
@@ -96,6 +99,7 @@
   })
 
   // ── keyboard layer: 1-5 switch pages, / focuses search ──
+  const SHORTCUT_LEGEND = '1–5: pages · /: search'
   function handleShortcuts(e: KeyboardEvent) {
     // never hijack typing in inputs
     const t = e.target as HTMLElement
@@ -192,7 +196,9 @@
   }
 
   // deep-link restore: a reload on #/movie re-opens the detail as soon as
-  // the library arrives (the path rides in sessionStorage)
+  // the library arrives (the path rides in sessionStorage). The origin is
+  // not knowable after a reload — library is the honest default, since a
+  // fresh session has no page history to return to.
   $effect(() => {
     if (detailPath && movies.length > 0) {
       const m = movies.find((mv) => mv.path === detailPath)
@@ -369,12 +375,14 @@
   ) {
     if (pendingKind !== null) return
     if (kindQueued(kind)) {
-      error = `${kind} is already queued — it runs next`
+      // informational, not an error — it gets the quiet notice channel,
+      // not the red alert strip (red is for failure only)
+      notice = `${kind} is already queued — it runs next`
       return
     }
     const targets = paths ?? scanPaths
     if (kind !== 'dedupe' && targets.length === 0) {
-      error = paths ? 'select at least one movie' : 'at least one movie folder is required'
+      notice = paths ? 'select at least one movie' : 'at least one movie folder is required'
       return
     }
     if (kind === 'encode' && !confirmed) {
@@ -548,6 +556,7 @@
       <button class="legend watcher" class:on={status?.watcher === 'running'} onclick={toggleWatcher}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
       </button>
+      <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
     </div>
   </aside>
 
@@ -557,6 +566,12 @@
       <div class="api-error mono" role="alert">
         {error}
         <button class="dismiss" onclick={() => (error = null)} aria-label="Dismiss error">✕</button>
+      </div>
+    {/if}
+    {#if notice}
+      <div class="api-notice mono">
+        {notice}
+        <button class="dismiss" onclick={() => (notice = null)} aria-label="Dismiss note">✕</button>
       </div>
     {/if}
 
@@ -788,6 +803,16 @@
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
   .watcher.on { color: var(--teal-ink); border-color: var(--teal); }
   .watcher:not(.on):hover { color: var(--ink); }
+  /* the keyboard legend: shortcuts exist since always — this line makes
+     them discoverable without an overlay or a help page */
+  .shortcut-hint {
+    border: none;
+    color: var(--ink-faint);
+    padding: 0 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+  }
 
   /* ══ main column ══ */
   .main {
@@ -815,6 +840,20 @@
     gap: 12px;
     word-break: break-word;
   }
+  /* the quiet sibling: same geometry, no red — informational feedback
+     ("already queued", "select at least one") never wears failure red */
+  .api-notice {
+    border: 1px solid var(--seam);
+    color: var(--ink-dim);
+    background: var(--panel);
+    padding: 8px 14px;
+    border-radius: var(--radius);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .api-notice .dismiss { color: var(--ink-dim); }
   .dismiss {
     background: transparent;
     border: none;
