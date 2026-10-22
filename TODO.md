@@ -66,6 +66,17 @@
       nothing cost is rare and bursty on localhost
 
 ### UI (next round)
+- [x] Critique round 4 engine deferrals (shipped 2026-10-22): (a) duplicate
+      keep-rationale - find_duplicates computes an honest one-sentence "why
+      kept" per group (byte-identical / highest resolution / highest bitrate
+      with 5% margin / "no quality signal separates them" fallback), shipped
+      in the API payload as keep_rationale + per-file bitrate_mbps; the
+      largest-file pick itself is unchanged. (b) Concurrent encode guard -
+      encode_lock.py: pid-stamped lock file per output directory, acquired
+      by all three encoder entry points (job worker, watch loop, CLI);
+      second claimant gets EncodeBusyError (job skips with the reason, watch
+      loop retries next pass), stale locks (dead pid) are stolen; scan+encode
+      needs no guard (scans are read-only, WAL, output dirs excluded)
 - [x] Critique round 2026-10-21 (impeccable dual-agent, 20/40): evidence wall
       shipped — the zone ramp plots every movie's measured VMAF as ticks;
       remove-bars no longer persists (per-run arming + confirmation strip

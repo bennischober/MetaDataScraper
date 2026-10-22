@@ -19,6 +19,7 @@ from shrinkray.encode import (
     find_handbrake,
     probe_duration_seconds,
 )
+from shrinkray.encode_lock import EncodeBusyError
 from shrinkray.logger import log, log_error
 from shrinkray.quality import (
     DEFAULT_CRF_RANGE,
@@ -247,14 +248,19 @@ def watch(
                     log(f"Skipping '{movie.name}': {decision}.")
                     continue
                 log(f"Encoding '{movie.name}'...")
-                results = encode_movies(
-                    [movie],
-                    output_dir,
-                    preset="Fast 1080p30",
-                    encoder=encoder,
-                    overwrite=False,
-                    max_threads=max_threads,
-                )
+                try:
+                    results = encode_movies(
+                        [movie],
+                        output_dir,
+                        preset="Fast 1080p30",
+                        encoder=encoder,
+                        overwrite=False,
+                        max_threads=max_threads,
+                    )
+                except EncodeBusyError as e:
+                    log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
+                    known.discard(str(movie.resolve()))  # eligible again next pass
+                    continue
                 log(f"Done: '{movie.name}' (source left untouched).")
                 if any(r.success for r in results):
                     # opt-in tap on the media server's shoulder (fire-and-forget)

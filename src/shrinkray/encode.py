@@ -493,6 +493,40 @@ def encode_movies(
     if not pending:
         return results
 
+    # one encoder per output directory: the watch loop, the job worker and
+    # CLI runs must never write the same output dir concurrently (clobbered
+    # outputs); short-lived, pid-stamped lock file, stale locks are stolen.
+    # EncodeBusyError propagates: the CLI exits with the message, the job
+    # worker fails the job with it, the watch loop logs and retries later.
+    from shrinkray.encode_lock import guard_encodes
+
+    with guard_encodes(output_dir, holder="encode"):
+        return _encode_pending(pending, preset, encoder, workers, max_threads, progress, results)
+
+
+def _encode_pending(
+    pending: list[tuple[Path, Path]],
+    preset: str,
+    encoder: str,
+    workers: int,
+    max_threads: int | None,
+    progress,
+    results: list[EncodeResult],
+) -> list[EncodeResult]:
+    """Runs the actual encode loop (the caller holds the encode slot).
+
+    Args:
+        pending (list[tuple[Path, Path]]): The (movie, output_file) pairs.
+        preset (str): The HandBrake preset.
+        encoder (str): The video encoder.
+        workers (int): Number of concurrent encodes (1 = sequential).
+        max_threads (int | None): Per-encode thread cap.
+        progress: The rich progress bar.
+        results (list[EncodeResult]): The list to append results to.
+
+    Returns:
+        list[EncodeResult]: The results (same list as the results arg).
+    """
     # longest job first: big movies start early so the tail of the run is
     # short jobs, not an idle half machine next to one capped long encode
     pending.sort(key=lambda pair: -(probe_duration_seconds(pair[0]) or 0))

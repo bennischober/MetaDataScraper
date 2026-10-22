@@ -554,6 +554,7 @@ def execute_encode(
     """
     from shrinkray.config import load_config
     from shrinkray.encode import encode_movies
+    from shrinkray.encode_lock import EncodeBusyError
     from shrinkray.quality import encode_with_quality
     from shrinkray.service import (
         finished_movies,
@@ -593,17 +594,21 @@ def execute_encode(
                         "movie": movie.name,
                     }
                 )
-            result = encode_with_quality(
-                movie,
-                output_dir / movie.name,
-                target_vmaf=payload.get("target_vmaf", 95.0),
-                encoder=config.handbrake_encoder,
-                remove_bars=payload.get("remove_bars", False),
-                progress=progress,
-                cancel=cancel,
-                db_file=_db_file_of(connection),
-                encoder_threads=cap_threads(config.handbrake_max_threads),
-            )
+            try:
+                result = encode_with_quality(
+                    movie,
+                    output_dir / movie.name,
+                    target_vmaf=payload.get("target_vmaf", 95.0),
+                    encoder=config.handbrake_encoder,
+                    remove_bars=payload.get("remove_bars", False),
+                    progress=progress,
+                    cancel=cancel,
+                    db_file=_db_file_of(connection),
+                    encoder_threads=cap_threads(config.handbrake_max_threads),
+                )
+            except EncodeBusyError as e:
+                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                continue
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
             )
@@ -636,16 +641,24 @@ def execute_encode(
             progress(
                 {"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total}
             )
-        results = encode_movies(
-            movies,
-            output_dir,
-            preset=config.handbrake_preset,
-            encoder=config.handbrake_encoder,
-            overwrite=payload.get("overwrite", False),
-            workers=payload.get("workers"),
-            max_threads=cap_threads(config.handbrake_max_threads),
-            progress=progress,
-        )
+        try:
+            results = encode_movies(
+                movies,
+                output_dir,
+                preset=config.handbrake_preset,
+                encoder=config.handbrake_encoder,
+                overwrite=payload.get("overwrite", False),
+                workers=payload.get("workers"),
+                max_threads=cap_threads(config.handbrake_max_threads),
+                progress=progress,
+            )
+        except EncodeBusyError as e:
+            # another encoder owns the output dir (watch loop / CLI); the job
+            # reports it honestly instead of clobbering
+            return {
+                "outcomes": [{"movie": "*", "state": "skipped", "error": str(e)}],
+                "cancelled": False,
+            }
         fixed = record_fixed_results(connection, results, config)
         outcomes = [
             {

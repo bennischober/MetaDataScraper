@@ -442,36 +442,41 @@ def _record_encodes(
     encoded_for_notify: list[Path] = []
     if not dry_run and quality:
         try:
-            for movie in movies:
-                if str(movie) in encoded_paths:
-                    log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
-                    continue
-                result = encode_with_quality(
-                    movie,
-                    output_dir / movie.name,
-                    target_vmaf=target_vmaf,
-                    encoder=config.handbrake_encoder,
-                    remove_bars=remove_bars,
-                    db_file=db_file,
-                    encoder_threads=cap_threads(threads or config.handbrake_max_threads),
-                )
-                if result.success:
-                    saved = result.saved_percent
-                    change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
-                    console.print(
-                        f"[green]Encoded '{movie.name}': "
-                        f"{result.input_size / (1024**3):.2f} GB -> "
-                        f"{result.output_size / (1024**3):.2f} GB ({change}) "
-                        f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
+            # the whole quality run holds the encode slot once (probes and
+            # final encodes all write into output_dir)
+            from shrinkray.encode_lock import guard_encodes
+
+            with guard_encodes(output_dir, holder="encode-cli"):
+                for movie in movies:
+                    if str(movie) in encoded_paths:
+                        log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
+                        continue
+                    result = encode_with_quality(
+                        movie,
+                        output_dir / movie.name,
+                        target_vmaf=target_vmaf,
+                        encoder=config.handbrake_encoder,
+                        remove_bars=remove_bars,
+                        db_file=db_file,
+                        encoder_threads=cap_threads(threads or config.handbrake_max_threads),
                     )
-                    record_quality_results(connection, movie, result, config, target_vmaf)
-                    encoded_for_notify.append(movie)
-                elif result.skipped_reason is not None:
-                    # guardrail skip => record it so future runs do not re-probe
-                    console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
-                    record_quality_results(connection, movie, result, config, target_vmaf)
-                else:
-                    log_error(f"Encoding '{movie.name}' failed: {result.error}")
+                    if result.success:
+                        saved = result.saved_percent
+                        change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
+                        console.print(
+                            f"[green]Encoded '{movie.name}': "
+                            f"{result.input_size / (1024**3):.2f} GB -> "
+                            f"{result.output_size / (1024**3):.2f} GB ({change}) "
+                            f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
+                        )
+                        record_quality_results(connection, movie, result, config, target_vmaf)
+                        encoded_for_notify.append(movie)
+                    elif result.skipped_reason is not None:
+                        # guardrail skip => record it so future runs do not re-probe
+                        console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
+                        record_quality_results(connection, movie, result, config, target_vmaf)
+                    else:
+                        log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except (RuntimeError, FileNotFoundError) as e:
             log_error(str(e))
             raise typer.Exit(1) from e

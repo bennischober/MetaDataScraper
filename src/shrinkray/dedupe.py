@@ -60,6 +60,20 @@ class DuplicateFile:
     width: int | None = None
     height: int | None = None
 
+    @property
+    def bitrate_mbps(self) -> float | None:
+        """The file's bitrate in MBit/s (None when duration is unknown).
+
+        The drift signal for the keep-rationale: same title, different
+        generations of re-encoding have visibly different bitrates.
+
+        Returns:
+            float | None: Bitrate in MBit/s, None without a duration.
+        """
+        if not self.duration or self.duration <= 0 or self.size <= 0:
+            return None
+        return self.size * 8 / self.duration / 1_000_000
+
     def to_dict(self) -> dict:
         """Returns the file as a JSON-able dict.
 
@@ -75,6 +89,7 @@ class DuplicateFile:
             "codec": self.codec,
             "hash": self.hash,
             "resolution": [self.width, self.height] if self.width and self.height else None,
+            "bitrate_mbps": self.bitrate_mbps,
         }
 
 
@@ -85,10 +100,14 @@ class DuplicateGroup:
     Attributes:
         reason (str): Why these files are grouped ('identical' or 'same title').
         files (list[DuplicateFile]): The group members (best candidate first).
+        keep_rationale (str): One honest sentence explaining why files[0] is
+            the keeper (computed by find_duplicates; documents the pick
+            without changing it).
     """
 
     reason: str
     files: list[DuplicateFile] = field(default_factory=list)
+    keep_rationale: str = ""
 
     def to_dict(self) -> dict:
         """Returns the group as a JSON-able dict.
@@ -100,6 +119,7 @@ class DuplicateGroup:
             "reason": self.reason,
             "files": [f.to_dict() for f in self.files],
             "wasted_bytes": self.wasted_bytes,
+            "keep_rationale": self.keep_rationale,
         }
 
     @property
@@ -252,8 +272,43 @@ def find_duplicates(connection: sqlite3.Connection) -> list[DuplicateGroup]:
         else:
             merged.append(group)
 
-    # best candidate first: largest file (likely best quality); ties by path
+    # best candidate first: largest file (likely best quality); ties by path.
+    # The pick stays deterministic; the rationale explains it to the user.
     for group in merged:
         group.files.sort(key=lambda f: (-f.size, f.path))
+        group.keep_rationale = _keep_rationale(group)
 
     return merged
+
+
+def _keep_rationale(group: DuplicateGroup) -> str:
+    """Explains in one honest sentence why the first file is kept.
+
+    Uses only signals the grouping already has (size, duration, codec,
+    resolution, hash). Never changes the pick - it documents it. When no
+    signal separates the files, the rationale says so instead of inventing
+    a reason.
+
+    Args:
+        group (DuplicateGroup): The sorted group (best candidate first).
+
+    Returns:
+        str: The rationale for keeping group.files[0].
+    """
+    best, rest = group.files[0], group.files[1:]
+    if group.reason.startswith("identical"):
+        # byte-identical content: quality cannot differ, only location/size
+        if best.size == rest[0].size:
+            return "byte-identical copies; keeping the first by name order"
+        return "byte-identical copies; sizes differ only by container overhead"
+    if best.width and rest[0].width and best.width > rest[0].width:
+        return f"highest resolution ({best.width}x{best.height})"
+    best_br = best.bitrate_mbps
+    rest_br: float | None = None
+    for f in rest:
+        if f.bitrate_mbps is not None and (rest_br is None or f.bitrate_mbps > rest_br):
+            rest_br = f.bitrate_mbps
+    if best_br is not None and rest_br is not None and best_br > rest_br * 1.05:
+        # a real bitrate edge (5% margin absorbs container overhead noise)
+        return f"highest bitrate ({best_br:.2f} vs {rest_br:.2f} MBit/s)"
+    return "no quality signal separates them; keeping the largest file"

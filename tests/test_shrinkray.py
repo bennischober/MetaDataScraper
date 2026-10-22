@@ -2081,6 +2081,75 @@ class TestApiPathValidation(unittest.TestCase):
                 app_module.state = None
 
 
+class TestEncodeLock(unittest.TestCase):
+    """The per-output-dir encode slot: collision-proof, stale-aware."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name).resolve() / "out"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_acquire_and_release(self):
+        from shrinkray.encode_lock import guard_encodes
+
+        with guard_encodes(self.out, holder="test") as lock:
+            self.assertTrue(lock.is_file())
+            # pid-stamped
+            self.assertEqual(int(lock.read_text()), os.getpid())
+        self.assertFalse(lock.exists())
+
+    def test_second_claimant_is_rejected(self):
+        from shrinkray.encode_lock import EncodeBusyError, guard_encodes
+
+        with guard_encodes(self.out), self.assertRaises(EncodeBusyError) as ctx:
+            guard_encodes(self.out).__enter__()
+        self.assertIn("pid", str(ctx.exception))
+
+    def test_stale_lock_is_stolen(self):
+        """A lock whose pid is dead is stolen (not honored forever)."""
+        from shrinkray.encode_lock import _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("999999999")  # pid that does not exist
+        acquired = acquire_encode_slot(self.out, holder="test")
+        self.assertEqual(acquired, lock)
+        # the stolen lock is re-stamped with OUR pid
+        self.assertEqual(int(lock.read_text()), os.getpid())
+        lock.unlink()
+
+    def test_garbage_lock_content_is_stolen(self):
+        from shrinkray.encode_lock import _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("not-a-pid")
+        acquired = acquire_encode_slot(self.out)
+        self.assertEqual(acquired, lock)
+        lock.unlink()
+
+    def test_encode_movies_busy_raises(self):
+        """encode_movies propagates EncodeBusyError (no clobber, no swallow)."""
+        import tempfile
+
+        from shrinkray.encode_lock import EncodeBusyError, guard_encodes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            with (
+                guard_encodes(Path(tmp) / "enc"),
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                self.assertRaises(EncodeBusyError),
+            ):
+                encode.encode_movies([source], Path(tmp) / "enc")
+
+
 class TestDedupe(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -2125,6 +2194,81 @@ class TestDedupe(unittest.TestCase):
         # same name + same duration + same hash => both passes merge
         self.assertEqual(groups[0].reason, "identical + same title")
         self.assertEqual(groups[0].wasted_bytes, 1000)
+
+    def test_keep_rationale_identical(self):
+        """Byte-identical groups explain that quality cannot differ."""
+        from shrinkray.dedupe import find_duplicates
+
+        self._add("D:/a/movie.mkv", "movie", 1000, 100.0, hash="abc")
+        self._add("D:/b/movie.mkv", "movie", 1000, 100.0, hash="abc")
+        groups = find_duplicates(self.connection)
+        self.assertIn("byte-identical", groups[0].keep_rationale)
+        # shipped to the API payload
+        self.assertIn("keep_rationale", groups[0].to_dict())
+
+    def test_keep_rationale_bitrate(self):
+        """Same title, different generations: the bitrate edge is the why."""
+        from shrinkray.dedupe import find_duplicates
+
+        # same duration, very different sizes => very different bitrates
+        self._add("D:/a/movie.mkv", "movie", 9_000_000, 100.0)  # 0.72 MBit/s
+        self._add("D:/b/movie.mkv", "movie", 1_000_000, 100.0)  # 0.08 MBit/s
+        groups = find_duplicates(self.connection)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].files[0].path, "D:/a/movie.mkv")
+        self.assertIn("bitrate", groups[0].keep_rationale)
+        self.assertIn("0.72", groups[0].keep_rationale)
+
+    def test_keep_rationale_resolution(self):
+        """A resolution edge is explained as such."""
+        from shrinkray.dedupe import find_duplicates
+
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category, duration_raw, codec,"
+            " width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("D:/a/movie.mkv", 1.0, 4_000_000, "movie", "Cat", 100.0, "hevc", 1920, 1080),
+        )
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category, duration_raw, codec,"
+            " width, height) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("D:/b/movie.mkv", 1.0, 3_000_000, "movie", "Cat", 100.0, "hevc", 1280, 720),
+        )
+        self.connection.commit()
+        groups = find_duplicates(self.connection)
+        self.assertEqual(len(groups), 1)
+        # the 1080p file is bigger AND higher-res: resolution is the stated why
+        self.assertIn("resolution", groups[0].keep_rationale)
+        self.assertIn("1920x1080", groups[0].keep_rationale)
+
+    def test_keep_rationale_honest_fallback(self):
+        """No separating signal => the rationale says so (no invented reason)."""
+        from shrinkray.dedupe import find_duplicates
+
+        # same size + same duration, no hash, no resolution difference
+        self._add("D:/a/movie.mkv", "movie", 1_000_000, 100.0)
+        self._add("D:/b/movie.mkv", "movie", 1_000_000, 100.0)
+        groups = find_duplicates(self.connection)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            groups[0].keep_rationale, "no quality signal separates them; keeping the largest file"
+        )
+
+    def test_keep_rationale_does_not_change_the_pick(self):
+        """The rationale documents the largest-file pick, never overrides it."""
+        from shrinkray.dedupe import find_duplicates
+
+        self._add("D:/a/movie.mkv", "movie", 5_000_000, 100.0)
+        self._add("D:/b/movie.mkv", "movie", 1_000_000, 100.0)
+        groups = find_duplicates(self.connection)
+        self.assertEqual(groups[0].files[0].path, "D:/a/movie.mkv")  # largest first
+        self.assertEqual(groups[0].wasted_bytes, 1_000_000)
+
+    def test_duplicatefile_bitrate_property(self):
+        from shrinkray.dedupe import DuplicateFile
+
+        f = DuplicateFile(path="x", name="x", category="c", size=8_000_000, duration=10.0)
+        self.assertAlmostEqual(f.bitrate_mbps, 6.4)
+        self.assertIsNone(DuplicateFile(path="x", name="x", category="c", size=8).bitrate_mbps)
 
     def test_missing_rows_are_excluded(self):
         """A trash-ed (retired) duplicate leaves its group at once — the
