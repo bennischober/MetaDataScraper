@@ -181,9 +181,17 @@
     })
   })
   const driftMaxBr = $derived(Math.max(...driftSlots.map((s) => Math.max(s.inBr ?? 0, s.outBr ?? 0)), 0.1))
-  /** VMAF track: fixed 70–100 domain (the target's clamp range) — a
-   * min-max scale would let one bad encode silently stretch the axis. */
-  const vmafY = (v: number) => 86 - ((Math.min(100, Math.max(70, v)) - 70) / 30) * 20
+  /** VMAF lane: fixed 70–100 domain (the target's clamp range) — a
+   * min-max scale would let one bad encode silently stretch the axis.
+   * Labeled, bounded track (y 6→42 in the translated group): 94.1 vs
+   * 90.3 must be two visibly different heights, not dots on the line. */
+  const vmafLaneY = (v: number) => 42 - ((Math.min(100, Math.max(70, v)) - 70) / 30) * 36
+  /** Slot centers in viewBox units: evenly divided, each slot owns an
+   * equal band — real geometry, no stretching. */
+  const slotX = (i: number) => ((i + 0.5) / driftSlots.length) * (driftW || 560)
+  /** Chart width in real pixels, measured from the container (bind:clientWidth
+   * — svelte's measured width, default 560 before first layout). */
+  let driftW = $state(0)
   const driftSummary = $derived.by(() => {
     if (driftSlots.length < 2) return ''
     // the drift story: the oldest measured source bitrate → the newest
@@ -336,29 +344,49 @@
       {:else}
         {#if driftSlots.length >= 2}
           <!-- the drift chart: bitrate in→out per encode (bars, oldest →
-               newest) + VMAF points on the fixed 70-100 target track -->
+               newest) + VMAF points on the fixed 70-100 target track.
+               Geometry lives in viewBox units on an unstretched SVG
+               (preserveAspectRatio default) — a "none" stretch turned the
+               VMAF dots into ellipses and bars into sub-pixel slivers. -->
           <div class="drift mono" role="img" aria-label="Drift chart: bitrate and VMAF across {driftSlots.length} encodes, oldest to newest. {driftSummary}">
-            <svg viewBox="0 0 560 110" preserveAspectRatio="none" aria-hidden="true">
-              <g class="vmaf-track">
-                <line x1="0" y1="86" x2="560" y2="86" class="track-rule"></line>
-                <line x1="0" y1="66" x2="560" y2="66" class="track-rule faint"></line>
-                <line x1="0" y1="{vmafY(targetVmaf)}" x2="560" y2="{vmafY(targetVmaf)}" class="target-rule"></line>
+            <div class="drift-svg" bind:clientWidth={driftW}>
+              <svg viewBox="0 0 {driftW || 560} 110" aria-hidden="true">
+              <!-- VMAF lane: fixed 70–100 domain (a min-max axis would let
+                   one bad encode stretch it silently), its own lane above
+                   the bars. Bounded by VMAF-90/70 rules labeled at the left
+                   edge so the amber target reads as a mark INSIDE a scale,
+                   not a divider. -->
+              <g class="vmaf-track" transform="translate(0, 8)">
+                <text x="2" y="3" class="lane-label">VMAF 100</text>
+                <line x1="0" y1="6" x2={driftW || 560} y2="6" class="track-rule"></line>
+                <text x="2" y="39" class="lane-label">70</text>
+                <line x1="0" y1="42" x2={driftW || 560} y2="42" class="track-rule"></line>
+                <line x1="0" y1="{vmafLaneY(targetVmaf)}" x2={driftW || 560} y2="{vmafLaneY(targetVmaf)}" class="target-rule"></line>
                 {#each driftSlots as s, i (s.i)}
                   {#if s.vmaf != null}
-                    <circle cx={((i + 0.5) / driftSlots.length) * 560} cy={vmafY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
+                    <circle cx={slotX(i)} cy={vmafLaneY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
                   {/if}
                 {/each}
               </g>
-              {#each driftSlots as s, i (s.i)}
-                {@const cx = ((i + 0.5) / driftSlots.length) * 560}
-                {#if s.inBr != null}
-                  <rect x={cx - 9} y={110 - (s.inBr / driftMaxBr) * 52} width="8" height={(s.inBr / driftMaxBr) * 52} class="br-in" class:derived={s.inDerived}></rect>
-                {/if}
-                {#if s.outBr != null}
-                  <rect x={cx + 1} y={110 - (s.outBr / driftMaxBr) * 52} width="8" height={(s.outBr / driftMaxBr) * 52} class="br-out" class:derived={s.outDerived}></rect>
-                {/if}
-              {/each}
+              <g class="br-lane" transform="translate(0, 62)">
+                {#each driftSlots as s, i (s.i)}
+                  {@const cx = slotX(i)}
+                  <!-- a slot with no numbers still occupies its space:
+                       the axis line says "measured nothing here" without
+                       leaving a hole that reads as missing data -->
+                  <line x1={cx} y1="0" x2={cx} y2="42" class="slot-rule"></line>
+                  {#if s.inBr != null}
+                    <rect x={cx - 9} y={42 - (s.inBr / driftMaxBr) * 42} width="8" height={(s.inBr / driftMaxBr) * 42} class="br-in" class:derived={s.inDerived}></rect>
+                  {/if}
+                  {#if s.outBr != null}
+                    <rect x={cx + 1} y={42 - (s.outBr / driftMaxBr) * 42} width="8" height={(s.outBr / driftMaxBr) * 42} class="br-out" class:derived={s.outDerived}></rect>
+                  {/if}
+                {/each}
+                <text x="2" y="45" class="lane-label">0</text>
+                <line x1="0" y1="42" x2={driftW || 560} y2="42" class="base-rule"></line>
+              </g>
             </svg>
+            </div>
             <div class="drift-legend legend">
               <span><span class="sw sw-in"></span> BITRATE IN</span>
               <span><span class="sw sw-out"></span> BITRATE OUT</span>
@@ -550,17 +578,26 @@
 
   /* ── drift chart: the chain as a shape ── */
   .drift { padding: 10px 14px 8px; border-bottom: 1px solid var(--row-line); }
+  .drift-svg { width: 100%; }
   .drift svg { display: block; width: 100%; height: 110px; }
   .drift .track-rule { stroke: var(--row-line); stroke-width: 1; }
   .drift .track-rule.faint { stroke: var(--row-line); stroke-dasharray: 2 3; }
+  .drift .base-rule { stroke: var(--row-line); stroke-width: 1; }
+  .drift .lane-label { fill: var(--ink-faint); font-size: 6.5px; letter-spacing: 0.5px; }
   .drift .target-rule { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 4 3; }
   .drift .vmaf-dot { fill: var(--teal); }
-  .drift .vmaf-dot.under { fill: var(--amber); }
-  .drift .br-in { fill: var(--seam); }
+  /* under-target: amber RING, not amber fill — values cluster just under
+     the target, and an amber dot ON the amber target line disappears */
+  .drift .vmaf-dot.under { fill: var(--teal); stroke: var(--amber); stroke-width: 1.5; }
+  .drift .br-in { fill: var(--ink-dim); }
+  .drift .br-out { fill: var(--teal); opacity: 0.85; }
   /* derived values (pre-v7, size/duration math) draw dashed — a derived
-     bar must not dress up as a measured one (both endpoints, not just in) */
-  .drift .br-in.derived { fill: none; stroke: var(--seam); stroke-dasharray: 2 2; }
+     bar must not dress up as a measured one (both endpoints, not just in).
+     In-bars use --ink-dim, not --seam: a hairline color made the most
+     important bar in the chart (the source) invisible against the panel. */
+  .drift .br-in.derived { fill: none; stroke: var(--ink-dim); stroke-dasharray: 2 2; }
   .drift .br-out.derived { fill: none; stroke: var(--teal); stroke-dasharray: 2 2; }
+  .drift .slot-rule { stroke: var(--row-line); stroke-width: 1; }
   .drift-legend {
     display: flex;
     gap: 16px;
@@ -578,7 +615,7 @@
     vertical-align: middle;
     border-radius: 1px;
   }
-  .drift-legend .sw-in { background: var(--seam); }
+  .drift-legend .sw-in { background: var(--ink-dim); }
   .drift-legend .sw-out { background: var(--teal); opacity: 0.85; }
   .drift-legend .sw-vmaf { border-radius: 50%; background: var(--teal); }  .enc-row {
     display: grid;
