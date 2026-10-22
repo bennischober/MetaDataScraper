@@ -86,8 +86,13 @@
       .join(', ')}`
   }
 
-  function stateClass(state: string): string {
-    return state === 'done' ? 'ok' : state === 'failed' ? 'bad' : state === 'running' ? 'run' : 'dim'
+  function stateClass(job: Job): string {
+    if (job.state === 'done') {
+      // a DONE with failed outcomes is a warning, not a confirmation —
+      // teal would say "clean" while the row says PARTIAL
+      return failedOutcomeNote(job) !== '' ? 'partial' : 'ok'
+    }
+    return job.state === 'failed' ? 'bad' : job.state === 'running' ? 'run' : 'dim'
   }
 
   // expandable detail (payload + result JSON)
@@ -125,7 +130,7 @@
           <div class="row mono">
             <span class="id">{job.id}</span>
             <span class="kind">{job.kind}</span>
-            <span class="state {stateClass(job.state)}">
+            <span class="state {stateClass(job)}">
               {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
             </span>
             <span class="when" title={job.started_at ?? ''}>{fmtWhen(job.started_at ?? job.created_at)}</span>
@@ -194,6 +199,7 @@
   .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .ok { color: var(--teal-ink); }
+  .partial { color: var(--amber); }
   .bad { color: var(--red); }
   .run { color: var(--amber); }
   .empty {

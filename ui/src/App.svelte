@@ -70,8 +70,30 @@
     location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null
   )
 
-  // back/forward support
-  window.addEventListener('hashchange', () => (page = pageFromHash()))
+  // back/forward support: hash is the single source of truth for pages,
+  // and leaving #/movie via the BROWSER (not the back button) must unmount
+  // the detail — otherwise the hash says library while a detail page is
+  // still mounted (a zombie the rail clicks can't explain)
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#/movie') {
+      // Forward onto a dead deep link (detail closed, session gone):
+      // settle on the overview instead of a zombie hash
+      if (!detailMovie && !sessionStorage.getItem('sr.detail')) {
+        window.history.replaceState(null, '', '#/overview')
+        page = 'overview'
+        return
+      }
+      // F5-restore case: park on the library until it arrives and the
+      // deep-link effect resolves sr.detail
+      page = 'library'
+      return
+    }
+    if (detailMovie) {
+      detailMovie = null
+      sessionStorage.removeItem('sr.detail')
+    }
+    page = pageFromHash()
+  })
 
   // ── keyboard layer: 1-5 switch pages, / focuses search ──
   function handleShortcuts(e: KeyboardEvent) {
@@ -214,6 +236,64 @@
     (kind: 'scan' | 'plan' | 'encode' | 'dedupe') =>
       history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
   )
+
+  // ── the encode-all preflight: the loudest verb gets a briefing ──
+  // One click on ENCODE ALL would queue the whole library (354 titles,
+  // 3.6 TB, days of work). The one-line strip states scope + measured
+  // throughput before the verb fires; the safe exit returns focus.
+  let pendingEncodeAll = $state(false)
+  let encodeAllEl: HTMLDivElement | null = $state(null)
+  let encodeAllTrigger: HTMLElement | null = null
+  $effect(() => {
+    if (pendingEncodeAll) encodeAllEl?.focus()
+  })
+  const encodeAllTitles = $derived(movies.length)
+  const encodeAllSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
+  /** Measured throughput from schema-v5 data (bytes per encode-second,
+   * averaged over real runs) — 'measured, not guessed' applied to the
+   * estimate itself. The label carries its sample size: extrapolating
+   * two episodes to 3.6 TB without saying so would be the false
+   * precision the console refuses elsewhere. null when unmeasured. */
+  const encodeAllEstLabel = $derived.by(() => {
+    const done = movies.filter((m) => m.encode?.encode_seconds != null && m.encode.encode_seconds > 0)
+    if (done.length === 0) return null
+    const outBytes = done.reduce((sum, m) => sum + (m.encode?.output_size ?? 0), 0)
+    const outSeconds = done.reduce((sum, m) => sum + (m.encode?.encode_seconds ?? 0), 0)
+    if (outBytes <= 0 || outSeconds <= 0) return null
+    const seconds = (encodeAllSizeGb * 1024 ** 3 * (outSeconds / outBytes))
+    const h = Math.round(seconds / 3600)
+    const span = h >= 48 ? `~${(h / 24).toFixed(0)} days` : h >= 1 ? `~${h} h` : '~under an hour'
+    return `${span} at measured throughput (basis: ${done.length} title${done.length === 1 ? '' : 's'})`
+  })
+  function requestEncodeAll() {
+    encodeAllTrigger = document.activeElement as HTMLElement | null
+    pendingEncodeAll = true
+  }
+  function closeEncodeAll() {
+    pendingEncodeAll = false
+    encodeAllTrigger?.focus()
+    encodeAllTrigger = null
+  }
+  function encodeAllKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeEncodeAll()
+      return
+    }
+    if (e.key === 'Tab' && encodeAllEl) {
+      const focusables = encodeAllEl.querySelectorAll<HTMLElement>('button:not(:disabled)')
+      if (focusables.length < 2) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+  }
 
   // ── the bars ceremony: the single gate for EVERY encode ──
   // The confirmation carries the actual target list (never re-derived at
@@ -524,7 +604,15 @@
           runningMovie={runningProgress?.movie ?? null}
           runningPercent={runningProgress?.percent ?? null}
           plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
-          onenqueue={enqueue}
+          onenqueue={(kind, paths) => {
+            // whole-library encode (no explicit paths) gets the preflight:
+            // scope + measured estimate before the loudest verb fires
+            if (kind === 'encode' && !paths) {
+              requestEncodeAll()
+              return
+            }
+            enqueue(kind, paths)
+          }}
           onopenmovie={(m) => openDetail(m, 'library')}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
@@ -570,6 +658,24 @@
     {/if}
   </main>
 </div>
+
+<!-- ══ encode-all preflight: scope + measured estimate before the loudest verb ══ -->
+{#if pendingEncodeAll}
+  <div class="bars-confirm" role="alertdialog" aria-label="Confirm whole-library encode" tabindex="-1" bind:this={encodeAllEl} onkeydown={encodeAllKeydown}>
+    <div class="bars-text">
+      <strong>ENCODE THE ENTIRE LIBRARY?</strong>
+      {encodeAllTitles} titles · {encodeAllSizeGb.toFixed(1)} GB source
+      {#if encodeAllEstLabel}· {encodeAllEstLabel}{/if}
+      — sources are never touched; results land in {outputDir || 'the output folder'}.
+    </div>
+    <div class="bars-buttons">
+      <button class="mono deny" onclick={closeEncodeAll}>NOT NOW</button>
+      <button class="mono confirm" onclick={() => { pendingEncodeAll = false; requestEncode(undefined, true) }}>
+        ENCODE ALL
+      </button>
+    </div>
+  </div>
+{/if}
 
 <!-- ══ irreversible-work confirmation strip (global; echoes the ACTUAL targets) ══ -->
 {#if pendingBarsTargets}

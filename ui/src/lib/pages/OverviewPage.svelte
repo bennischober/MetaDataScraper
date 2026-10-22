@@ -151,6 +151,14 @@
     sizeGb: number
     reclaimedGb: number
   }
+  /** Honest reclaimed label: adaptive like the LAST RUN band — a real
+   * 43 MB win must not print as "−0.0 GB (0%)". Sub-1 GB reads in MB,
+   * and a percentage below 1 prints as "<1%" instead of a false zero. */
+  function fmtReclaimed(reclaimedGb: number, sizeGb: number): string {
+    const size = reclaimedGb < 1 ? `−${(reclaimedGb * 1024).toFixed(0)} MB` : `−${reclaimedGb >= 10 ? reclaimedGb.toFixed(0) : reclaimedGb.toFixed(1)} GB`
+    const pct = (reclaimedGb / sizeGb) * 100
+    return `${size} (${pct >= 1 ? pct.toFixed(0) : '<1'}%)`
+  }
   const catBars = $derived.by(() => {
     const map = new Map<string, CatBar>()
     for (const m of movies) {
@@ -183,6 +191,22 @@
   const planEntries = $derived(
     (lastPlan?.result as { plans?: PlanEntry[] } | null)?.plans ?? []
   )
+  /** A plan entry whose movie has an encode row is history, not a queue:
+   * the prediction was overtaken by a measurement (the console must not
+   * present "1 to encode" for titles that already encoded). */
+  const alreadyEncoded = (movie: string) =>
+    movies.some(
+      (m) =>
+        m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
+        m.encode != null
+    )
+  /** Plan age in honest units — a stale plan must say so. */
+  const planAge = $derived.by(() => {
+    if (!lastPlan?.finished_at) return ''
+    const span = fmtSpan(lastPlan.finished_at, new Date().toISOString())
+    if (!span) return ''
+    return `finished ${span} ago`
+  })
 </script>
 
 <div class="page page-in">
@@ -211,7 +235,7 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
       <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
-      <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB source</span>
+      <span class="stat-sub mono dim">source {totalSizeGb.toFixed(0)} GB</span>
     </button>
     <button class="stat" onclick={() => ongoto('duplicates')}>
       <span class="legend">DUPLICATES</span>
@@ -362,7 +386,7 @@
               <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
               <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
             </div>
-            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · −${bar.reclaimedGb >= 10 ? bar.reclaimedGb.toFixed(0) : bar.reclaimedGb.toFixed(1)} GB (${((bar.reclaimedGb / bar.sizeGb) * 100).toFixed(0)}%)` : ''}</span>
+            <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
           </div>
         {:else}
           <div class="dim pad">no titles scanned yet</div>
@@ -374,9 +398,9 @@
     {#if planEntries.length > 0}
       <section class="panel wide">
         <div class="panel-head">
-          <span class="legend">LAST PLAN — RUN #{lastPlan?.id}</span>
+          <span class="legend">LAST PLAN — RUN #{lastPlan?.id}{planAge ? ` · ${planAge}` : ''}</span>
           <span class="mono dim">
-            {planEntries.filter((p) => p.state === 'encode').length} to encode ·
+            {planEntries.filter((p) => p.state === 'encode' && !alreadyEncoded(p.movie)).length} to encode ·
             {planEntries.filter((p) => p.state === 'skip').length} skipped
           </span>
         </div>
@@ -391,16 +415,17 @@
             <span class="p-reason"></span>
           </div>
           {#each planEntries.slice(0, 8) as entry (entry.movie)}
-            <div class="plan-row mono">
+            {@const done = alreadyEncoded(entry.movie)}
+            <div class="plan-row mono" class:plan-done={done} title={done ? 'encoded since this plan ran — the prediction has been overtaken by a measurement' : ''}>
               <span class="p-name">{entry.movie}</span>
-              <span class="chip {entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
-                <span class="swatch"></span>{entry.state.toUpperCase()}
+              <span class="chip {done ? 'progress' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
+                <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
               </span>
               <span class="p-num">{entry.crf ?? '—'}</span>
               <span class="p-num">{entry.vmaf?.toFixed(1) ?? '—'}</span>
               <span class="p-num">{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}</span>
               <span class="p-num">{entry.saved_percent != null ? `${entry.saved_percent.toFixed(0)}%` : '—'}</span>
-              <span class="dim p-reason">{entry.reason ?? entry.error ?? ''}</span>
+              <span class="dim p-reason">{done ? 'measured since' : entry.reason ?? entry.error ?? ''}</span>
             </div>
           {/each}
         </div>
@@ -519,7 +544,7 @@
   .bar-size {
     position: absolute;
     inset: 0 auto 0 0;
-    background: var(--panel-raised);
+    background: var(--seam);
     border-right: 1px solid var(--ink-dim);
   }
   .bar-reclaimed {
@@ -543,6 +568,8 @@
     font-size: 11px;
   }
   .plan-row:last-child { border-bottom: none; }
+  /* a plan row overtaken by a measurement: history, not a queue */
+  .plan-row.plan-done { opacity: 0.55; }
   .plan-head {
     border-bottom: 1px solid var(--seam);
     color: var(--ink-faint);

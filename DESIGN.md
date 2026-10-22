@@ -346,6 +346,8 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Do** make the overview answer failures, missing files, duplicates and active work in one glance — with honest empty states ("nothing failed", "no active work", "the library is clean").
 - **Do** theme through tokens only: both grounds must render the same structure, and `color-scheme` must follow `[data-theme]`.
 - **Do** gate irreversible work behind a per-run confirmation (`role="alertdialog"` ceremony); the armed state must never persist, and `--remove-bars` must never survive a run.
+- **Do** brief the loudest verb: a whole-library encode gets a one-line preflight strip (scope, source size, measured-throughput estimate that names its sample basis) before it can fire; Escape and NOT NOW are the safe exits.
+- **Do** let reality overtake predictions: plan rows whose movies have since encoded read ENCODED and dim out, and the panel head stamps the plan's age — a stale plan must never present itself as the current queue.
 
 ### Don't:
 - **Don't** use shadows, glows, or blur — depth is tone, line weight, and hatch only (the 900px inset underline is the single documented exception).
@@ -354,7 +356,7 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Don't** reintroduce the round-1 failures: no decorative empty figures (empty states are honest text in dashed panels), no exploding category-chip rows (filter with the select), no work area below its list, no settings buried off-page (config is a first-class page with a rail slot).
 - **Don't** dress the console in media-server or terminal costume — no poster artwork, no gaming-RGB, no CRT/scanline effects; recognition comes from the typographic poster grid, not imagery.
 - **Don't** round corners beyond the 4px chrome / 2px chip radii, or introduce gradients beyond the poster field and hatch patterns.
-- **Don't** round numbers into vagueness or spin a bad result — growth prints "+X% larger" in red.
+- **Don't** round numbers into vagueness or spin a bad result — growth prints "+X% larger" in red, and a real 43 MB win never prints as "−0.0 GB (0%)"; sub-1 GB reclaimed reads in MB, a sub-1% share prints "<1%", and an extrapolated estimate names its sample basis.
 
 ## Accessibility
 
