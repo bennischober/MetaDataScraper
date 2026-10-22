@@ -391,6 +391,7 @@ on your `PATH` (the tool also checks the default install locations).
 
 ## Resources
 
+- [Changelog](CHANGELOG.md) — what shipped in each release
 - [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html) ·
   [cropdetect filter](https://ffmpeg.org/ffmpeg-filters.html#cropdetect) ·
   [libvmaf](https://github.com/Netflix/vmaf)
