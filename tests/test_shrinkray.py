@@ -954,6 +954,12 @@ class TestDb(unittest.TestCase):
             # the library is fully present on the first call
             self.assertIsInstance(body["library"], list)
             movie = next(m for m in body["library"] if m["name"] == "snap")
+            # the encode sub-object carries the schema-v7 drift fields (NULL
+            # for legacy rows, present as keys either way - non-breaking for
+            # existing UI code that ignores them)
+            self.assertIn("generation", movie["encode"])
+            self.assertIn("input_bitrate", movie["encode"])
+            self.assertIn("output_bitrate", movie["encode"])
             self.assertEqual(movie["encode"]["crf"], 22)
             # job history included
             self.assertIsInstance(body["jobs"], list)

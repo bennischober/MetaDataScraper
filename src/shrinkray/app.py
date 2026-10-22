@@ -679,6 +679,10 @@ def snapshot(
                         "probe_count": r["probe_count"],
                         "probe_seconds": r["probe_seconds"],
                         "tool_versions": r["tool_versions"],
+                        # generation-drift data (schema v7; NULL for legacy rows)
+                        "generation": r["generation"],
+                        "input_bitrate": r["input_bitrate"],
+                        "output_bitrate": r["output_bitrate"],
                     }
                     if r["preset"]
                     else None,
@@ -689,7 +693,8 @@ def snapshot(
                            f.size, f.hdr, f.missing_scans, f.missing_since,
                            e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                            e.saved_percent, e.encoder_preset, e.encode_seconds,
-                           e.probe_count, e.probe_seconds, e.tool_versions
+                           e.probe_count, e.probe_seconds, e.tool_versions,
+                           e.generation, e.input_bitrate, e.output_bitrate
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
                         SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
