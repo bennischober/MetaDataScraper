@@ -22,18 +22,20 @@ is sacred — source files are never modified in place.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.
-3. **Run the full gate before every commit.** All four must pass:
+3. **Run the full gate before every commit.** All five must pass:
 
    ```sh
    uv run ruff check src tests
    uv run ruff format --check src tests
    uv run mypy
+   uv run mypy --platform linux
    uv run pytest -q
    ```
 
-   CI runs exactly these. A commit that fails one of them wastes a CI run
-   and other agents' time. If you cannot make the gate pass, do not commit;
-   report the blocker instead.
+   CI runs exactly these (mypy twice: the second run is CI's platform
+   view — windows stubs know APIs like `os.startfile`, linux stubs do
+   not; the local default hides exactly this class of failure). If you
+   cannot make the gate pass, do not commit; report the blocker instead.
 
 ## Project conventions
 
@@ -52,7 +54,11 @@ is sacred — source files are never modified in place.
 - **Tests live in `tests/test_shrinkray.py`**, plain `unittest`
   classes run by pytest. New features need tests; bug fixes need a test
   that would have caught the bug. Tests must not require ffmpeg/HandBrake
-  binaries or network access — mock or use `tmp_path` fixtures.
+  binaries or network access — mock or use `tmp_path` fixtures. Tests
+  that touch the filesystem or path scopes use **real `tempfile`
+  directories, never fictional paths** (`D:/Movies` is absolute on
+  Windows but a relative path on Linux/CI — scope containment and
+  `resolve()` behave differently and the local gate cannot see it).
 - **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`,
   `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*

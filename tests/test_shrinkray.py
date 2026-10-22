@@ -704,67 +704,84 @@ class TestDb(unittest.TestCase):
         self.assertEqual(encodes[0]["saved_percent"], 60.0)
 
     def test_prune_missing(self):
-        record1 = self._record("D:/Movies/a.mkv")
-        record2 = self._record("D:/Movies/b.mkv")
-        id1 = db.upsert_file(self.connection, record1)
-        db.upsert_file(self.connection, record2)
-        db.add_encode(self.connection, id1, "p", "x265", 1, 1, 0.0)
+        # real paths: fictional ones like 'D:/Movies/a.mkv' are absolute on
+        # windows but RELATIVE on linux (CI) => scope containment diverges
+        import tempfile
 
-        # prune with the stored path strings (Path normalizes the separators)
-        existing = {str(Path("D:/Movies/a.mkv"))}
-        # first scan: b.mkv is flagged, not deleted (grace period)
-        result = db.prune_missing(self.connection, existing)
-        self.assertEqual(result.flagged, 1)
-        self.assertEqual(result.pruned, 0)
-        self.assertEqual(result.missing_now, 1)
-        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
-        self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
-        row = db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv"))
-        self.assertEqual(row["missing_scans"], 1)
-        self.assertIsNotNone(row["missing_since"])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            record1 = self._record(str(root / "a.mkv"))
+            record2 = self._record(str(root / "b.mkv"))
+            id1 = db.upsert_file(self.connection, record1)
+            db.upsert_file(self.connection, record2)
+            db.add_encode(self.connection, id1, "p", "x265", 1, 1, 0.0)
 
-        # grace exhausted: the row (and its encodes) is hard-deleted
-        for _ in range(db.MISSING_GRACE - 1):
-            result = db.prune_missing(self.connection, existing)
-        self.assertEqual(result.pruned, 1)
-        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/b.mkv")))
-        # a.mkv was never missing => its encode history survives
-        self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
+            # prune with the stored path strings (Path normalizes separators)
+            existing = {str(root / "a.mkv")}
+            # first scan: b.mkv is flagged, not deleted (grace period)
+            result = db.prune_missing(self.connection, existing, scope=str(root))
+            self.assertEqual(result.flagged, 1)
+            self.assertEqual(result.pruned, 0)
+            self.assertEqual(result.missing_now, 1)
+            self.assertIsNotNone(db.get_file_by_path(self.connection, root / "b.mkv"))
+            self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
+            row = db.get_file_by_path(self.connection, root / "b.mkv")
+            self.assertEqual(row["missing_scans"], 1)
+            self.assertIsNotNone(row["missing_since"])
+
+            # grace exhausted: the row (and its encodes) is hard-deleted
+            for _ in range(db.MISSING_GRACE - 1):
+                result = db.prune_missing(self.connection, existing, scope=str(root))
+            self.assertEqual(result.pruned, 1)
+            self.assertIsNone(db.get_file_by_path(self.connection, root / "b.mkv"))
+            # a.mkv was never missing => its encode history survives
+            self.assertEqual(len(db.get_encodes_for_file(self.connection, id1)), 1)
 
     def test_prune_missing_recovers_reappeared_files(self):
-        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
-        # the file disappears => flagged
-        result = db.prune_missing(self.connection, set(), scope="D:/Movies")
-        self.assertEqual(result.flagged, 1)
-        # the file reappears (e.g. folder was moved back) => un-flagged
-        result = db.prune_missing(
-            self.connection, {str(Path("D:/Movies/a.mkv"))}, scope="D:/Movies"
-        )
-        self.assertEqual(result.recovered, 1)
-        self.assertEqual(result.missing_now, 0)
-        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
-        self.assertEqual(row["missing_scans"], 0)
-        self.assertIsNone(row["missing_since"])
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db.upsert_file(self.connection, self._record(str(root / "a.mkv")))
+            # the file disappears => flagged
+            result = db.prune_missing(self.connection, set(), scope=str(root))
+            self.assertEqual(result.flagged, 1)
+            # the file reappears (e.g. folder was moved back) => un-flagged
+            result = db.prune_missing(self.connection, {str(root / "a.mkv")}, scope=str(root))
+            self.assertEqual(result.recovered, 1)
+            self.assertEqual(result.missing_now, 0)
+            row = db.get_file_by_path(self.connection, root / "a.mkv")
+            self.assertEqual(row["missing_scans"], 0)
+            self.assertIsNone(row["missing_since"])
 
     def test_prune_missing_mass_flagging(self):
         # more than 20% of the scope flagged at once => the accident warning
-        for name in ("a", "b", "c", "d", "e", "f"):
-            db.upsert_file(self.connection, self._record(f"D:/Movies/{name}.mkv"))
-        result = db.prune_missing(self.connection, set(), scope="D:/Movies")
-        self.assertEqual(result.flagged, 6)
-        self.assertTrue(result.mass)
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            for name in ("a", "b", "c", "d", "e", "f"):
+                db.upsert_file(self.connection, self._record(str(root / f"{name}.mkv")))
+            result = db.prune_missing(self.connection, set(), scope=str(root))
+            self.assertEqual(result.flagged, 6)
+            self.assertTrue(result.mass)
 
     def test_upsert_resets_missing_state(self):
         # a file flagged as missing is re-scanned (changed or rescan) =>
         # the upsert clears the missing state
-        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
-        db.prune_missing(self.connection, set(), scope="D:/Movies")
-        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
-        self.assertEqual(row["missing_scans"], 1)
-        db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
-        row = db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv"))
-        self.assertEqual(row["missing_scans"], 0)
-        self.assertIsNone(row["missing_since"])
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            path = str(root / "a.mkv")
+            db.upsert_file(self.connection, self._record(path))
+            db.prune_missing(self.connection, set(), scope=str(root))
+            row = db.get_file_by_path(self.connection, root / "a.mkv")
+            self.assertEqual(row["missing_scans"], 1)
+            db.upsert_file(self.connection, self._record(path))
+            row = db.get_file_by_path(self.connection, root / "a.mkv")
+            self.assertEqual(row["missing_scans"], 0)
+            self.assertIsNone(row["missing_since"])
 
     def test_has_output_for_latest_encode(self):
         import tempfile
@@ -799,30 +816,38 @@ class TestDb(unittest.TestCase):
 
     def test_prune_missing_scoped(self):
         # a scan of one root must not wipe the history of files outside it
-        id_inside = db.upsert_file(self.connection, self._record("D:/Movies/a.mkv"))
-        db.add_encode(self.connection, id_inside, "p", "x265", 1, 1, 0.0)
-        id_outside = db.upsert_file(self.connection, self._record("E:/Other/b.mkv"))
-        db.add_encode(self.connection, id_outside, "p", "x265", 2, 1, 50.0)
+        # (real tmp paths: fictional drives are relative paths on linux/CI)
+        import tempfile
 
-        # scan of D:/Movies finds only a.mkv, scope limits pruning to that root
-        existing = {str(Path("D:/Movies/a.mkv"))}
-        result = db.prune_missing(self.connection, existing, scope="D:/Movies")
-        self.assertEqual(result.pruned, 0)  # b.mkv is outside the scope => kept
-        self.assertEqual(result.flagged, 0)  # ...and outside => not even flagged
-        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("E:/Other/b.mkv")))
-        self.assertEqual(len(db.get_encodes_for_file(self.connection, id_outside)), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "library"
+            other = Path(tmp).resolve() / "elsewhere"
+            root.mkdir()
+            other.mkdir()
+            id_inside = db.upsert_file(self.connection, self._record(str(root / "a.mkv")))
+            db.add_encode(self.connection, id_inside, "p", "x265", 1, 1, 0.0)
+            id_outside = db.upsert_file(self.connection, self._record(str(other / "b.mkv")))
+            db.add_encode(self.connection, id_outside, "p", "x265", 2, 1, 50.0)
 
-        # a.mkv is inside the scope and on disk => kept as well
-        self.assertIsNotNone(db.get_file_by_path(self.connection, Path("D:/Movies/a.mkv")))
+            # scan of root finds only a.mkv, scope limits pruning to that root
+            existing = {str(root / "a.mkv")}
+            result = db.prune_missing(self.connection, existing, scope=str(root))
+            self.assertEqual(result.pruned, 0)  # b.mkv is outside the scope => kept
+            self.assertEqual(result.flagged, 0)  # ...and outside => not even flagged
+            self.assertIsNotNone(db.get_file_by_path(self.connection, other / "b.mkv"))
+            self.assertEqual(len(db.get_encodes_for_file(self.connection, id_outside)), 1)
 
-        # a file inside the scope that vanished is flagged first, then pruned
-        db.upsert_file(self.connection, self._record("D:/Movies/gone.mkv"))
-        result = db.prune_missing(self.connection, existing, scope="D:/Movies")
-        self.assertEqual(result.flagged, 1)
-        for _ in range(db.MISSING_GRACE - 1):
-            result = db.prune_missing(self.connection, existing, scope="D:/Movies")
-        self.assertEqual(result.pruned, 1)
-        self.assertIsNone(db.get_file_by_path(self.connection, Path("D:/Movies/gone.mkv")))
+            # a.mkv is inside the scope and on disk => kept as well
+            self.assertIsNotNone(db.get_file_by_path(self.connection, root / "a.mkv"))
+
+            # a file inside the scope that vanished is flagged first, then pruned
+            db.upsert_file(self.connection, self._record(str(root / "gone.mkv")))
+            result = db.prune_missing(self.connection, existing, scope=str(root))
+            self.assertEqual(result.flagged, 1)
+            for _ in range(db.MISSING_GRACE - 1):
+                result = db.prune_missing(self.connection, existing, scope=str(root))
+            self.assertEqual(result.pruned, 1)
+            self.assertIsNone(db.get_file_by_path(self.connection, root / "gone.mkv"))
 
 
 class TestMain(unittest.TestCase):
