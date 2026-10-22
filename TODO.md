@@ -66,8 +66,13 @@
       size estimate is strongly over-optimistic on HDR 4K content (same
       pattern as Django's SDR 77%-predicted/64%-real, but stronger).
       Duration verified equal (1856.576s both sides).
-- [ ] FULL-MOVIE VMAF verification of that encode (running) — does the
-      probed 94.78 hold across the episode?
+- [x] FULL-MOVIE VMAF verification (2026-10-22, scripts/verify_fullmovie.py):
+      the probed 94.78 holds — **95.72 across the whole episode** (target
+      94.5, tone-mapped measurement). The 10s probes slightly UNDER-estimate
+      the full-movie quality here (easy-head samples). All four verification
+      pairs pass their targets: rick 93.50@24, bloodshot 94.40@20, django
+      95.36@20, mandalorian 95.72@14 — the CRF search is verified end-to-end,
+      HDR included. Clean run, zero failure bundles (telemetry stayed idle)
 - [ ] Size-estimate correction: HDR 4K estimates need a systematic bias
       factor or bitrate-based math (probe samples hit easy content);
       document the uncertainty range in plan/README
