@@ -2,6 +2,16 @@
 
 ## Known limitations / planned work
 
+### Linux/NAS deployment (verified 2026-10-22, WSL rehearsal)
+- [x] Tier 2: full gate green on Ubuntu 20.04 (WSL), static ffmpeg +
+      libvmaf measurement works, send2trash recoverable headless
+      (~/.local/share/Trash), HandBrake-absent degradation OK, POSIX
+      niceness + /proc RSS OK, scan->db->report end-to-end on Linux;
+      README Linux/NAS section + deploy/shrinkray.service added
+- [ ] On the real NAS: swap-permission check (Send2Trash needs write access
+      to the trash of the library's filesystem - same-mount trash only),
+      systemd unit smoke on real hardware
+
 ### Library reconciliation (shipped 2026-10-21)
 - [x] Soft-missing instead of instant prune (schema v6): deleted files are
       flagged (missing_scans/missing_since) and hard-deleted with their encode

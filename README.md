@@ -124,6 +124,37 @@ uv run shrinkray scan 'D:\Movies'
 | [FFmpeg](https://www.ffmpeg.org/download.html) | scanning, bar detection, VMAF scoring (GPL build on Windows) | `winget install Gyan.FFmpeg` |
 | [HandBrake CLI](https://handbrake.fr/downloads.php) | re-encoding (optional) | `winget install HandBrake.HandBrake` |
 
+### Linux / NAS
+
+Verified on Ubuntu 20.04 (WSL rehearsal for a mini-PC/NAS target): the full
+gate passes, VMAF measurement works, and the duplicate-delete trash policy
+is recoverable (`~/.local/share/Trash`) even without a desktop session.
+
+```bash
+# 1. uv + the repo (no sudo needed anywhere)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/bennischober/ShrinkRay.git ~/.shrinkray
+cd ~/.shrinkray
+uv sync
+
+# 2. ffmpeg: distro package, or a static build into ~/.local/bin when the
+#    distro is old (a static build also ships libvmaf - verified working)
+sudo apt install ffmpeg        # or: see johnvansickle.com static builds
+
+# 3. HandBrake CLI (optional - the tool degrades gracefully without it)
+sudo apt install handbrake-cli
+
+# 4. try it
+uv run shrinkray scan /srv/media/movies
+uv run shrinkray app            # dashboard on http://localhost:8420
+```
+
+For a headless box that should run the app at boot there is a systemd unit
+in [`deploy/shrinkray.service`](deploy/shrinkray.service) (with install
+notes in its header). The app is a polite guest on such a machine: encodes
+and probes run below normal priority and each encode can be thread-capped
+(`handbrake.max_threads`) so Plex/Jellyfin keep their cores.
+
 ## How it works
 
 1. **Discovery** — the library is walked recursively for configured extensions
