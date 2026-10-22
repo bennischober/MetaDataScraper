@@ -35,6 +35,12 @@ __pycache__/
 # sqlite WAL sidecars
 metadata.db-shm
 metadata.db-wal
+*.db-shm
+*.db-wal
+
+# playwright verification artifacts (screenshots + throwaway shot scripts)
+ui/screens/
+ui/shots*.cjs
 
 # node (ui build artifacts are rebuilt from source)
 node_modules/
