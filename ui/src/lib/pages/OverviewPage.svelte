@@ -1,6 +1,5 @@
 <script lang="ts">
-  import type { Movie, Status, Job } from '../api'
-  import { fmtGb, fmtSeconds } from '../api'
+  import { fmtGb, fmtSeconds, fmtSpan, fmtWhen, type Movie, type Status, type Job } from '../api'
 
   let {
     movies,
@@ -64,6 +63,75 @@
   const runningProgress = $derived(
     (runningJob?.result as { progress?: { movie?: string; percent?: number; done?: number; total?: number; detail?: string } } | null)?.progress ?? null
   )
+
+  // ETA: measured throughput (schema v5: encode_seconds per GB across all
+  // recorded encodes) where available, proportional fallback otherwise
+  const throughputSecPerGb = $derived.by(() => {
+    const measuredEncodes = movies.filter(
+      (m) => m.encode?.encode_seconds != null && (m.encode.input_size ?? 0) > 0
+    )
+    if (measuredEncodes.length === 0) return null
+    const totalSeconds = measuredEncodes.reduce((sum, m) => sum + (m.encode?.encode_seconds ?? 0), 0)
+    const totalGb = measuredEncodes.reduce((sum, m) => sum + (m.encode?.input_size ?? 0) / 1024 ** 3, 0)
+    return totalGb > 0 ? totalSeconds / totalGb : null
+  })
+  const eta = $derived.by(() => {
+    if (!runningJob || !runningJob.started_at) return null
+    const elapsedSec = Math.max(0, (Date.now() - Date.parse(runningJob.started_at.endsWith('Z') || runningJob.started_at.includes('+') ? runningJob.started_at : runningJob.started_at + 'Z')) / 1000)
+    if (runningProgress?.percent != null && runningProgress.percent > 1) {
+      // proportional: percent implies total wall time
+      const totalSec = elapsedSec / (runningProgress.percent / 100)
+      return Math.max(0, totalSec - elapsedSec)
+    }
+    if (throughputSecPerGb != null && runningProgress?.movie) {
+      const movie = movies.find((m) => m.name === runningProgress.movie)
+      const gb = (movie?.size ?? 0) / 1024 ** 3
+      if (gb > 0) return Math.max(0, gb * throughputSecPerGb - elapsedSec)
+    }
+    return null
+  })
+  function fmtEta(seconds: number | null): string {
+    if (seconds == null) return '—'
+    const m = Math.round(seconds / 60)
+    if (m < 60) return `~${m}m remaining`
+    return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
+  }
+
+  // completion moment: the last finished encode run, stated (peak-end)
+  interface OutcomeEntry {
+    movie: string
+    state: string
+    input_size?: number
+    output_size?: number
+    saved_percent?: number
+    vmaf?: number | null
+  }
+  const lastEncodeRun = $derived(
+    history.find((j) => j.kind === 'encode' && (j.state === 'done' || j.state === 'cancelled') && j.result)
+  )
+  const encodeOutcomes = $derived(
+    (lastEncodeRun?.result as { outcomes?: OutcomeEntry[] } | null)?.outcomes ?? []
+  )
+  const runSummary = $derived.by(() => {
+    if (!lastEncodeRun || encodeOutcomes.length === 0) return null
+    const encoded = encodeOutcomes.filter((o) => o.state === 'encoded')
+    const savedGb =
+      encoded.reduce(
+        (sum, o) => sum + Math.max(0, (o.input_size ?? 0) - (o.output_size ?? 0)),
+        0
+      ) / 1024 ** 3
+    const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
+    const wall = fmtSpan(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    return {
+      id: lastEncodeRun.id,
+      state: lastEncodeRun.state,
+      count: encoded.length,
+      failed: encodeOutcomes.filter((o) => o.state === 'failed').length,
+      savedGb,
+      minVmaf: vmafs.length ? Math.min(...vmafs) : null,
+      wall,
+    }
+  })
 
   // per-category bars: size + reclaimed per category (pure CSS, honest data)
   interface CatBar {
@@ -171,16 +239,31 @@
         </button>
       </div>
       <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
-      <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? 0} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
+      <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
-      <div class="mono dim detail">{runningProgress?.detail ?? 'working…'} — cancel stops after the current step; the in-flight process is terminated</div>
+      <div class="mono dim detail">
+        {runningProgress?.detail ?? 'working…'}
+        · started {fmtWhen(runningJob.started_at)}
+        · {fmtEta(eta)}
+      </div>
     </div>
   {:else}
-    <div class="quiet-strip">
-      <span class="mono dim">no active work</span>
-      <button class="act" onclick={() => ongoto('library')}>GO TO LIBRARY</button>
-    </div>
+    {#if runSummary}
+      <div class="quiet-strip done-strip">
+        <span class="mono">
+          <span class="legend">LAST RUN #{runSummary.id}</span>
+          {runSummary.count} encoded · −{runSummary.savedGb.toFixed(1)} GB{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
+        </span>
+        <button class="act" onclick={() => ongoto('jobs')}>RUN LOG</button>
+      </div>
+    {:else}
+      <div class="quiet-strip">
+        <span class="mono dim">no active work</span>
+        <button class="act" onclick={() => ongoto('library')}>GO TO LIBRARY</button>
+      </div>
+    {/if}
   {/if}
 
   <div class="cols">
@@ -364,6 +447,8 @@
     border-radius: var(--radius);
     padding: 10px 16px;
   }
+  .done-strip { border-style: solid; border-color: var(--teal); background: var(--panel-active); }
+  .done-strip .legend { margin-right: 8px; }
 
   /* columns */
   .cols {

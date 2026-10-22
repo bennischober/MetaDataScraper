@@ -70,9 +70,6 @@
       </button>
     </div>
   {:else}
-    <button class="act rescan" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
-      {analyzing ? 'ANALYZING…' : 'RE-ANALYZE (JOB)'}
-    </button>
     {#each duplicates as group (group.files[0].path)}
       <div class="group">
         <div class="group-head">
@@ -105,6 +102,9 @@
       </div>
     {/each}
     <p class="note dim mono">deleting a duplicate is irreversible — confirm per file; the source stays yours (deletion endpoint pending: the button copies the path)</p>
+    <button class="act rescan" onclick={() => onanalyze?.()} disabled={analyzing || pending}>
+      {analyzing ? 'ANALYZING…' : 'RE-ANALYZE LIBRARY'}
+    </button>
   {/if}
 </div>
 

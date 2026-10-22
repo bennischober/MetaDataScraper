@@ -166,7 +166,7 @@
     border: 1px solid var(--seam);
     border-radius: var(--radius);
     background: var(--panel);
-    overflow: hidden;
+    overflow-x: auto;
   }
   .log-head {
     display: grid;
@@ -197,10 +197,11 @@
     border: 1px solid var(--seam);
     border-radius: 3px;
     color: var(--ink-dim);
-    padding: 1px 8px;
+    padding: 3px 10px;
     cursor: pointer;
-    font-size: 9.5px;
+    font-size: 10.5px;
     letter-spacing: 1px;
+    min-height: 24px;
   }
   .mini:hover { color: var(--ink); border-color: var(--ink-dim); }
   .trace {

@@ -11,19 +11,23 @@
     outputDir,
     removeBars = false,
     targetVmaf = 95,
+    workers = null,
     onpathsChange,
     onoutputChange,
     onbarsChange,
     onvmafChange,
+    onworkersChange,
   }: {
     scanPaths: string[]
     outputDir: string
     removeBars?: boolean
     targetVmaf?: number
+    workers?: number | null
     onpathsChange: (paths: string[]) => void
     onoutputChange: (dir: string) => void
     onbarsChange?: (armed: boolean) => void
     onvmafChange?: (vmaf: number) => void
+    onworkersChange?: (workers: number | null) => void
   } = $props()
 
   let newPath = $state('')
@@ -171,6 +175,33 @@
         />
       </label>
       <HintMark text="VMAF is the measured visual similarity to the source (0-100). 95 is Netflix's 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples." />
+    </div>
+  </section>
+
+  <!-- ══ encode parallelism ══ -->
+  <section class="panel">
+    <div class="panel-head">
+      <span class="legend">ENCODE PARALLELISM — FIXED MODE ONLY</span>
+    </div>
+    <div class="pad row vmaf-row">
+      <label class="vmaf-label">
+        <span class="dim">workers</span>
+        <input
+          class="mono vmaf-input"
+          type="number"
+          min="1"
+          max="16"
+          step="1"
+          value={workers ?? ''}
+          placeholder="auto"
+          onchange={(e) => {
+            const raw = (e.currentTarget as HTMLInputElement).value
+            onworkersChange?.(raw === '' ? null : Math.min(16, Math.max(1, Number(raw))))
+          }}
+          aria-label="Concurrent encodes (fixed mode)"
+        />
+      </label>
+      <HintMark text="How many movies encode at once in fixed mode (quality mode always encodes one movie at a time — a single x265 encode already uses all cores). Empty = automatic." />
     </div>
   </section>
 

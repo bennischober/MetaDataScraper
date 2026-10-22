@@ -22,6 +22,8 @@
   let history = $state<Job[]>([])
   let loadingHistory = $state(true)
   let encodeBusy = $state(false)
+  let revealBusy = $state(false)
+  let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
 
   $effect(() => {
@@ -51,8 +53,12 @@
   }
 
   function revealInExplorer() {
-    const dir = movie.path.replace(/[\\/][^\\/]+$/, '')
-    window.open(`file:///${dir.replace(/\\/g, '/')}`)
+    if (revealBusy) return
+    revealBusy = true
+    api
+      .reveal(movie.path)
+      .catch((e) => (revealError = e instanceof Error ? e.message : String(e)))
+      .finally(() => (revealBusy = false))
   }
 
   const encode = $derived(movie.encode)
@@ -84,9 +90,12 @@
       </div>
     </div>
     <div class="hero-actions">
+      {#if revealError}<span class="mono bad reveal-err">{revealError}</span>{/if}
       <button class="act" onclick={() => act('plan')} disabled={encodeBusy}>PLAN</button>
       <button class="act primary" onclick={() => act('encode')} disabled={encodeBusy}>ENCODE</button>
-      <button class="act quiet" onclick={revealInExplorer}>FOLDER</button>
+      <button class="act quiet" onclick={revealInExplorer} disabled={revealBusy} title="Open the containing folder in the file manager">
+        {revealBusy ? 'OPENING…' : 'FOLDER'}
+      </button>
     </div>
   </section>
 
@@ -182,7 +191,8 @@
   .hero h2 { font-size: 22px; font-weight: 700; }
   .path { margin: 4px 0 10px; word-break: break-all; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .hero-actions { display: flex; gap: 8px; }
+  .hero-actions { display: flex; gap: 8px; align-items: center; }
+  .reveal-err { max-width: 260px; word-break: break-word; }
 
   .act {
     background: var(--panel-raised);

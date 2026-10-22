@@ -15,7 +15,6 @@
   let history: Job[] = $state([])
   let duplicates: DuplicateGroup[] = $state([])
   let error = $state<string | null>(null)
-  let page = $state<Page>('overview')
   let detailMovie = $state<Movie | null>(null)
 
   // theme: dark default, toggle persisted
@@ -26,6 +25,36 @@
     document.documentElement.dataset.theme = theme
     localStorage.setItem('ms.theme', theme)
   })
+
+  // ── routing: hash-based, so reload/bookmark keeps the position ──
+  const PAGES: Page[] = ['overview', 'library', 'duplicates', 'jobs', 'config']
+  function pageFromHash(): Page {
+    const h = location.hash.replace(/^#\/?/, '')
+    return (PAGES as string[]).includes(h) ? (h as Page) : 'overview'
+  }
+  let page = $state<Page>(pageFromHash())
+  function goto(next: Page) {
+    page = next
+    location.hash = `/${next}`
+  }
+  // back/forward support
+  window.addEventListener('hashchange', () => (page = pageFromHash()))
+
+  // ── keyboard layer: 1-5 switch pages, / focuses search ──
+  function handleShortcuts(e: KeyboardEvent) {
+    // never hijack typing in inputs
+    const t = e.target as HTMLElement
+    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    const map: Record<string, Page> = { '1': 'overview', '2': 'library', '3': 'duplicates', '4': 'jobs', '5': 'config' }
+    if (map[e.key]) {
+      goto(map[e.key])
+    } else if (e.key === '/') {
+      e.preventDefault()
+      goto('library')
+      queueMicrotask(() => document.querySelector<HTMLInputElement>('.search')?.focus())
+    }
+  }
 
   interface DuplicateFile {
     path: string
@@ -50,6 +79,9 @@
   )
   let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
   let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 95))
+  let workers = $state<number | null>(
+    localStorage.getItem('ms.workers') ? Number(localStorage.getItem('ms.workers')) : null
+  )
   // per-run arming of the irreversible bar crop — never persisted, so a
   // fresh session always starts unarmed
   let removeBars = $state(false)
@@ -58,6 +90,8 @@
     localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
     localStorage.setItem('ms.out', outputDir)
     localStorage.setItem('ms.vmaf', String(targetVmaf))
+    if (workers != null) localStorage.setItem('ms.workers', String(workers))
+    else localStorage.removeItem('ms.workers')
   }
 
   // movies inside any scan path (case-insensitive prefix) — used for the
@@ -92,9 +126,13 @@
   // ── refresh loop ──
   async function refresh() {
     try {
-      const [s, lib, jobs] = await Promise.all([api.status(), api.library(), api.jobs(30)])
+      const [s, lib, jobs] = await Promise.all([
+        api.status(),
+        api.libraryChanged(),
+        api.jobs(100),
+      ])
       status = s
-      movies = lib
+      if (lib !== null) movies = lib // 304: keep the current array
       history = jobs
       error = null
     } catch (e) {
@@ -180,6 +218,7 @@
           quality: kind !== 'scan',
           target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
           remove_bars: removeBars,
+          workers: kind === 'scan' ? workers : null,
         })
       }
       await refresh()
@@ -281,6 +320,8 @@
   const measuredCount = $derived(movies.filter((m) => m.encode?.vmaf != null).length)
 </script>
 
+<svelte:window onkeydown={handleShortcuts} />
+
 <div class="console">
   <!-- ══ sidebar rail ══ -->
   <aside class="rail">
@@ -289,23 +330,23 @@
       <p class="legend">LIBRARY CONSOLE</p>
     </div>
     <nav class="rail-nav" aria-label="Sections">
-      <button class="rail-item" class:active={page === 'overview'} onclick={() => { page = 'overview'; closeDetail() }}>
+      <button class="rail-item" class:active={page === 'overview'} onclick={() => goto('overview')}>
         <span class="rail-label">Overview</span>
         {#if failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'library'} onclick={() => { page = 'library'; closeDetail() }}>
+      <button class="rail-item" class:active={page === 'library'} onclick={() => goto('library')}>
         <span class="rail-label">Library</span>
         <span class="rail-badge mono">{movies.length}</span>
       </button>
-      <button class="rail-item" class:active={page === 'duplicates'} onclick={() => { page = 'duplicates'; refreshDuplicates(); closeDetail() }}>
+      <button class="rail-item" class:active={page === 'duplicates'} onclick={() => { goto('duplicates'); refreshDuplicates() }}>
         <span class="rail-label">Duplicates</span>
         {#if duplicates.length > 0}<span class="rail-badge warn mono">{duplicates.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'jobs'} onclick={() => { page = 'jobs'; closeDetail() }}>
+      <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
         {#if runningJobs.length > 0}<span class="rail-badge warn mono">{runningJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'config'} onclick={() => { page = 'config'; closeDetail() }}>
+      <button class="rail-item" class:active={page === 'config'} onclick={() => goto('config')}>
         <span class="rail-label">Config</span>
       </button>
     </nav>
@@ -359,7 +400,7 @@
           {scanPaths}
           {outputDir}
           ondismiss={dismissFailed}
-          ongoto={(p) => (page = p)}
+          ongoto={goto}
           onopenmovie={openDetail}
           oncancel={cancelJob}
           cancelling={pendingKind === 'cancel'}
@@ -411,10 +452,12 @@
           {outputDir}
           {removeBars}
           {targetVmaf}
+          {workers}
           onpathsChange={(p) => { scanPaths = p; persist() }}
           onoutputChange={(o) => { outputDir = o; persist() }}
           onbarsChange={(armed) => { removeBars = armed }}
           onvmafChange={(v) => { targetVmaf = v; persist() }}
+          onworkersChange={(w) => { workers = w; persist() }}
         />
       </div>
     {/if}

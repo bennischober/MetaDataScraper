@@ -77,8 +77,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+/** The library ETag: kept across polls, sent as If-None-Match; a 304
+ * keeps the previous array (the 3-second poll becomes nearly free). */
+let libraryEtag: string | null = null
+
 export const api = {
   status: () => request<Status>('/api/status'),
+  /** Fetches the library with ETag caching: returns null on 304 (unchanged). */
+  libraryChanged: async (): Promise<Movie[] | null> => {
+    const response = await fetch('/api/library', {
+      headers: libraryEtag ? { 'If-None-Match': libraryEtag } : {},
+    })
+    if (response.status === 304) return null
+    if (!response.ok) throw new Error(`API ${response.status}: library`)
+    libraryEtag = response.headers.get('ETag')
+    return (await response.json()) as Movie[]
+  },
   library: () => request<Movie[]>('/api/library'),
   jobs: (limit = 50) => request<Job[]>(`/api/jobs?limit=${limit}`),
   job: (id: number) => request<Job>(`/api/jobs/${id}`),
@@ -100,6 +114,8 @@ export const api = {
   }) => request<Job>('/api/jobs', { method: 'POST', body: JSON.stringify(body) }),
   cancel: (id: number) =>
     request<{ cancelled: number }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
+  reveal: (path: string) =>
+    request<{ revealed: string }>('/api/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
   watch: (action: 'start' | 'stop', inbox?: string, output_dir?: string) =>
     request<{ watcher: string }>(`/api/watch/${action}`, {
       method: 'POST',
@@ -119,7 +135,9 @@ export function fmtSaved(percent: number | null | undefined): string {
   return percent <= 0 ? `+${Math.abs(percent).toFixed(1)}%` : `${percent.toFixed(1)}%`
 }
 
-/** Formats an ISO timestamp as a short "when" (time today, date+time before). */
+/** Formats an ISO timestamp as a short "when" (time today, date+time before).
+ * The backend stores UTC ('datetime now' in sqlite is UTC); naive strings
+ * get Z appended here at the API boundary — the one place that decides. */
 export function fmtWhen(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z')

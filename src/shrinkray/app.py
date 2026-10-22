@@ -10,11 +10,13 @@ Run with `shrinkray app`.
 import json
 import os
 import os.path
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import db
@@ -110,6 +112,16 @@ def validate_path(path_str: str, what: str = "path") -> Path:
         status_code=403,
         detail=f"{what} is outside the allowed roots: {_allowed_roots}",
     )
+
+
+class RevealRequest(BaseModel):
+    """Request body for the reveal endpoint.
+
+    Attributes:
+        path (str): The file whose containing folder should be revealed.
+    """
+
+    path: str
 
 
 class JobRequest(BaseModel):
@@ -581,16 +593,41 @@ def cancel_job(job_id: int):
 
 
 @app.get("/api/library")
-def library(conn=Depends(db_access)):
+def library(
+    conn=Depends(db_access),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+):
     """Returns the scanned library from the database.
+
+    Supports ETag-based conditional requests: the ETag is a fingerprint
+    over the library contents (file count, max rowid, latest encode id,
+    max mtime), so an unchanged library answers 304 without a payload -
+    the UI's 3-second poll becomes nearly free.
 
     Args:
         conn: The database connection (db_access dependency).
+        if_none_match (str | None): The client's If-None-Match header value.
 
     Returns:
-        list[dict]: One entry per movie with its latest encode decision.
+        Response: JSON list, or 304 Not Modified when unchanged.
     """
+    import hashlib
+
     s = get_state()
+    fingerprint = s.with_lock(
+        lambda c: c.execute(
+            """
+            SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
+                   COALESCE((SELECT MAX(id) FROM encodes), 0),
+                   COALESCE((SELECT MAX(mtime) FROM files), 0),
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+            FROM files f
+            """
+        ).fetchone()
+    )
+    etag = '"lib-' + hashlib.md5(str(tuple(fingerprint)).encode()).hexdigest()[:16] + '"'
+    if if_none_match == etag:
+        return Response(status_code=304, headers={"ETag": etag})
     rows = s.with_lock(
         lambda c: c.execute(
             """
@@ -607,7 +644,7 @@ def library(conn=Depends(db_access)):
             """
         ).fetchall()
     )
-    return [
+    body = [
         {
             "path": r["path"],
             "name": r["name"],
@@ -637,6 +674,37 @@ def library(conn=Depends(db_access)):
         }
         for r in rows
     ]
+    return JSONResponse(body, headers={"ETag": etag})
+
+
+@app.post("/api/reveal")
+def reveal(request: RevealRequest):
+    """Reveals a file's containing folder in the system file manager.
+
+    The path must be a file inside the allowed roots (the same allowlist
+    as every other endpoint); the reveal itself is the OS file manager
+    opening a window - a local, user-visible action.
+
+    Args:
+        request (RevealRequest): The file whose folder to reveal.
+
+    Returns:
+        dict: The acknowledgement.
+    """
+    path = validate_path(request.path, "path")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    folder = str(path.parent)
+    try:
+        if os.name == "nt":
+            os.startfile(folder)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", folder], check=False, timeout=10)
+        else:
+            subprocess.run(["xdg-open", folder], check=False, timeout=10)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not open folder: {e}") from e
+    return {"revealed": folder}
 
 
 @app.get("/report")

@@ -41,18 +41,53 @@
   let category = $state<string | null>(null)
   let view = $state<'grid' | 'table'>('grid')
   let hideMissing = $state(false)
+  // sorting: persisted per session (the regression the critique caught)
+  let sortKey = $state<'name' | 'category' | 'size' | 'vmaf' | 'saved'>('name')
+  let sortAsc = $state(true)
 
   const categories = $derived([...new Set(movies.map((m) => m.category))].sort())
 
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase()
-    return movies.filter((m) => {
+    const list = movies.filter((m) => {
       if (category && m.category !== category) return false
       if (hideMissing && m.missing) return false
       if (q && !m.name.toLowerCase().includes(q)) return false
       return true
     })
+    const dir = sortAsc ? 1 : -1
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'name':
+          return a.name.localeCompare(b.name) * dir
+        case 'category':
+          return a.category.localeCompare(b.category) * dir
+        case 'size':
+          return ((a.size ?? 0) - (b.size ?? 0)) * dir
+        case 'vmaf':
+          return ((a.encode?.vmaf ?? -1) - (b.encode?.vmaf ?? -1)) * dir
+        case 'saved':
+          return ((a.encode?.saved_percent ?? -1) - (b.encode?.saved_percent ?? -1)) * dir
+      }
+    })
+    return list
   })
+
+  function toggleSort(key: typeof sortKey) {
+    if (sortKey === key) sortAsc = !sortAsc
+    else {
+      sortKey = key
+      sortAsc = true
+    }
+  }
+  function sortMark(key: string): string {
+    if (sortKey !== key) return ''
+    return sortAsc ? ' ▲' : ' ▼'
+  }
+  function ariaSort(key: string): 'ascending' | 'descending' | 'none' {
+    if (sortKey !== key) return 'none'
+    return sortAsc ? 'ascending' : 'descending'
+  }
 
   const selectedCount = $derived(filtered.filter((m) => selectedPaths.has(m.path)).length)
   const selectedMovies = $derived(filtered.filter((m) => selectedPaths.has(m.path)))
@@ -122,7 +157,7 @@
         />
         {selectedCount} SELECTED
       </span>
-      <span class="leader-note mono">→ EST. −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE</span>
+      <span class="leader-note mono">→ EST. −{Math.max(0.1, selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE</span>
       <span class="spacer"></span>
       <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything">
         PLAN SELECTED
@@ -175,13 +210,23 @@
                 aria-label="Select all filtered"
               />
             </th>
-            <th class="legend">Title</th>
-            <th class="legend">Category</th>
-            <th class="legend num">Size</th>
+            <th aria-sort={ariaSort('name')}>
+              <button class="sort legend" onclick={() => toggleSort('name')}>Title{sortMark('name')}</button>
+            </th>
+            <th aria-sort={ariaSort('category')}>
+              <button class="sort legend" onclick={() => toggleSort('category')}>Category{sortMark('category')}</button>
+            </th>
+            <th class="num" aria-sort={ariaSort('size')}>
+              <button class="sort legend" onclick={() => toggleSort('size')}>Size{sortMark('size')}</button>
+            </th>
             <th class="legend">Decision</th>
             <th class="legend num">CRF</th>
-            <th class="legend num">VMAF</th>
-            <th class="legend num">Saved</th>
+            <th class="num" aria-sort={ariaSort('vmaf')}>
+              <button class="sort legend" onclick={() => toggleSort('vmaf')}>VMAF{sortMark('vmaf')}</button>
+            </th>
+            <th class="num" aria-sort={ariaSort('saved')}>
+              <button class="sort legend" onclick={() => toggleSort('saved')}>Saved{sortMark('saved')}</button>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -350,6 +395,19 @@
     z-index: 1;
   }
   th.num { text-align: right; }
+  .sort {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+    padding: 0;
+    width: 100%;
+    text-align: inherit;
+  }
+  .sort:hover { color: var(--ink); }
   td {
     padding: 7px 12px;
     border-bottom: 1px solid var(--row-line);

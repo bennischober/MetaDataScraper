@@ -464,6 +464,59 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_library_etag_304(self):
+        """An unchanged library answers If-None-Match with 304 (the poll
+        becomes nearly free)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            first = client.get("/api/library")
+            self.assertEqual(first.status_code, 200)
+            etag = first.headers["ETag"]
+            # unchanged: 304 without a body
+            cached = client.get("/api/library", headers={"If-None-Match": etag})
+            self.assertEqual(cached.status_code, 304)
+            self.assertEqual(cached.content, b"")
+            # a changed library (new encode row) invalidates the fingerprint
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path("D:/x/new.mkv"), mtime=99.0, size=5, name="new", category="Cat"
+                ),
+            )
+            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 5, 3, 40.0)
+            self.connection.commit()
+            fresh = client.get("/api/library", headers={"If-None-Match": etag})
+            self.assertEqual(fresh.status_code, 200)
+            self.assertNotEqual(fresh.headers["ETag"], etag)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_reveal_rejects_outside_root(self):
+        """The reveal endpoint uses the same path allowlist as everything
+        else (a file manager window must never open outside the roots)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            response = client.post("/api/reveal", json={"path": "C:/Windows/System32/cmd.exe"})
+            self.assertEqual(response.status_code, 403)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_add_skip_and_recognition(self):
         file_id = db.upsert_file(self.connection, self._record("b.mkv"))
         db.add_skip(self.connection, file_id, "no size gain")
