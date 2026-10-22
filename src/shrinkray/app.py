@@ -788,13 +788,18 @@ def movie_detail(path: str, conn=Depends(db_access)):
     """Returns one movie's full record: file facts plus its COMPLETE encode
     history (the library list only carries the latest encode per title).
 
+    History rows carry the schema-v7 provenance chain (generation,
+    input/output bitrate, chain links) so the UI can show generation
+    drift per title.
+
     Args:
         path (str): The movie file's path (allowlist-checked).
         conn: The database connection (db_access dependency).
 
     Returns:
-        dict: {"file": {...}, "history": [one entry per encode, oldest
-        first]} — 404 when the path is unknown to the database.
+        dict: {"file": {..., "generation": N}, "history": [one entry per
+        encode, oldest first]} — 404 when the path is unknown to the
+        database.
     """
     p = validate_path(path, "path")
     s = get_state()
@@ -826,18 +831,36 @@ def movie_detail(path: str, conn=Depends(db_access)):
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
                 "tool_versions": r["tool_versions"],
+                # schema v7: the provenance chain (generation + drift data)
+                "input_bitrate": r["input_bitrate"],
+                "output_bitrate": r["output_bitrate"],
+                "generation": r["generation"],
+                "source_file": r["source_file"],
+                "output_file": r["output_file"],
                 "encoded_at": r["encoded_at"],
             }
             for r in s.connection.execute(
                 """
                 SELECT preset, chosen_crf, achieved_vmaf, input_size, output_size,
                        saved_percent, encoder_preset, encode_seconds, probe_count,
-                       probe_seconds, tool_versions, encoded_at
+                       probe_seconds, tool_versions, encoded_at, input_bitrate,
+                       output_bitrate, generation, source_file, output_file
                 FROM encodes WHERE file_id = ? ORDER BY id
                 """,
                 (row["id"],),
             ).fetchall()
         ]
+        # the movie's own generation: its path as a previous row's output
+        # means this file IS that encode's output (generation N+1)
+        gen_row = s.connection.execute(
+            """
+            SELECT generation FROM encodes
+            WHERE output_file = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (str(p),),
+        ).fetchone()
+        generation = int(gen_row["generation"]) + 1 if gen_row is not None else 1
     return {
         "file": {
             "path": row["path"],
@@ -850,6 +873,7 @@ def movie_detail(path: str, conn=Depends(db_access)):
             "hdr": bool(row["hdr"]),
             "missing": bool(row["missing_scans"]),
             "missing_since": row["missing_since"],
+            "generation": generation,
         },
         "history": history,
     }

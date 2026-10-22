@@ -37,13 +37,20 @@ export interface EncodeInfo {
   tool_versions?: string | null
 }
 
-/** One historical encode of a movie (GET /api/movie history entry). */
+/** One historical encode of a movie (GET /api/movie history entry).
+ * The schema-v7 fields (generation, bitrates, chain links) make the row
+ * a provenance-chain entry; bitrates are None for pre-v7 rows. */
 export interface EncodeRecord extends EncodeInfo {
   encoded_at: string | null
+  input_bitrate?: number | null
+  output_bitrate?: number | null
+  generation?: number
+  source_file?: string | null
+  output_file?: string | null
 }
 
 export interface MovieDetail {
-  file: Omit<Movie, 'encode'>
+  file: Omit<Movie, 'encode'> & { generation?: number }
   history: EncodeRecord[]
 }
 

@@ -36,6 +36,12 @@
   } = $props()
 
   let encodes = $state<EncodeRecord[] | null>(null)
+  /** The movie's own generation (schema v7): 1 = original source, N+1 =
+   * this file is the output of a previous encode row. */
+  let fileGeneration = $state<number>(1)
+  /** The file row's duration (the SOURCE panel's movie prop and the
+   * /api/movie row are the same title; history rows have no duration). */
+  const fileDuration = $derived(movie.duration)
   let encodeBusy = $state(false)
   let revealBusy = $state(false)
   let revealError = $state<string | null>(null)
@@ -54,7 +60,10 @@
     // history (the library list carries only the latest encode per title)
     api
       .movie(movie.path)
-      .then((d) => (encodes = d.history))
+      .then((d) => {
+        encodes = d.history
+        if (d.file.generation != null) fileGeneration = d.file.generation
+      })
       .catch(() => (encodes = []))
     pageEl?.focus()
   })
@@ -144,6 +153,7 @@
       <p class="mono dim path">{movie.path}</p>
       <div class="chips">
         <span class="chip neutral"><span class="swatch"></span>{movie.category.toUpperCase()}</span>
+        {#if fileGeneration > 1}<span class="chip progress" title="This file is itself the output of a previous encode (generation chain)"><span class="swatch"></span>GENERATION {fileGeneration}</span>{/if}
         {#if movie.hdr}<span class="chip neutral"><span class="swatch"></span>HDR</span>{/if}
         {#if movie.missing}<span class="chip missing"><span class="swatch"></span>MISSING SINCE {movie.missing_since?.slice(0, 10) ?? 'LAST SCAN'}</span>{/if}
       </div>
@@ -168,7 +178,16 @@
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
         <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
         {#if bitrateMbps(movie.size, movie.duration)}
-          <div class="fact"><span class="legend">SOURCE BITRATE</span><span class="mono">{bitrateMbps(movie.size, movie.duration)} Mbps</span></div>
+          <div class="fact">
+            <span class="legend">SOURCE BITRATE</span>
+            <span class="mono">{bitrateMbps(movie.size, movie.duration)} Mbps</span>
+          </div>
+        {/if}
+        {#if fileGeneration > 1}
+          <div class="fact">
+            <span class="legend">GENERATION</span>
+            <span class="mono">#{fileGeneration} — an encode of an encode</span>
+          </div>
         {/if}
       </div>
     </section>
@@ -217,9 +236,9 @@
       {/if}
     </section>
 
-    <!-- ══ encode history: every run recorded, with deltas ══ -->
+    <!-- ══ encode history: the provenance chain (schema v7) ══ -->
     <section class="panel wide">
-      <div class="panel-head"><span class="legend">ENCODE HISTORY — {encodesDesc.length || 'NO'} RUN{encodesDesc.length === 1 ? '' : 'S'}</span></div>
+      <div class="panel-head"><span class="legend">PROVENANCE CHAIN — {encodesDesc.length || 'NO'} GENERATION{encodesDesc.length === 1 ? '' : 'S'}</span></div>
       {#if encodes === null}
         <div class="dim pad">loading…</div>
       {:else if encodesDesc.length === 0}
@@ -227,19 +246,34 @@
       {:else}
         <div class="enc-table mono">
           <div class="enc-row enc-head legend" aria-hidden="true">
+            <span>GEN</span>
             <span>WHEN</span>
             <span class="num">CRF</span>
             <span class="num">VMAF</span>
+            <span class="num">BITRATE</span>
             <span class="num">SIZE</span>
             <span class="num">SAVED</span>
             <span class="num">TIME</span>
             <span class="delta"></span>
           </div>
           {#each encodesDesc as rec, i (rec.encoded_at)}
+            {@const producedThis = rec.output_file != null && rec.output_file.replace(/[\\/]/g, '').toLowerCase() === movie.path.replace(/[\\/]/g, '').toLowerCase()}
             <div class="enc-row">
+              <span class="gen" class:current={producedThis} title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}>{rec.generation ?? 1}</span>
               <span class="dim">{fmtWhen(rec.encoded_at)}</span>
               <span class="num">{rec.crf ?? '—'}</span>
               <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
+              <!-- the drift signal: measured in→out MBit/s (v7); the derived
+                   fallback keeps pre-v7 rows honest without pretending -->
+              <span class="num" title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}>
+                {#if rec.input_bitrate != null && rec.output_bitrate != null}
+                  {rec.input_bitrate.toFixed(1)} → {rec.output_bitrate.toFixed(1)}
+                {:else if bitrateMbps(rec.input_size, fileDuration) && bitrateMbps(rec.output_size, fileDuration)}
+                  ~{bitrateMbps(rec.input_size, fileDuration)} → ~{bitrateMbps(rec.output_size, fileDuration)}
+                {:else}
+                  —
+                {/if}
+              </span>
               <span class="num">{fmtGb(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
@@ -377,7 +411,7 @@
   .enc-table { display: flex; flex-direction: column; padding: 6px 14px 12px; }
   .enc-row {
     display: grid;
-    grid-template-columns: 90px 40px 50px 80px 50px 70px 1fr;
+    grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 70px 1fr;
     gap: 10px;
     align-items: center;
     padding: 4px 0;
@@ -387,6 +421,16 @@
   .enc-row:last-child { border-bottom: none; }
   .enc-head { border-bottom: 1px solid var(--seam); color: var(--ink-faint); font-size: 10px; letter-spacing: 1px; }
   .num { text-align: right; }
+  .gen {
+    text-align: center;
+    color: var(--ink-faint);
+    border: 1px solid var(--row-line);
+    border-radius: 2px;
+    padding: 0 4px;
+    justify-self: start;
+  }
+  /* the row that produced the file being viewed */
+  .gen.current { color: var(--teal-ink); border-color: var(--teal); }
   .delta { text-align: right; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   @media (max-width: 820px) {

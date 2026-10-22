@@ -664,9 +664,14 @@ class TestDb(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 body = response.json()
                 self.assertEqual(body["file"]["name"], "detail-movie")
+                self.assertEqual(body["file"]["generation"], 1)  # no ancestry
                 self.assertEqual(len(body["history"]), 2)  # both encodes, oldest first
                 self.assertEqual(body["history"][0]["preset"], "VMAF>95")
                 self.assertEqual(body["history"][1]["preset"], "VMAF>90")
+                # schema v7 provenance fields ride along (None for plain rows)
+                self.assertIn("input_bitrate", body["history"][0])
+                self.assertIn("generation", body["history"][0])
+                self.assertIn("source_file", body["history"][0])
                 # unknown path inside the allowlist: 404
                 missing = client.get(
                     "/api/movie", params={"path": str(Path(self.tmp.name) / "unknown.mkv")}
