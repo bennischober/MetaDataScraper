@@ -419,6 +419,106 @@ class TestDb(unittest.TestCase):
             self.assertIsNone(row["missing_since"])
             migrated.close()
 
+    def test_migration_v7_generation_columns(self):
+        # v6 database: encodes without the drift columns => added with
+        # defaults, generation starts at 1
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v6.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (6);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE encodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    preset TEXT NOT NULL,
+                    encoder TEXT NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    output_size INTEGER NOT NULL,
+                    saved_percent REAL NOT NULL
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('D:/Movies/a.mkv', 1.0, 1, 'movie', 'Cat');
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            columns = {
+                row["name"] for row in migrated.execute("PRAGMA table_info(encodes)").fetchall()
+            }
+            self.assertIn("input_bitrate", columns)
+            self.assertIn("output_bitrate", columns)
+            self.assertIn("source_file", columns)
+            self.assertIn("generation", columns)
+            migrated.close()
+
+    def test_derive_generation_chain(self):
+        """Encoding an encode chains generation N+1 via source_file."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            original = root / "movie.mkv"
+            reencode = root / "movie_reencoded.mkv"
+
+            file_id = db.upsert_file(self.connection, self._record(str(original)))
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "x265",
+                1000,
+                500,
+                50.0,
+                source_file=str(original),
+                output_file=str(reencode),
+                generation=1,
+            )
+            # the re-encode input is the output of generation 1
+            self.assertEqual(service.derive_generation(self.connection, reencode), 2)
+            # an unrelated file stays generation 1
+            self.assertEqual(service.derive_generation(self.connection, root / "other.mkv"), 1)
+
+    def test_add_encode_with_drift_fields(self):
+        file_id = db.upsert_file(self.connection, self._record("a.mkv"))
+        encode_id = db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>95",
+            "x265",
+            1000,
+            300,
+            70.0,
+            input_bitrate=18.4,
+            output_bitrate=14.9,
+            source_file="D:/Movies/a.mkv",
+            output_file="D:/Out/a.mkv",
+            generation=1,
+        )
+        row = self.connection.execute("SELECT * FROM encodes WHERE id = ?", (encode_id,)).fetchone()
+        self.assertEqual(row["input_bitrate"], 18.4)
+        self.assertEqual(row["output_bitrate"], 14.9)
+        self.assertEqual(row["source_file"], "D:/Movies/a.mkv")
+        self.assertEqual(row["output_file"], "D:/Out/a.mkv")
+        self.assertEqual(row["generation"], 1)
+
     def test_add_encode_with_quality_fields(self):
         file_id = db.upsert_file(self.connection, self._record("a.mkv"))
         encode_id = db.add_encode(

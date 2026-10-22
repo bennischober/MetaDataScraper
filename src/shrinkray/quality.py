@@ -301,6 +301,8 @@ class QualityResult:
     input_height: int | None = None
     input_codec: str | None = None
     input_duration: float | None = None
+    input_bitrate: float | None = None
+    output_bitrate: float | None = None
 
     @property
     def saved_percent(self) -> float:
@@ -762,23 +764,25 @@ def _tool_versions(handbrake: str) -> str:
 
 
 def _source_snapshot(movie: Path) -> dict:
-    """Reads the source file's resolution/codec/duration for encode records.
+    """Reads the source file's resolution/codec/duration/bitrate for encode records.
 
     The encode record must be self-contained: the files table row can change
     on a later re-scan, so the benchmark data snapshots what was true at
-    encode time.
+    encode time. The bitrate feeds the generation-drift documentation
+    (input_bitrate/output_bitrate on the encodes row).
 
     Args:
         movie (Path): The source file.
 
     Returns:
-        dict: width/height/codec/duration (None where unknown).
+        dict: width/height/codec/duration/bitrate (None where unknown).
     """
     from shrinkray.encode import probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     width = height = None
     codec = None
+    bitrate = None
     try:
         proc = subprocess.run(
             [
@@ -788,20 +792,52 @@ def _source_snapshot(movie: Path) -> dict:
                 "-print_format",
                 "json",
                 "-show_streams",
+                "-show_format",
                 str(movie),
             ],
             capture_output=True,
             timeout=30,
         )
         if proc.returncode == 0:
-            streams = json.loads(proc.stdout.decode()).get("streams", [])
+            data = json.loads(proc.stdout.decode())
+            streams = data.get("streams", [])
             video: dict = next((s for s in streams if s.get("codec_type") == "video"), {})
             width = video.get("width")
             height = video.get("height")
             codec = video.get("codec_name")
+            # the file bitrate (video+audio+containers); the video stream's
+            # own bit_rate is often absent => fall back to the format level
+            raw = video.get("bit_rate") or data.get("format", {}).get("bit_rate")
+            if raw:
+                bitrate = round(float(raw) / 1_000_000, 2)
     except (OSError, ValueError, json.JSONDecodeError):
         pass
-    return {"width": width, "height": height, "codec": codec, "duration": duration}
+    return {
+        "width": width,
+        "height": height,
+        "codec": codec,
+        "duration": duration,
+        "bitrate": bitrate,
+    }
+
+
+def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
+    """Computes the output bitrate in MBit/s from size and duration.
+
+    Size/duration is the honest number for the drift chain (a ffprobe of
+    the output would re-read the container and return the same sum).
+
+    Args:
+        output_file (Path): The encoded file.
+        duration (float | None): The duration in seconds (shared by both
+            sides — the truncation check above verified equality).
+
+    Returns:
+        float | None: Bitrate in MBit/s, None when unknowable.
+    """
+    if not duration or duration <= 0 or not output_file.is_file():
+        return None
+    return round(output_file.stat().st_size * 8 / duration / 1_000_000, 2)
 
 
 def bisect_crf(check, lo: int, hi: int) -> int:
@@ -1501,6 +1537,8 @@ def encode_with_quality(
             input_height=snapshot["height"],
             input_codec=snapshot["codec"],
             input_duration=snapshot["duration"],
+            input_bitrate=snapshot["bitrate"],
+            output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
         )
     if code != 0:
         return QualityResult(
@@ -1558,4 +1596,6 @@ def encode_with_quality(
         input_height=snapshot["height"],
         input_codec=snapshot["codec"],
         input_duration=snapshot["duration"],
+        input_bitrate=snapshot["bitrate"],
+        output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
     )

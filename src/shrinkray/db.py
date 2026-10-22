@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS encodes (
     source_height INTEGER,
     source_codec TEXT,
     source_duration REAL,
+    input_bitrate REAL,
+    output_bitrate REAL,
+    source_file TEXT,
+    output_file TEXT,
+    generation INTEGER NOT NULL DEFAULT 1,
     tool_versions TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -129,6 +134,15 @@ MIGRATIONS = {
         # hard-deleted only after MISSING_GRACE consecutive scans
         "ALTER TABLE files ADD COLUMN missing_scans INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE files ADD COLUMN missing_since TEXT",
+    ],
+    7: [
+        # generation tracking: encodes rows chained via source_file/output_file
+        # so the drift across re-encode generations is documented per title
+        "ALTER TABLE encodes ADD COLUMN input_bitrate REAL",
+        "ALTER TABLE encodes ADD COLUMN output_bitrate REAL",
+        "ALTER TABLE encodes ADD COLUMN source_file TEXT",
+        "ALTER TABLE encodes ADD COLUMN output_file TEXT",
+        "ALTER TABLE encodes ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
     ],
 }
 
@@ -423,6 +437,11 @@ def add_encode(
     source_codec: str | None = None,
     source_duration: float | None = None,
     tool_versions: str | None = None,
+    input_bitrate: float | None = None,
+    output_bitrate: float | None = None,
+    source_file: str | None = None,
+    output_file: str | None = None,
+    generation: int = 1,
 ) -> int:
     """Records an encode in the history table.
 
@@ -436,6 +455,14 @@ def add_encode(
         saved_percent (float): Saved percentage.
         chosen_crf (int | None): The CRF chosen by the quality search, if any.
         achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
+        input_bitrate (float | None): Source bitrate in MBit/s (drift data).
+        output_bitrate (float | None): Encode bitrate in MBit/s (drift data).
+        source_file (str | None): The absolute path of the encode's input.
+        output_file (str | None): The absolute path of the encode's output —
+            the chain link: a later encode of that file derives generation
+            N+1 from this row.
+        generation (int): 1 for an encode of an original source, N+1 when
+            the input was itself produced by a previous encode row.
 
     Returns:
         int: The encode id.
@@ -446,9 +473,10 @@ def add_encode(
             file_id, preset, encoder, input_size, output_size, saved_percent,
             chosen_crf, achieved_vmaf, encoder_preset, encode_seconds,
             probe_count, probe_seconds, hdr, source_width, source_height,
-            source_codec, source_duration, tool_versions
+            source_codec, source_duration, tool_versions,
+            input_bitrate, output_bitrate, source_file, output_file, generation
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -469,6 +497,11 @@ def add_encode(
             source_codec,
             source_duration,
             tool_versions,
+            input_bitrate,
+            output_bitrate,
+            source_file,
+            output_file,
+            generation,
         ),
     )
     connection.commit()

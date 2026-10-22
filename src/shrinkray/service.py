@@ -6,6 +6,7 @@ presentation logic — the CLI prints, this module decides and records.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
@@ -52,6 +53,35 @@ def ensure_file_row(connection, movie) -> int:
     return db.upsert_file(connection, record)
 
 
+def derive_generation(connection, movie: Path) -> int:
+    """Determines the generation of a movie by its encode ancestry.
+
+    The encodes table chains generations via output_file: a row's
+    output_file is the path of the file it produced. When the movie's path
+    appears as a previous row's output_file, the movie IS that encode's
+    output — generation N+1. A file with no ancestry is generation 1.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The movie file to classify.
+
+    Returns:
+        int: The generation number (>= 1).
+    """
+    path_str = str(movie.resolve())
+    row = connection.execute(
+        """
+        SELECT generation FROM encodes
+        WHERE output_file = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (path_str,),
+    ).fetchone()
+    if row is not None:
+        return int(row["generation"]) + 1
+    return 1
+
+
 def save_encode(
     connection,
     movie,
@@ -71,6 +101,11 @@ def save_encode(
     source_codec: str | None = None,
     source_duration: float | None = None,
     tool_versions: str | None = None,
+    input_bitrate: float | None = None,
+    output_bitrate: float | None = None,
+    source_file: str | None = None,
+    output_file: str | None = None,
+    generation: int | None = None,
 ):
     """Stores an encode record for the given movie in the database.
 
@@ -93,9 +128,16 @@ def save_encode(
         source_codec (str | None): Source codec snapshot (benchmark).
         source_duration (float | None): Source duration snapshot (benchmark).
         tool_versions (str | None): Tool version string (benchmark).
+        input_bitrate (float | None): Source bitrate in MBit/s (drift data).
+        output_bitrate (float | None): Encode bitrate in MBit/s (drift data).
+        source_file (str | None): The input path (provenance).
+        output_file (str | None): The output path (generation chain link).
+        generation (int | None): Derived when None (ancestry lookup).
     """
     file_id = ensure_file_row(connection, movie)
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
+    if generation is None:
+        generation = derive_generation(connection, movie)
     db.add_encode(
         connection,
         file_id,
@@ -116,6 +158,11 @@ def save_encode(
         source_codec=source_codec,
         source_duration=source_duration,
         tool_versions=tool_versions,
+        input_bitrate=input_bitrate,
+        output_bitrate=output_bitrate,
+        source_file=source_file,
+        output_file=output_file,
+        generation=generation,
     )
 
 
@@ -190,6 +237,10 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
             source_codec=result.input_codec,
             source_duration=result.input_duration,
             tool_versions=result.tool_versions,
+            input_bitrate=result.input_bitrate,
+            output_bitrate=result.output_bitrate,
+            source_file=str(movie.resolve()),
+            output_file=str(result.output.resolve()) if result.output else None,
         )
         return EncodeOutcome(movie=str(movie), encoded=True)
     if result.skipped_reason is not None:

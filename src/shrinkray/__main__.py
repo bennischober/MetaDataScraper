@@ -604,6 +604,74 @@ def report(
     console.print(f"[green]Report written to '{output}'.[/green]")
 
 
+@app.command("compare")
+def compare(
+    movie: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        help="The movie file whose encode history (generation chain) to show.",
+    ),
+    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
+):
+    """Shows the provenance chain of a movie: every generation with its data.
+
+    Each row documents one generation: codec, bitrate, size, CRF/VMAF (when
+    quality mode) and the generation number. Re-encoding an encode chains a
+    new row automatically — this is how generation drift becomes visible
+    per title (e.g. rip 18.4 Mbit/s -> encode 14.9 Mbit/s).
+    """
+    if not db_file.is_file():
+        log_error(f"Database '{db_file}' not found! Run a scan first.")
+        raise typer.Exit(1)
+
+    connection = db.connect(db_file)
+    try:
+        movie_str = str(movie.resolve())
+        # the chain: rows whose output is this file, plus rows whose input
+        # is this file (a re-encode of it) — ordered by generation
+        rows = connection.execute(
+            """
+            SELECT e.*, f.name FROM encodes e
+            JOIN files f ON f.id = e.file_id
+            WHERE e.output_file = ? OR e.source_file = ? OR f.path = ?
+            ORDER BY e.generation, e.id
+            """,
+            (movie_str, movie_str, movie_str),
+        ).fetchall()
+        real = [r for r in rows if r["output_size"] > 0]
+        if not real:
+            console.print(
+                f"[yellow]No encodes recorded for '{movie.name}' yet — "
+                "run an encode first.[/yellow]"
+            )
+            return
+        table = Table(title=f"Provenance chain of {movie.name}", title_justify="left")
+        table.add_column("Gen", justify="right")
+        table.add_column("Codec")
+        table.add_column("Bitrate", justify="right")
+        table.add_column("Size", justify="right")
+        table.add_column("CRF", justify="right")
+        table.add_column("VMAF", justify="right")
+        table.add_column("Encoded", justify="right")
+        for r in real:
+            bitrate = f"{r['input_bitrate']:.2f}" if r["input_bitrate"] is not None else "—"
+            vmaf = f"{r['achieved_vmaf']:.2f}" if r["achieved_vmaf"] is not None else "—"
+            table.add_row(
+                str(r["generation"]),
+                r["source_codec"] or "—",
+                bitrate,
+                f"{r['input_size'] / (1024**3):.2f} GB",
+                str(r["chosen_crf"] or "—"),
+                vmaf,
+                str(r["encoded_at"] or "—"),
+            )
+        console.print(table)
+    finally:
+        connection.close()
+
+
 @app.command()
 def watch_mode(
     inbox: Path = typer.Argument(
