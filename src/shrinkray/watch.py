@@ -200,10 +200,11 @@ def watch(
     encoder: str = "x265",
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
+    max_threads: int | None = None,
 ):
     """Watches the inbox and encodes newly arrived movies.
 
-    This function blocks (unless once=True); stop it with Ctrl+C — the
+    This function blocks (unless once=True); stop it with Ctrl+C - the
     running encode finishes first, then the state is written and the
     process exits cleanly.
 
@@ -213,6 +214,9 @@ def watch(
         target_vmaf (float): The VMAF quality floor.
         remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
+        poll_interval (float): Seconds between inbox checks.
+        once (bool): One pass and return (for tests).
+        max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         poll_interval (float): Seconds between inbox checks (grows while the
             inbox stays idle, resets on any new candidate).
         once (bool): Run a single pass and return (used by tests).
@@ -248,6 +252,7 @@ def watch(
                     preset="Fast 1080p30",
                     encoder=encoder,
                     overwrite=False,
+                    max_threads=max_threads,
                 )
                 log(f"Done: '{movie.name}' (source left untouched).")
 

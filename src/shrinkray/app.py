@@ -20,7 +20,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import db
+from shrinkray.config import load_config
 from shrinkray.dedupe import find_duplicates
+from shrinkray.encode import cap_threads
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker
 from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
@@ -478,10 +480,14 @@ def status(conn=Depends(db_access)):
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
+    from shrinkray.resources import rss_mib
+
+    rss = rss_mib()
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
         "database": str(s.db_file),
+        "rss_mib": round(rss, 1) if rss is not None else None,
     }
 
 
@@ -618,6 +624,8 @@ def snapshot(
     """
     import hashlib
 
+    from shrinkray.resources import rss_mib
+
     s = get_state()
 
     def read(c) -> dict:
@@ -633,7 +641,12 @@ def snapshot(
             FROM files f
             """
         ).fetchone()
-        return {"jobs": jobs, "running": running, "fingerprint": tuple(fingerprint)}
+        return {
+            "jobs": jobs,
+            "running": running,
+            "fingerprint": tuple(fingerprint),
+            "rss_mib": rss_mib(),
+        }
 
     data = s.with_lock(read)
 
@@ -691,6 +704,7 @@ def snapshot(
             "queue": [j.to_dict() for j in data["running"]],
             "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
             "database": str(s.db_file),
+            "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
         },
         "jobs": [j.to_dict() for j in data["jobs"]],
         "library": library,
@@ -1038,6 +1052,7 @@ def watch_control(
                     output_path,
                     once=False,
                     poll_interval=60.0,
+                    max_threads=cap_threads(load_config().handbrake_max_threads),
                 )
             except Exception as e:  # the thread must never die silently
                 log_error(f"watch loop crashed: {e}")
@@ -1090,6 +1105,24 @@ def run_app(
     state = AppState(db_file)
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
+
+    def monitor_memory():
+        """Logs the app's own RSS every 5 minutes (self-monitoring honesty).
+
+        "We stay lean" is a claim only a number can back up: this thread
+        reads the resident set size and logs it, so a slow leak becomes
+        visible in the log instead of a user's dying NAS.
+        """
+        from shrinkray.resources import rss_mib
+
+        while True:
+            rss = rss_mib()
+            if rss is not None:
+                log(f"memory: resident {rss:.1f} MiB")
+            threading.Event().wait(300)
+
+    monitor = threading.Thread(target=monitor_memory, name="memory-monitor", daemon=True)
+    monitor.start()
 
     import uvicorn
 

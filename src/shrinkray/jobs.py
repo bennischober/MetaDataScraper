@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from shrinkray.encode import cap_threads
 from shrinkray.quality import Cancelled
 
 
@@ -517,6 +518,7 @@ def execute_plan(
                 remove_bars=payload.get("remove_bars", False),
                 cancel=cancel,
                 db_file=_db_file_of(connection),
+                encoder_threads=cap_threads(config.handbrake_max_threads),
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -599,6 +601,7 @@ def execute_encode(
                 progress=progress,
                 cancel=cancel,
                 db_file=_db_file_of(connection),
+                encoder_threads=cap_threads(config.handbrake_max_threads),
             )
             outcome = record_quality_results(
                 connection, movie, result, config, payload.get("target_vmaf", 95.0)
@@ -637,6 +640,7 @@ def execute_encode(
             encoder=config.handbrake_encoder,
             overwrite=payload.get("overwrite", False),
             workers=payload.get("workers"),
+            max_threads=cap_threads(config.handbrake_max_threads),
             progress=progress,
         )
         fixed = record_fixed_results(connection, results, config)

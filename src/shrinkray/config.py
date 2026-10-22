@@ -11,6 +11,8 @@ DEFAULT_SEPARATOR = ";"
 DEFAULT_BLACK_BAR_MIN_WIDTH = 100
 DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
 DEFAULT_LANGUAGE = "en"
+DEFAULT_MAX_THREADS = 0  # 0 = use all cores
+DEFAULT_IDLE_PRIORITY = True
 
 
 class Conf:
@@ -50,6 +52,13 @@ class Conf:
         handbrake: dict[str, Any] = data.get("handbrake") or {}
         self.handbrake_preset: str = handbrake.get("preset", "Fast 1080p30")
         self.handbrake_encoder: str = handbrake.get("encoder", "x265")
+        # thread cap for the encoder (0 = use all cores); keeps cores free
+        # for a media server running next to the encode on a small machine
+        self.handbrake_max_threads: int = int(handbrake.get("max_threads", DEFAULT_MAX_THREADS))
+
+        # resources => how politely the engine behaves on a shared machine
+        resources: dict[str, Any] = data.get("resources") or {}
+        self.idle_priority: bool = bool(resources.get("idle_priority", DEFAULT_IDLE_PRIORITY))
 
 
 _config: Conf | None = None
@@ -82,4 +91,9 @@ def load_config(root: str | Path | None = None) -> Conf:
         log_warning(f"Config file not found at '{path}', using default values!")
 
     _config = Conf(data)
+    # the resource policy rides along: every entry point loads the config
+    # once, so every entry point also inherits the same politeness
+    from shrinkray.resources import apply as apply_resources
+
+    apply_resources(_config)
     return _config

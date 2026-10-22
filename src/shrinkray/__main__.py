@@ -14,6 +14,7 @@ from rich.table import Table
 
 from shrinkray import db
 from shrinkray.config import load_config
+from shrinkray.encode import cap_threads
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
@@ -360,6 +361,15 @@ def encode(
             "1 = sequential). Each encode gets a share of the CPU threads."
         ),
     ),
+    threads: int = typer.Option(
+        0,
+        "--threads",
+        min=0,
+        help=(
+            "Per-encode thread cap (0 = all cores). Keeps cores free for "
+            "a media server or desktop work during long encodes."
+        ),
+    ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
@@ -383,6 +393,7 @@ def encode(
             target_vmaf,
             remove_bars,
             workers,
+            threads,
             db_file,
         )
     finally:
@@ -400,6 +411,7 @@ def _record_encodes(
     target_vmaf,
     remove_bars,
     workers,
+    threads,
     db_file,
 ):
     """Runs the encoding and records the results in the database.
@@ -439,6 +451,7 @@ def _record_encodes(
                     encoder=config.handbrake_encoder,
                     remove_bars=remove_bars,
                     db_file=db_file,
+                    encoder_threads=cap_threads(threads or config.handbrake_max_threads),
                 )
                 if result.success:
                     saved = result.saved_percent
@@ -471,6 +484,7 @@ def _record_encodes(
             dry_run=dry_run,
             overwrite=overwrite,
             workers=workers if workers > 0 else None,
+            max_threads=cap_threads(threads or config.handbrake_max_threads),
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
@@ -504,6 +518,12 @@ def plan(
     remove_bars: bool = typer.Option(
         False, "--remove-bars", help="Include black-bar removal in the plan."
     ),
+    threads: int = typer.Option(
+        0,
+        "--threads",
+        min=0,
+        help="Per-encode thread cap for the probes (0 = all cores).",
+    ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
@@ -523,6 +543,8 @@ def plan(
         _, movies, _ = scan_movies(path, config, connection=connection)
     finally:
         connection.close()
+
+    threads_cap = cap_threads(threads or config.handbrake_max_threads)
 
     table = Table(
         title=f"Encode plan for {len(movies)} movies (target VMAF {target_vmaf})",
@@ -546,6 +568,7 @@ def plan(
                 encoder=config.handbrake_encoder,
                 remove_bars=remove_bars,
                 db_file=db_file,
+                encoder_threads=threads_cap,
             )
         except (RuntimeError, FileNotFoundError) as e:
             table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
@@ -710,6 +733,7 @@ def watch_mode(
             remove_bars=remove_bars,
             encoder=load_config().handbrake_encoder,
             poll_interval=float(poll),
+            max_threads=cap_threads(load_config().handbrake_max_threads),
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))

@@ -3,9 +3,11 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from shrinkray import config as config_helper
 from shrinkray import db, encode, helpers, jobs, quality
@@ -68,6 +70,59 @@ class TestHelpers(unittest.TestCase):
         # without category => empty first column
         row = helpers.generate_string(item, ";", False)
         self.assertTrue(row.startswith(";Test;"))
+
+
+class TestResources(unittest.TestCase):
+    """Resource politeness: priority spawn kwargs, kill switch, RSS."""
+
+    def test_spawn_kwargs_respects_kill_switch(self):
+        """idle_priority=False disables the polite spawn kwargs."""
+        from shrinkray import resources
+
+        with mock.patch.object(resources, "_IDLE_PRIORITY", True):
+            kwargs = resources.spawn_kwargs()
+            if os.name == "nt":
+                self.assertIn("creationflags", kwargs)
+            else:
+                self.assertEqual(kwargs, {})
+        with mock.patch.object(resources, "_IDLE_PRIORITY", False):
+            self.assertEqual(resources.spawn_kwargs(), {})
+
+    def test_rss_mib_sane(self):
+        """The RSS is a plausible number (10 MiB .. 4 GiB) or None."""
+        from shrinkray.resources import rss_mib
+
+        rss = rss_mib()
+        if rss is not None:
+            self.assertGreaterEqual(rss, 10.0)
+            self.assertLess(rss, 4096.0)
+
+    def test_config_applies_resource_policy(self):
+        """load_config honors resources.idle_priority (and resets cleanly)."""
+        from shrinkray import resources
+
+        old = config_helper._config
+        old_priority = resources._IDLE_PRIORITY
+        try:
+            config_helper._config = None
+            config = config_helper.Conf(
+                {"resources": {"idle_priority": False}, "handbrake": {"max_threads": 6}}
+            )
+            self.assertFalse(config.idle_priority)
+            self.assertEqual(config.handbrake_max_threads, 6)
+            resources.apply(config)
+            self.assertFalse(resources._IDLE_PRIORITY)
+            config_on = config_helper.Conf({})
+            self.assertTrue(config_on.idle_priority)
+            self.assertEqual(config_on.handbrake_max_threads, 0)
+        finally:
+            config_helper._config = old
+            resources._IDLE_PRIORITY = old_priority
+
+    def test_conf_defaults(self):
+        conf = config_helper.Conf({})
+        self.assertEqual(conf.handbrake_max_threads, 0)
+        self.assertTrue(conf.idle_priority)
 
 
 class TestReadMedia(unittest.TestCase):
@@ -172,6 +227,55 @@ class TestEncode(unittest.TestCase):
         self.assertIn("--aencoder", command)
         self.assertNotIn("--audio", command)
         self.assertIn("--optimize", command)
+
+    def test_cap_threads(self):
+        """The thread cap normalizes 0/None/negative to uncapped."""
+        self.assertIsNone(encode.cap_threads(None))
+        self.assertIsNone(encode.cap_threads(0))
+        self.assertIsNone(encode.cap_threads(-3))
+        self.assertEqual(encode.cap_threads(8), 8)
+
+    def test_build_command_with_thread_cap(self):
+        command = encode.build_command(
+            "hb",
+            Path("in.mkv"),
+            Path("out.mkv"),
+            "Fast 1080p30",
+            "x265",
+            encoder_threads=8,
+        )
+        self.assertIn("--encopts", command)
+        self.assertIn("threads=8", command)
+        # uncapped: no encopts at all
+        plain = encode.build_command("hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", "x265")
+        self.assertNotIn("--encopts", plain)
+
+    def test_encode_movies_max_threads_tightens_share(self):
+        """The configured cap wins when tighter than the parallel CPU share."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            with (
+                tempfile.TemporaryDirectory() as out,
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode._encode_with_command") as enc,
+            ):
+                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
+                    input=i, output=o, success=True
+                )
+                # workers=2 on 16 cores would give a big share; the cap must win
+                encode.encode_movies(
+                    [source],
+                    Path(out),
+                    preset="Fast 1080p30",
+                    encoder="x265",
+                    workers=2,
+                    max_threads=4,
+                )
+                command = enc.call_args[0][2]
+        self.assertIn("--encopts", command)
+        self.assertIn("threads=4", command)
 
     def test_saved_percent(self):
         result = encode.EncodeResult(
@@ -771,6 +875,8 @@ class TestDb(unittest.TestCase):
             self.assertIn("watcher", body["status"])
             self.assertIn("queue", body["status"])
             self.assertIn("database", body["status"])
+            # self-monitoring: the app reports its own memory
+            self.assertIn("rss_mib", body["status"])
             # the library is fully present on the first call
             self.assertIsInstance(body["library"], list)
             movie = next(m for m in body["library"] if m["name"] == "snap")
@@ -1291,6 +1397,24 @@ class TestQuality(unittest.TestCase):
             "hb.exe", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
         )
         self.assertEqual(plain[plain.index("--crop") + 1], "0:0:0:0")
+
+    def test_build_encode_command_threads(self):
+        """The quality pipeline passes the cap via --encopts threads=N."""
+        command = quality.build_encode_command(
+            "hb",
+            Path("in.mkv"),
+            Path("out.mkv"),
+            20,
+            "x265",
+            "medium",
+            encoder_threads=6,
+        )
+        self.assertIn("--encopts", command)
+        self.assertIn("threads=6", command)
+        plain = quality.build_encode_command(
+            "hb", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
+        )
+        self.assertNotIn("--encopts", plain)
 
 
 class TestReport(unittest.TestCase):

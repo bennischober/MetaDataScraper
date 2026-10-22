@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from shrinkray import resources
 from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
@@ -335,9 +336,15 @@ def _run(
         tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
     """
     if cancel is None:
-        proc = subprocess.run(command, capture_output=True, cwd=cwd)
+        proc = subprocess.run(command, capture_output=True, cwd=cwd, **resources.spawn_kwargs())
         return proc.returncode, proc.stderr.decode(errors="replace").strip()
-    popen = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+    popen = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        **resources.spawn_kwargs(),
+    )
     assert popen.stdout is not None and popen.stderr is not None
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
@@ -487,6 +494,7 @@ def build_encode_command(
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
+    encoder_threads: int | None = None,
 ) -> list[str]:
     """Builds the HandBrakeCLI command for a quality-driven encode.
 
@@ -502,6 +510,8 @@ def build_encode_command(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars (top, bottom, left, right) to remove
             baked-in black bars. None keeps the source resolution.
+        encoder_threads (int | None): Thread limit for the encoder
+            (None = no limit). Keeps cores free for other work.
 
     Returns:
         list[str]: The command as argument list.
@@ -519,6 +529,9 @@ def build_encode_command(
         "--quality",
         str(crf),
     ]
+    if encoder_threads is not None:
+        # HandBrakeCLI has no thread flag; x264/x265 take it via --encopts
+        command += ["--encopts", f"threads={encoder_threads}"]
     if crop is not None:
         top, bottom, left, right = crop
         # HandBrake crop order is top:bottom:left:right
@@ -876,6 +889,7 @@ def probe_crf(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
@@ -894,6 +908,8 @@ def probe_crf(
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match the final encode's cap).
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
@@ -907,7 +923,14 @@ def probe_crf(
         _check_cancel(cancel)
         encoded = workdir / f"probe_crf{crf}_{index}.mkv"
         command = build_encode_command(
-            handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
+            handbrake,
+            sample,
+            encoded,
+            crf,
+            encoder,
+            encoder_preset,
+            crop=crop,
+            encoder_threads=encoder_threads,
         )
         code, err = _run(command, cancel=cancel)
         if code == -1:
@@ -935,6 +958,7 @@ def estimate_size_factor(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -965,7 +989,14 @@ def estimate_size_factor(
     sample = samples[0]
     encoded = workdir / f"size_probe_crf{crf}.mkv"
     command = build_encode_command(
-        handbrake, sample, encoded, crf, encoder, encoder_preset, crop=crop
+        handbrake,
+        sample,
+        encoded,
+        crf,
+        encoder,
+        encoder_preset,
+        crop=crop,
+        encoder_threads=encoder_threads,
     )
     code, err = _run(command, cancel=cancel)
     if code == -1:
@@ -994,6 +1025,7 @@ def find_optimal_crf(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -1011,6 +1043,9 @@ def find_optimal_crf(
             probes and the decision, matching the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match the final encode's cap).
 
     Returns:
         tuple: The chosen CRF, the VMAF measured at that CRF and all probes.
@@ -1039,6 +1074,7 @@ def find_optimal_crf(
             hdr=hdr,
             cancel=cancel,
             db_file=db_file,
+            encoder_threads=encoder_threads,
         )
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
         return vmaf >= target_vmaf
@@ -1063,6 +1099,7 @@ def find_optimal_crf_and_skip(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -1082,6 +1119,11 @@ def find_optimal_crf_and_skip(
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
+        hdr (bool): Tone-map both sides for the VMAF measurement.
+        cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match the final encode's cap).
 
     Returns:
         tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
@@ -1103,6 +1145,7 @@ def find_optimal_crf_and_skip(
         crop=crop,
         cancel=cancel,
         db_file=db_file,
+        encoder_threads=encoder_threads,
     )
     if factor >= 1.0:
         log(
@@ -1125,6 +1168,7 @@ def find_optimal_crf_and_skip(
         hdr=hdr,
         cancel=cancel,
         db_file=db_file,
+        encoder_threads=encoder_threads,
     )
     return chosen, achieved, probes, False
 
@@ -1140,6 +1184,7 @@ def plan_quality(
     remove_bars: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1160,6 +1205,8 @@ def plan_quality(
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file, used to locate the logs
             directory for failure evidence (None => cwd metadata.db).
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match a later encode's cap).
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -1292,6 +1339,7 @@ def _probe_movie(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -1307,6 +1355,8 @@ def _probe_movie(
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match the final encode's cap).
 
     Returns:
         tuple: The chosen CRF, its VMAF, all probes and the crop bars
@@ -1347,6 +1397,7 @@ def _probe_movie(
             hdr=hdr,
             cancel=cancel,
             db_file=db_file,
+            encoder_threads=encoder_threads,
         )
         if skip:
             raise SkipEncode("re-encode would not shrink the file")
@@ -1399,6 +1450,7 @@ def encode_with_quality(
     progress=None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    encoder_threads: int | None = None,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1423,6 +1475,8 @@ def encode_with_quality(
             between probe steps; the final encode aborts by termination).
         db_file (Path | None): The database file, used to locate the logs
             directory for failure evidence (None => cwd metadata.db).
+        encoder_threads (int | None): Thread limit for the probe encodes
+            AND the final encode (None = no limit).
 
     Returns:
         QualityResult: The result of the encode.
@@ -1492,6 +1546,7 @@ def encode_with_quality(
         "x265_10bit" if hdr else encoder,
         encoder_preset,
         crop=crop,
+        encoder_threads=encoder_threads,
     )
     if progress is None:
         code, err = _run(command, cancel=cancel)

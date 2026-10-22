@@ -268,12 +268,26 @@ Optional [config.json](config.json) (defaults are used when missing):
     },
     "handbrake": {
         "preset": "Fast 1080p30",   // fixed-mode preset
-        "encoder": "x265"
+        "encoder": "x265",
+        "max_threads": 0            // per-encode thread cap (0 = all cores)
+    },
+    "resources": {
+        "idle_priority": true       // encodes run below normal priority
     },
     "codec": { "hdr": { "color_space": [], "color_transfer": [] } },
     "language": "en"
 }
 ```
+
+**Resource politeness** (why the defaults are what they are): encodes and
+quality probes run **below normal priority** — they yield instantly to
+whatever else the machine is doing (a movie night on the same box, the
+media server you will eventually run next to this). Set
+`resources.idle_priority: false` to give encodes full priority again.
+`handbrake.max_threads` caps each encode's threads (e.g. `8` on a 16-core
+mini PC leaves half the machine for Jellyfin). The resident app also logs
+its own memory every 5 minutes (`memory: resident 42.0 MiB`) — staying
+lean is a measured fact here, not an aspiration.
 
 ## Development
 

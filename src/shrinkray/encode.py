@@ -9,9 +9,26 @@ from pathlib import Path
 
 from rich.progress import Progress
 
+from shrinkray import resources
 from shrinkray.logger import log, log_error
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
+
+
+def cap_threads(max_threads: int | None) -> int | None:
+    """Normalizes a configured thread cap into an encoder thread count.
+
+    Args:
+        max_threads (int | None): The configured cap (0 or None = no cap;
+            negative values are also treated as no cap).
+
+    Returns:
+        int | None: The thread count for HandBrake's --encopts threads=N,
+            None when uncapped.
+    """
+    if max_threads is None or max_threads <= 0:
+        return None
+    return max_threads
 
 
 @dataclass
@@ -216,7 +233,7 @@ def _encode_with_command(
     stderr_chunks: list[bytes] = []
     try:
         if progress is None:
-            proc = subprocess.run(command, capture_output=True)
+            proc = subprocess.run(command, capture_output=True, **resources.spawn_kwargs())
             returncode = proc.returncode
             stderr_bytes = proc.stderr
         else:
@@ -224,6 +241,7 @@ def _encode_with_command(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                **resources.spawn_kwargs(),
             )
             assert popen.stdout is not None and popen.stderr is not None
 
@@ -411,6 +429,7 @@ def encode_movies(
     dry_run: bool = False,
     overwrite: bool = False,
     workers: int | None = None,
+    max_threads: int | None = None,
     progress=None,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
@@ -429,6 +448,9 @@ def encode_movies(
         workers (int | None): Number of concurrent encodes (1 = sequential,
             None = automatic: 1, since a single x265 encode already scales
             across all cores).
+        max_threads (int | None): Per-encode thread cap (None/0 = all cores).
+            With workers > 1 the cap only applies when it is tighter than
+            the per-encode CPU share.
         progress (callable | None): Callback progress(dict) for live updates
             of the running encode's percentage.
 
@@ -484,13 +506,18 @@ def encode_movies(
                 f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
                 "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
             )
+        # the configured cap wins over the share when it is tighter; the
+        # share only matters for parallel encodes sharing the machine
+        cap = cap_threads(max_threads)
+        if threads is not None and (cap is None or cap > threads):
+            cap = threads
         command = build_command(
             handbrake,
             movie,
             output_file,
             preset,
             encoder,
-            encoder_threads=threads,
+            encoder_threads=cap,
         )
         return _encode_with_command(movie, output_file, command, progress=progress)
 

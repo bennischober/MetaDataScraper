@@ -16,7 +16,16 @@
       new path while the old row ages out; a hash match could reconnect the
       encode history instead of starting fresh
 
-### API/polling (optional — only if the system grows)
+### API/polling (optional - only if the system grows)
+- [x] Resource politeness (shipped 2026-10-22): long children (encodes,
+      probes, VMAF measurements) spawn below normal priority
+      (Windows creation flag / POSIX niceness via resources.py), configurable
+      via `resources.idle_priority` (default on); `handbrake.max_threads`
+      caps per-encode threads (CLI `--threads`, config, resident app, watch
+      loop); the resident app logs its own RSS every 5 min and exposes
+      `rss_mib` in /api/status + /api/snapshot. Reason: the long-term target
+      is a NAS/mini media server next to Plex/Jellyfin - the tool must be a
+      polite guest there
 - [ ] Delta library sync via `GET /api/snapshot?since=<iso>`: today's snapshot
       is fingerprint-skip (unchanged library = null, changed = the WHOLE
       library re-sent — no row-level deltas). The `since=` variant would send
