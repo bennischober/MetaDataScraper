@@ -803,7 +803,10 @@ def reveal(request: RevealRequest):
     folder = str(path.parent)
     try:
         if os.name == "nt":
-            os.startfile(folder)
+            # getattr because mypy's linux stubs lack os.startfile (windows-only API)
+            startfile = getattr(os, "startfile", None)
+            if startfile is not None:
+                startfile(folder)
         elif sys.platform == "darwin":
             subprocess.run(["open", folder], check=False, timeout=10)
         else:
