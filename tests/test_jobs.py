@@ -460,6 +460,29 @@ class TestApiPathValidation(unittest.TestCase):
             validate_path(str(self.root / ".." / "elsewhere"))
         self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_validate_path_rejects_symlink_escape(self):
+        """A symlink INSIDE an allowed root pointing OUTSIDE it must be
+        rejected: realpath resolves the link first, so the containment check
+        sees the real target (the case a real attacker would use)."""
+        from fastapi import HTTPException
+
+        from shrinkray.app import validate_path
+
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks unavailable on this platform")
+        target_dir = Path(self.root.parent) / "outside-target"
+        target_dir.mkdir(exist_ok=True)
+        secret = target_dir / "secret.txt"
+        secret.write_bytes(b"x")
+        link = self.root / "innocent.txt"
+        try:
+            link.symlink_to(secret)
+        except OSError:  # e.g. no symlink privilege on windows CI
+            self.skipTest("cannot create symlinks on this platform")
+        with self.assertRaises(HTTPException) as ctx:
+            validate_path(str(link))
+        self.assertEqual(ctx.exception.status_code, 403)
+
     def test_validate_path_rejects_empty(self):
         from fastapi import HTTPException
 

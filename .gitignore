@@ -82,6 +82,7 @@ report.html
 ISSUES.md
 
 .opencode
+.omo
 
 # local test media: the folder is part of the repository, its contents never are
 # (`test_media/` alone would ignore the directory itself, so the README exception
