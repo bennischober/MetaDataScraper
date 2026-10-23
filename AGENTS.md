@@ -160,6 +160,24 @@ feature needs one of them:
 
 Multiple agents (and humans) work in this repository concurrently.
 
+- **Claim an issue before you start working on it.** Assign it to yourself as the
+  first action, before the first edit:
+
+  ```sh
+  gh issue edit <number> --add-assignee @me
+  ```
+
+  An assigned issue is work in progress; an unassigned one is free to take. This is
+  the only coordination channel that works across separate checkouts, separate agent
+  sessions and separate humans — a local branch name is invisible to everyone else.
+  Pick an unassigned issue, or one already assigned to you. If it is assigned to
+  somebody else, do not start: leave it, and pick a different one.
+- **When you stop, say where it stands.** If the issue is finished and merged,
+  close it. If you are handing off mid-way, leave the assignment in place and write
+  a comment on the issue saying what is done and what is left, so the next agent
+  resumes instead of restarting. Unassign only if you are abandoning it.
+- **One issue, one agent.** Do not assign yourself a second issue while one is still
+  assigned to you and unfinished — the point of the claim is that it means something.
 - **Do not touch files you did not "own" in the current task** unless you
   have read them first. Uncommitted changes in the working tree belong to
   whoever is working — check `git status` before any `git add -A` or
@@ -174,7 +192,8 @@ Multiple agents (and humans) work in this repository concurrently.
 ## Autonomy
 
 - Work through the task list without stopping to ask what comes next;
-  `TODO.md` records agreed next steps and known limitations.
+  `TODO.md` records agreed next steps and known limitations. Work that is
+  already filed as a GitHub issue lives there, not in `TODO.md`.
 - Prefer sensible defaults over questions; document the choice you made.
   Ask only for: irreversible or destructive actions, missing credentials,
   or genuinely ambiguous product direction.
