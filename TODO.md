@@ -73,14 +73,20 @@ Remaining liveness gap (out of scope here, deliberate):
       mode had a latent TypeError: the rich Progress object was passed as
       the callback and is not callable).
 
-### Verification & health (after the reliability wave)
-- [ ] Verify-after-encode hook: optional `--verify` flag running a short
-      full-file VMAF check after each quality encode (sub-sampled
-      `n_subsample` for very large files) - turns the one-time
-      verification (scripts/verify_fullmovie.py) into a standing property
-- [ ] `shrinkray doctor`: library health check - ffprobe every db row,
-      report dead paths, truncated files, outputs without sources
-      (mostly reuses existing primitives)
+### Verification & health (DONE 2026-10-23)
+- [x] Verify-after-encode hook (`bf69da1`): opt-in `--verify` (CLI) /
+      `verify` (API payload) runs a full-file VMAF check after each
+      quality encode - the ground-truth companion to the sample-based
+      `achieved_vmaf`. Sub-sampled 1/10 above 2 GB output
+      (`VERIFY_SUBSAMPLE_THRESHOLD_BYTES`); crop + HDR tone-map inherited;
+      a verification failure is non-fatal (the encode stands, verified_vmaf
+      stays None). Schema v8: `verified_vmaf`, `verified_at`,
+      `verified_subsample`. Watch mode deliberately excluded (the inbox
+      automation must not silently pay hours of verification).
+- [x] `shrinkray doctor` (`97bc2b9`): read-only library health check -
+      dead paths (with soft-missing counters), vanished encode outputs,
+      optional `--probe-all` corruption sweep; findings table + exit 1
+      for scripts/cron. Live-smoked both exits.
 
 ### Workflow (needs design + explicit user sign-off - closest we ever came to touching sources)
 - [ ] Swap-in-place (`--replace`): completes the loop between "encode done"
