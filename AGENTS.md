@@ -55,7 +55,11 @@ is sacred — source files are never modified in place.
   one file per source module (`test_encode.py`, `test_quality.py`,
   `test_watch.py`, `test_db.py`, `test_report.py`, `test_cli.py`,
   `test_jobs.py`, `test_dedupe.py`, `test_resources.py`,
-  `test_media.py`, `test_misc.py`). New features need tests; bug fixes
+  `test_media.py`, `test_misc.py`). Opt-in smoke tests against the real
+  binaries live in `tests/test_smoke.py` — skipped unless
+  `SHRINKRAY_SMOKE=1` is set AND ffmpeg/HandBrakeCLI are on PATH (they
+  never run in CI or the default gate; run them explicitly after changes
+  to the probe/encode/watchdog paths). New features need tests; bug fixes
   need a test that would have caught the bug. Tests must not require
   ffmpeg/HandBrake binaries or network access — mock or use `tmp_path`
   fixtures. Tests that touch the filesystem or path scopes use **real
