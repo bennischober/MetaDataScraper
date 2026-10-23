@@ -5,6 +5,7 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1679,6 +1680,117 @@ class TestWatch(unittest.TestCase):
             junk = Path(tmp) / "junk.mkv"
             junk.write_bytes(b"not a movie")
             self.assertEqual(decide(junk, 95.0, False, "x265"), "encode")
+
+    def test_watch_pass_encodes_with_quality(self):
+        """The watch loop encodes via the quality engine (same skip rules,
+        same CRF search as CLI/jobs) - not the old fixed-preset path."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")
+            # past the stability grace period (the watch loop would defer it)
+            old = time.time() - 3600
+            os.utime(movie, (old, old))
+            captured: dict = {}
+
+            def fake_quality(movie, output_file, **kwargs):
+                captured["kwargs"] = kwargs
+                captured["output"] = output_file
+                return QualityResult(
+                    input=movie,
+                    output=output_file,
+                    success=True,
+                    chosen_crf=22,
+                    achieved_vmaf=95.2,
+                    input_size=100,
+                    output_size=40,
+                )
+
+            with (
+                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.integrations.notify_after_encodes") as notify,
+                mock.patch("shrinkray.watch.load_config"),
+                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+            ):
+                watch_mod.watch(inbox, out, once=True)
+            # quality engine got the movie with the thread cap and wrote
+            # into the watch output dir
+            self.assertEqual(captured["output"], out / "movie.mkv")
+            self.assertIn("encoder_threads", captured["kwargs"])
+            notify.assert_called_once()
+
+    def test_watch_pass_reports_quality_skip(self):
+        """A quality skip (no size gain / unreachable) is surfaced as a
+        skip log, not an encode error."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")
+            # past the stability grace period (the watch loop would defer it)
+            old = time.time() - 3600
+            os.utime(movie, (old, old))
+
+            def fake_quality(movie, output_file, **kwargs):
+                return QualityResult(
+                    input=movie,
+                    output=output_file,
+                    success=False,
+                    skipped_reason="no size gain",
+                )
+
+            with (
+                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.integrations.notify_after_encodes") as notify,
+                mock.patch("shrinkray.watch.load_config"),
+                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+            ):
+                watch_mod.watch(inbox, out, once=True)
+            notify.assert_not_called()
+
+    def test_watch_pass_retries_when_busy(self):
+        """A busy encode slot (CLI/job running) retries the movie on the
+        next pass instead of failing it."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+        from shrinkray.encode_lock import EncodeBusyError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")
+            # past the stability grace period (the watch loop would defer it)
+            old = time.time() - 3600
+            os.utime(movie, (old, old))
+
+            def busy(movie, output_file, **kwargs):
+                raise EncodeBusyError(f"another encode is running in '{out}'")
+
+            with (
+                mock.patch("shrinkray.watch.encode_with_quality", side_effect=busy),
+                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+            ):
+                # must not raise: the movie is eligible again next pass
+                watch_mod.watch(inbox, out, once=True)
 
 
 class TestAdaptivePoll(unittest.TestCase):

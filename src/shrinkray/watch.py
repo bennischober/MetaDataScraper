@@ -15,18 +15,13 @@ from shrinkray.config import load_config
 from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
-    encode_movies,
+    cap_threads,
     find_handbrake,
     probe_duration_seconds,
 )
-from shrinkray.encode_lock import EncodeBusyError
+from shrinkray.encode_lock import EncodeBusyError, guard_encodes
 from shrinkray.logger import log, log_error
-from shrinkray.quality import (
-    DEFAULT_CRF_RANGE,
-    DEFAULT_TARGET_VMAF,
-    SkipEncode,
-    _probe_movie,
-)
+from shrinkray.quality import DEFAULT_TARGET_VMAF, encode_with_quality
 
 # a file is stable when its size is unchanged between two checks ...
 STABLE_CHECK_INTERVAL = 30.0
@@ -111,17 +106,22 @@ def is_stable(path: Path) -> bool:
 def decide(movie: Path, target_vmaf: float, remove_bars: bool, encoder: str) -> str:
     """Decides what to do with a movie without encoding it.
 
-    Applies the same rules as the encode command: duration minimum,
-    skip-if-no-size-gain and skip-if-target-unreachable.
+    Applies only the CHEAP pre-checks (duration minimum, binary presence);
+    the skip decisions that need probing (no size gain, target unreachable)
+    happen inside encode_with_quality, which reports them via
+    skipped_reason. This used to run the full probe here and then discard
+    the CRF - double probe cost for nothing.
 
     Args:
         movie (Path): The movie file.
-        target_vmaf (float): The VMAF quality floor.
-        remove_bars (bool): Whether bar removal is enabled.
-        encoder (str): The video encoder.
+        target_vmaf (float): The VMAF quality floor (unused here since the
+            quality search owns the skip rules; kept for signature
+            compatibility).
+        remove_bars (bool): Unused here (same reason).
+        encoder (str): The video encoder (unused here, same reason).
 
     Returns:
-        str: 'encode' or the skip reason.
+        str: 'encode' or a cheap skip reason.
     """
     duration = probe_duration_seconds(movie)
     if duration is None:
@@ -134,25 +134,6 @@ def decide(movie: Path, target_vmaf: float, remove_bars: bool, encoder: str) -> 
     handbrake = find_handbrake()
     if handbrake is None:
         return f"'{HANDBRAKE_BINARY}' not found"
-
-    try:
-        _probe_movie(
-            movie,
-            target_vmaf,
-            DEFAULT_CRF_RANGE,
-            sample_count=3,
-            sample_seconds=10.0,
-            encoder=encoder,
-            encoder_preset="medium",
-            remove_bars=remove_bars,
-        )
-    except SkipEncode as e:
-        message = str(e)
-        return "target unreachable" if "unreachable" in message else "no size gain"
-    except RuntimeError:
-        # probing failed (e.g. corrupt media) => surface as encode attempt;
-        # the encode itself will fail loudly and be reported
-        return "encode"
     return "encode"
 
 
@@ -247,26 +228,47 @@ def watch(
                 if decision != "encode":
                     log(f"Skipping '{movie.name}': {decision}.")
                     continue
-                log(f"Encoding '{movie.name}'...")
+                # quality mode, same engine path as the CLI and jobs: the
+                # CRF search decides skip-vs-encode (no size gain, target
+                # unreachable) and reports it via skipped_reason. Watch used
+                # to encode a fixed preset here - the inbox automation
+                # produced worse files than the manual path.
                 try:
-                    results = encode_movies(
-                        [movie],
-                        output_dir,
-                        preset="Fast 1080p30",
-                        encoder=encoder,
-                        overwrite=False,
-                        max_threads=max_threads,
-                    )
+                    # hold the encode slot: encode_with_quality does not
+                    # take it itself; a running CLI/job encode makes the
+                    # watcher retry this movie on the next pass
+                    with guard_encodes(output_dir, holder="watch"):
+                        result = encode_with_quality(
+                            movie,
+                            output_dir / movie.name,
+                            target_vmaf=target_vmaf,
+                            remove_bars=remove_bars,
+                            encoder=encoder,
+                            encoder_threads=cap_threads(max_threads),
+                        )
                 except EncodeBusyError as e:
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
                     known.discard(str(movie.resolve()))  # eligible again next pass
                     continue
-                log(f"Done: '{movie.name}' (source left untouched).")
-                if any(r.success for r in results):
+                if result.skipped_reason:
+                    log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                elif result.success:
+                    saved = (
+                        (1 - result.output_size / result.input_size) * 100
+                        if result.input_size > 0 and result.output_size > 0
+                        else 0.0
+                    )
+                    log(
+                        f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
+                        f"(VMAF {result.achieved_vmaf}), "
+                        f"{saved:.1f}% saved (source left untouched)."
+                    )
                     # opt-in tap on the media server's shoulder (fire-and-forget)
                     from shrinkray.integrations import notify_after_encodes
 
                     notify_after_encodes(load_config(), [movie])
+                else:
+                    log_error(f"Encoding '{movie.name}' failed: {result.error}")
 
             sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
             if once:
