@@ -82,3 +82,9 @@ report.html
 ISSUES.md
 
 .opencode
+
+# local test media: the folder is part of the repository, its contents never are
+# (`test_media/` alone would ignore the directory itself, so the README exception
+# could not apply; `/*` ignores everything inside, subfolders included)
+/test_media/*
+!/test_media/README.md
