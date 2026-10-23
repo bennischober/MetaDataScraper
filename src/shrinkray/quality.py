@@ -104,6 +104,11 @@ DEFAULT_SAMPLE_SECONDS = 10.0
 # some builds (frame queue limit), so stay on the safe side
 MAX_VMAF_THREADS = 8
 
+# full-file verification sub-samples above this output size (n_subsample=10:
+# every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
+# a sub-sampled pass minutes, the score stays honest
+VERIFY_SUBSAMPLE_THRESHOLD_BYTES = 2 * 1024**3
+
 # a detected bar smaller than this percentage of the dimension is noise
 MIN_BAR_PERCENT = 2.0
 # blackness threshold for cropdetect (0-255); 24 matches ffmpeg's default
@@ -296,6 +301,8 @@ class QualityResult:
     encoder_preset: str | None = None
     encode_seconds: float | None = None
     probe_seconds: float | None = None
+    verified_vmaf: float | None = None
+    verified_subsample: int | None = None
     hdr: bool = False
     tool_versions: str | None = None
     input_width: int | None = None
@@ -583,6 +590,7 @@ def build_vmaf_command(
     style: str | None = None,
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
+    subsample: int | None = None,
 ) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
@@ -610,6 +618,11 @@ def build_vmaf_command(
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             the reference input to match the distorted geometry.
         hdr (bool): Tone-map both inputs to SDR (PQ/bt2020 sources).
+        subsample (int | None): libvmaf n_subsample divisor: measure only
+            every Nth frame (None/0/1 = every frame). Full-file verification
+            of a 2-hour movie decodes EVERYTHING (hours); a sub-sampled pass
+            (e.g. 10) cuts it to minutes while keeping the score honest
+            (the sampled frames stay the SAME ones the probes never saw).
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
@@ -622,6 +635,8 @@ def build_vmaf_command(
         model_option = "model_path=vmaf_v0.6.1.json"
 
     vmaf = f"libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}"
+    if subsample and subsample > 1:
+        vmaf += f":n_subsample={int(subsample)}"
 
     # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
     # -> back to video levels (validated on real HDR10 content)
@@ -684,6 +699,7 @@ def measure_vmaf(
     hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
+    subsample: int | None = None,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
@@ -701,6 +717,8 @@ def measure_vmaf(
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file, used to locate the logs
             directory for failure evidence (None => cwd metadata.db).
+        subsample (int | None): libvmaf n_subsample divisor (None = every
+            frame). Used by the post-encode verification for large files.
 
     Returns:
         float: The mean VMAF score.
@@ -718,8 +736,11 @@ def measure_vmaf(
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
+    command = build_vmaf_command(
+        distorted, reference, threads, crop=crop, hdr=hdr, subsample=subsample
+    )
     code, err = _run(
-        build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr),
+        command,
         cwd=workdir,
         cancel=cancel,
     )
@@ -733,7 +754,7 @@ def measure_vmaf(
         save_failure(
             db_file=db_file or Path("metadata.db"),
             kind="vmaf-measure",
-            command=build_vmaf_command(distorted, reference, threads, crop=crop, hdr=hdr),
+            command=command,
             stderr=err,
             workdir=workdir,
             artifacts=["vmaf.json"],
@@ -742,6 +763,7 @@ def measure_vmaf(
                 "reference": str(reference),
                 "hdr": hdr,
                 "crop": crop,
+                "subsample": subsample,
                 "returncode": code,
             },
         )
@@ -1475,6 +1497,7 @@ def encode_with_quality(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
+    verify: bool = False,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1501,6 +1524,9 @@ def encode_with_quality(
             directory for failure evidence (None => cwd metadata.db).
         encoder_threads (int | None): Thread limit for the probe encodes
             AND the final encode (None = no limit).
+        verify (bool): Run a full-file VMAF verification after a successful
+            encode (opt-in: hours of decode for a large movie; sub-sampled
+            1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
 
     Returns:
         QualityResult: The result of the encode.
@@ -1614,6 +1640,47 @@ def encode_with_quality(
             error=encode_result.error,
         )
     # success path: skip the verification below (already done)
+    verified_vmaf: float | None = None
+    verified_subsample: int | None = None
+    if verify:
+        # full-file verification: the ground-truth companion to the
+        # sample-based probes. Sub-sample very large files (n_subsample
+        # measures every Nth frame - hours of full decode become minutes)
+        # while keeping the score honest: the sampled frames are still the
+        # COMPLETE movie's frames, not the probe windows the CRF search
+        # already saw. A verification failure does NOT invalidate the
+        # encode (it measured fine at probe time) - it surfaces in the
+        # result and the record, never as a hard error.
+        output_size = output_file.stat().st_size
+        verified_subsample = 10 if output_size > VERIFY_SUBSAMPLE_THRESHOLD_BYTES else None
+        try:
+            verify_workdir = Path(tempfile.mkdtemp(prefix="shrinkray_verify_"))
+            try:
+                verified_vmaf = measure_vmaf(
+                    output_file,
+                    input_file,
+                    verify_workdir,
+                    crop=crop,
+                    hdr=hdr,
+                    cancel=cancel,
+                    db_file=db_file,
+                    subsample=verified_subsample,
+                )
+            finally:
+                shutil.rmtree(verify_workdir, ignore_errors=True)
+            log(
+                f"Verified '{input_file.name}': full-file VMAF "
+                f"{verified_vmaf:.2f}"
+                + (f" (sub-sampled 1/{verified_subsample})" if verified_subsample else "")
+                + f" vs target {target_vmaf}"
+            )
+        except Cancelled:
+            raise
+        except (RuntimeError, ValueError) as e:
+            log_error(f"Verification of '{input_file.name}' failed (non-fatal): {e}")
+            verified_vmaf = None
+            verified_subsample = None
+
     return QualityResult(
         input=input_file,
         output=output_file,
@@ -1622,6 +1689,8 @@ def encode_with_quality(
         chosen_crf=crf,
         achieved_vmaf=achieved,
         probes=probes,
+        verified_vmaf=verified_vmaf,
+        verified_subsample=verified_subsample,
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
         encoder_preset=encoder_preset,

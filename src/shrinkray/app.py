@@ -139,6 +139,7 @@ class JobRequest(BaseModel):
         target_vmaf (float): The VMAF quality floor.
         remove_bars (bool): Crop stable baked-in black bars.
         overwrite (bool): Re-encode already encoded movies.
+        verify (bool): Full-file VMAF verification after each quality encode.
         workers (int | None): Concurrent encodes (fixed mode).
         rescan (bool): Ignore the scan cache.
         hash (bool): Compute content hashes while scanning.
@@ -152,6 +153,7 @@ class JobRequest(BaseModel):
     target_vmaf: float = Field(95.0, ge=1.0, le=100.0)
     remove_bars: bool = False
     overwrite: bool = False
+    verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
     rescan: bool = False
     hash: bool = False
@@ -594,6 +596,7 @@ def create_job(request: JobRequest):
         payload["remove_bars"] = request.remove_bars
         payload["overwrite"] = request.overwrite
         payload["workers"] = request.workers
+        payload["verify"] = request.verify
     elif request.kind == JobKind.PLAN:
         payload["target_vmaf"] = request.target_vmaf
         payload["remove_bars"] = request.remove_bars

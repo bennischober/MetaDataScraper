@@ -138,7 +138,7 @@ def save_encode(
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
     if generation is None:
         generation = derive_generation(connection, movie)
-    db.add_encode(
+    return db.add_encode(
         connection,
         file_id,
         preset,
@@ -163,6 +163,25 @@ def save_encode(
         source_file=source_file,
         output_file=output_file,
         generation=generation,
+    )
+
+
+def save_verification(connection, encode_id: int, result) -> None:
+    """Attaches a quality result's verification data to its encode row.
+
+    Args:
+        connection: The database connection.
+        encode_id (int): The encode row id (from save_encode).
+        result (QualityResult): The engine result (verified_vmaf and
+            verified_subsample are read from it; None => no-op).
+    """
+    if getattr(result, "verified_vmaf", None) is None:
+        return
+    db.record_verification(
+        connection,
+        encode_id,
+        float(result.verified_vmaf),
+        getattr(result, "verified_subsample", None),
     )
 
 
@@ -233,7 +252,7 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
         EncodeOutcome: What happened (encoded / skipped / failed).
     """
     if result.success:
-        save_encode(
+        encode_id = save_encode(
             connection,
             movie,
             f"VMAF>{target_vmaf}",
@@ -257,6 +276,7 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
             source_file=str(movie.resolve()),
             output_file=str(result.output.resolve()) if result.output else None,
         )
+        save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True)
     if result.skipped_reason is not None:
         save_skip(connection, movie, result.skipped_reason)

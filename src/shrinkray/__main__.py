@@ -352,6 +352,15 @@ def encode(
             "crop them away (irreversible, opt-in)."
         ),
     ),
+    verify: bool = typer.Option(
+        False,
+        "--verify",
+        help=(
+            "Quality mode: measure the FULL output file against the source "
+            "after each encode (ground truth beyond the 10s probes; "
+            "sub-sampled 1/10 for files > 2 GB). Slow for large libraries."
+        ),
+    ),
     workers: int = typer.Option(
         0,
         "--workers",
@@ -393,6 +402,7 @@ def encode(
             quality,
             target_vmaf,
             remove_bars,
+            verify,
             workers,
             threads,
             db_file,
@@ -437,6 +447,7 @@ def _record_encodes(
     quality,
     target_vmaf,
     remove_bars,
+    verify,
     workers,
     threads,
     db_file,
@@ -453,6 +464,7 @@ def _record_encodes(
         quality (bool): Use VMAF-driven quality mode.
         target_vmaf (float): VMAF quality floor for quality mode.
         remove_bars (bool): Crop stable baked-in black bars (quality mode).
+        verify (bool): Full-file VMAF verification after each encode.
         workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
     """
@@ -512,7 +524,13 @@ def _record_encodes(
                             db_file=db_file,
                             encoder_threads=cap_threads(threads or config.handbrake_max_threads),
                             progress=quality_progress,
+                            verify=verify,
                         )
+                        if result.success and result.verified_vmaf is not None:
+                            console.print(
+                                f"[green]Verified '{movie.name}': full-file VMAF "
+                                f"{result.verified_vmaf:.2f}[/green]"
+                            )
                     if result.success:
                         saved = result.saved_percent
                         change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"

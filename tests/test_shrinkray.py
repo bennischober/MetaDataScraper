@@ -1582,6 +1582,72 @@ class TestDb(unittest.TestCase):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
 
+    def test_verification_recorded_in_db(self):
+        """record_quality_results persists verified_vmaf/subsample on the
+        encode row (schema v8 columns)."""
+        import tempfile
+
+        from shrinkray import service
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            result = QualityResult(
+                input=movie,
+                output=root / "enc" / "movie.mkv",
+                success=True,
+                target_vmaf=95.0,
+                chosen_crf=22,
+                achieved_vmaf=95.4,
+                input_size=1000,
+                output_size=400,
+                verified_vmaf=94.9,
+                verified_subsample=10,
+            )
+            outcome = service.record_quality_results(
+                self.connection, movie, result, config_helper.Conf(), 95.0
+            )
+            self.assertTrue(outcome.encoded)
+            file_id = self.connection.execute(
+                "SELECT id FROM files WHERE path = ?", (str(movie),)
+            ).fetchone()["id"]
+            row = self.connection.execute(
+                "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes "
+                "WHERE file_id = ?",
+                (file_id,),
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertAlmostEqual(row["verified_vmaf"], 94.9)
+            self.assertEqual(row["verified_subsample"], 10)
+            self.assertIsNotNone(row["verified_at"])
+
+    def test_verification_without_data_is_noop(self):
+        """A result without verification data must not touch the row (every
+        non-verify encode goes through the same record path)."""
+        import tempfile
+
+        from shrinkray import service
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            result = QualityResult(
+                input=movie,
+                output=root / "enc" / "movie.mkv",
+                success=True,
+                input_size=1000,
+                output_size=400,
+            )
+            service.record_quality_results(
+                self.connection, movie, result, config_helper.Conf(), 95.0
+            )
+            row = self.connection.execute("SELECT verified_vmaf FROM encodes").fetchone()
+            self.assertIsNone(row["verified_vmaf"])
+
     def test_prune_missing_scoped(self):
         # a scan of one root must not wipe the history of files outside it
         # (real tmp paths: fictional drives are relative paths on linux/CI)
@@ -2949,6 +3015,7 @@ class TestEncodeLock(unittest.TestCase):
                         quality=True,
                         target_vmaf=95.0,
                         remove_bars=False,
+                        verify=False,
                         workers=1,
                         threads=None,
                         db_file=db_file,
@@ -2958,6 +3025,94 @@ class TestEncodeLock(unittest.TestCase):
                 captured["progress"]({"stage": "encode", "percent": 10.0, "movie": "movie.mkv"})
             finally:
                 connection.close()
+
+    def test_build_vmaf_command_subsample(self):
+        """n_subsample lands in the filtergraph only when > 1 (None/0/1
+        measure every frame)."""
+        from shrinkray.quality import build_vmaf_command
+
+        cmd = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern", subsample=10)
+        self.assertIn("n_subsample=10", " ".join(cmd))
+        plain = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern")
+        self.assertNotIn("n_subsample", " ".join(plain))
+        one = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern", subsample=1)
+        self.assertNotIn("n_subsample", " ".join(one))
+
+    def test_encode_with_quality_verify_runs_measurement(self):
+        """verify=True measures the OUTPUT against the SOURCE after the
+        encode; a measurement failure is non-fatal (the encode stands)."""
+        import tempfile
+
+        from shrinkray.quality import encode_with_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "in.mkv"
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            out = out_dir / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
+                stub.chmod(0o755)
+
+            measured: list = []
+
+            def fake_measure(distorted, reference, workdir, **kwargs):
+                measured.append((distorted, reference, kwargs.get("subsample")))
+                return 94.5
+
+            with (
+                mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
+                mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.quality.measure_vmaf", side_effect=fake_measure),
+                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+            ):
+                result = encode_with_quality(src, out, progress=None, verify=True)
+            self.assertTrue(result.success)
+            # measured OUTPUT vs SOURCE
+            self.assertEqual(len(measured), 1)
+            self.assertEqual(measured[0][0], out)
+            self.assertEqual(measured[0][1], src)
+            self.assertEqual(result.verified_vmaf, 94.5)
+
+    def test_encode_with_quality_verify_failure_nonfatal(self):
+        """A failed verification never invalidates the encode (it measured
+        fine at probe time): success stays true, verified_vmaf stays None."""
+        import tempfile
+
+        from shrinkray.quality import encode_with_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "in.mkv"
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            out = out_dir / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
+                stub.chmod(0o755)
+            with (
+                mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
+                mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch(
+                    "shrinkray.quality.measure_vmaf",
+                    side_effect=RuntimeError("ffmpeg exploded"),
+                ),
+                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+            ):
+                result = encode_with_quality(src, out, progress=None, verify=True)
+            self.assertTrue(result.success)
+            self.assertIsNone(result.verified_vmaf)
 
     def test_check_disk_space_insufficient(self):
         """free < required => ok=False with a descriptive message."""
