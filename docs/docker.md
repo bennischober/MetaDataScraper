@@ -1,9 +1,10 @@
 # Docker deployment (proposal - not built yet)
 
-Status: **proposal**. Recorded 2026-10-23 after a friend asked for
-"mount /media, scheduled, done". Nothing below is implemented; this file
-is the single place to keep an eye on the idea, the trade-offs and the
-open decisions. Build only after explicit sign-off.
+Status: **target install shape**. Recorded 2026-10-23, promoted from
+"proposal" the same day when the product direction was set: ShrinkRay is meant
+to run as a container on a server, pointed at a media folder, unattended. The
+Dockerfile is still unbuilt — this file keeps the trade-offs and open
+decisions in one place. Tracked as GitHub issue #34.
 
 ## The ask
 
@@ -17,8 +18,8 @@ A good fit that is not free. ShrinkRay is subprocess-driven (ffprobe,
 ffmpeg, HandBrakeCLI), headless-capable, stateless except sqlite +
 config, and already a polite guest (nice, thread caps, pid/encode
 locks, WAL). All of that ports cleanly into a container. What does not
-port for free: trash semantics, ownership/permissions, and the
-"second artifact to keep fresh" cost. Details below.
+port for free: ownership/permissions and the "second artifact to keep
+fresh" cost. Details below.
 
 ## Why the container fits
 
@@ -41,13 +42,12 @@ port for free: trash semantics, ownership/permissions, and the
    as some UID that must read/write the bind mount. On Synology/QNAP
    this is the classic PUID/PGID dance (linuxserver-style images solve
    it with s6 / entrypoint user-fixing). Needs a deliberate design.
-2. **Trash/recycle semantics break.** The deletion safety net is the
-   host recycle bin (send2trash, same-filesystem requirement). A
-   container's trash is inside the container FS - useless. To keep the
-   safety net, the trash dir must come from a host bind mount on the
-   same filesystem as the library. This also feeds the D1
-   swap-in-place design (`--replace` trashes the source - inside a
-   container that has to be a mounted host trash).
+2. **Trash/recycle semantics break.** No longer applicable: ShrinkRay does not
+   delete source files at all, and the only `send2trash` user (the duplicates
+   delete route) is being removed. Retained originals are ordinary files on the
+   library volume, so they work in a container without a host trash mount. This
+   also simplifies the swap-in-place design — the original is renamed aside, not
+   trashed.
 3. **Scheduling becomes deployment, not code.** Watcher (preferred:
    stability checks, adaptive backoff) or cron both work in-container;
    either way some logic moves into the friend's runtime. Needs docs.
@@ -81,9 +81,11 @@ port for free: trash semantics, ownership/permissions, and the
 
 ## Open decisions (needed before building)
 
-1. **Trash story in containers:** host-mounted trash on the same
-   filesystem (required for send2trash), or "no delete actions in
-   container mode" (safety net removed, scan-only + encode)?
+1. **Trash story in containers:** no longer a decision. ShrinkRay never deletes a
+   source; replaced originals are renamed aside and retained, so no host trash
+   mount is needed. The remaining question is where retained originals live (a
+   subdirectory of the library, or a configured path) and how the operator is
+   told they can be removed.
 2. **PUID/PGID:** fixed non-root user in the image (simple, needs
    `--user` discipline) vs entrypoint-driven user fixing
    (linuxserver-style, more magic)?
@@ -128,7 +130,7 @@ services:
     volumes:
       - /media:/media          # the library (read/write for encodes)
       - ./config:/config       # config.json + metadata.db
-      - ./trash:/var/lib/trash # host trash on the same filesystem
+      - ./retained:/retained   # originals renamed aside, awaiting manual removal
 ```
 
 Entrypoint modes: `serve` (resident app: dashboard + jobs), `watch`
@@ -149,5 +151,6 @@ or crond). Default: `serve`.
 - deploy/shrinkray.service - the existing systemd path (works today)
 - TODO.md - pointer kept under Linux/NAS deployment
 - TODO.md Decisions - the no-PyInstaller decision this extends
-- D1 swap-in-place (--replace) - trash semantics are shared between
-  both designs; decide them together
+- GitHub issue #35 (swap-in-place with a retained original) - decides where
+  retained originals live, which sets whether the volume story needs a separate
+  mount. Decide the two together.
