@@ -76,3 +76,9 @@ testdata/
 
 # generated reports
 report.html
+
+# local scratch: working notes kept out of the repository on purpose
+# (ticket bodies live on GitHub; this file is a personal index, not source)
+ISSUES.md
+
+.opencode
