@@ -2,6 +2,57 @@
 
 ## Known limitations / planned work
 
+### Reliability wave (planned 2026-10-23 - the core loop's last honesty gaps)
+- [ ] A1 Interrupted-encode debris: a crashed/killed encode leaves a partial
+      output file (non-empty, truncated). `encode_movies`' resume filter
+      treats "output exists" as done => the movie is skipped forever and a
+      corrupt file sits in the output dir. Fix: hold the encode slot BEFORE
+      filtering (a concurrent encoder's in-flight output must not be
+      mistaken for debris), then on existing output verify duration
+      (`durations_match`): match => genuinely done, skip; mismatch =>
+      debris from an interrupted run, remove and re-encode. ffprobe absent
+      => stay conservative (skip, never delete on unverifiable).
+- [ ] A2 Disk-space preflight: nothing checks free space before encoding;
+      a 100 GB remux onto a 25 GB-free drive fails 90 min in. Fix:
+      `shutil.disk_usage` at run start (sum of pending input sizes as the
+      worst-case bound) and in `encode_with_quality` (input size); error
+      when free < required, warn below 1.5x. Degrade gracefully when the
+      drive is unreadable.
+- [ ] A3 Watch mode still encodes fixed-preset ("Fast 1080p30") while the
+      whole product went quality mode - the inbox automation encodes worse
+      than the manual path. `decide()` even runs the full probe and then
+      throws the CRF away (double probe cost). Fix: decide() keeps only the
+      cheap checks (duration, binary), the loop calls `encode_with_quality`
+      (same skip rules, reported via skipped_reason), notify hook unchanged.
+- [ ] A4 CLI quality encodes run silent (`progress=None`): a 4-hour encode
+      is a motionless wall. The streaming percent plumbing exists
+      (`_encode_with_command`); the CLI quality loop just never passes a
+      callback. Fix: rich Progress per movie - "Probing..." until the first
+      percent event, then a live bar.
+
+### Verification & health (after the reliability wave)
+- [ ] Verify-after-encode hook: optional `--verify` flag running a short
+      full-file VMAF check after each quality encode (sub-sampled
+      `n_subsample` for very large files) - turns the one-time
+      verification (scripts/verify_fullmovie.py) into a standing property
+- [ ] `shrinkray doctor`: library health check - ffprobe every db row,
+      report dead paths, truncated files, outputs without sources
+      (mostly reuses existing primitives)
+
+### Workflow (needs design + explicit user sign-off - closest we ever came to touching sources)
+- [ ] Swap-in-place (`--replace`): completes the loop between "encode done"
+      and "library shrunk" (today the swap is manual). Would verify =>
+      trash source (recoverable) => move output into place. MUST have
+      ceremony: explicit flag, per-file confirmation in the UI, dry-run
+      mapping first. Nothing gets built before the user approves the design.
+
+### CI/testing hygiene (small)
+- [ ] Tests for `compare` and `report` commands (compare was live-smoked
+      only)
+- [ ] `uv lock --check` in CI (catch lockfile drift)
+- [ ] CI concurrency group (two quick pushes currently run parallel full
+      runs)
+
 ### Decisions (2026-10-22)
 - [x] **Releases are changelog-written.** Every tag gets real release
       notes assembled from the cycle's history (CHANGELOG.md is the
