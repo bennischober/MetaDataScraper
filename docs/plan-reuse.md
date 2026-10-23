@@ -49,7 +49,8 @@ approximation.
 - table `plans`: one row per file (upsert replaces the previous plan;
   plan history stays in the job payloads). Columns: file_id (FK files),
   chosen_crf, achieved_vmaf, crop (nullable), probes (JSON),
-  skipped_reason, input_mtime, input_size, encoder, encoder_preset,
+  skipped_reason, estimated_size (the size prediction; NULL for skips),
+  input_mtime, input_size, encoder, encoder_preset,
   target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
   remove_bars, created_at.
 - `encodes` gains `crf_source` (nullable TEXT: 'plan' | 'probe') and
@@ -72,3 +73,8 @@ Probing is usually the minor share of a quality run — this saves tens of
 minutes per movie (the plan's ~6 min on Lilyhammer), not hours. The
 second encode of an unchanged file with unchanged settings performs zero
 probe encodes.
+
+The stored plan is also the detail page's prediction display:
+GET /api/movie carries the plan (with a file-level staleness flag), so
+the page shows what a future encode would do — predictions labeled as
+predictions, measurements as measurements.
