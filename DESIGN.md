@@ -218,6 +218,10 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 
 **The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "2h 14m"), and an absent value is an em-dash (`—`), never blank or zero. Growth is reported honestly: an encode that enlarged the file prints "+X.X% larger" in red, not a masked percentage.
 
+**The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `MBit/s`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
+
+**The Signed Delta Rule.** Comparisons print signed and colored (`−41.2% size · +3.8 VMAF`), never parenthesized prose — polarity must be readable without parsing: teal when the change is good (smaller, better quality), red when it is not. Matches the battle-proven diff-view convention (size-report bots, codec dashboards).
+
 ## Layout
 
 The console is a fixed shell plus a content column: `display: flex` on the root, a **190px sidebar rail** (sticky, full viewport height, `--rail` ground, 1px right seam, padding `18px 12px`, gap 20px) and a **main column** (`flex: 1`, `max-width: 1500px`, padding `20px 26px 40px`, gap 14px). The rail reads top to bottom: brand stamp, section nav, then (pinned to the foot) the theme toggle and watcher toggle.

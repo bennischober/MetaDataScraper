@@ -234,7 +234,7 @@
     if (firstStep.br != null && lastStep?.br != null) {
       const f = firstStep.derived ? '~' : ''
       const l = lastStep.derived ? '~' : ''
-      return `bitrate ${f}${firstStep.br.toFixed(1)} → ${l}${lastStep.br.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
+      return `bitrate ${f}${firstStep.br.toFixed(1)} → ${l}${lastStep.br.toFixed(1)} Mbps across ${driftSlots.length} encodes`
     }
     return `${driftSlots.length} encodes, oldest → newest`
   })
@@ -244,20 +244,23 @@
   const distinctGenerations = $derived(
     new Set(encodesDesc.map((r) => r.generation ?? 1)).size
   )
-  /** Deltas between consecutive encodes (newest vs its predecessor). */
-  function delta(current: EncodeRecord, previous: EncodeRecord | null): string {
-    if (!previous) return ''
-    const parts: string[] = []
+  /** Deltas between consecutive encodes (newest vs its predecessor).
+   * Returns structured parts so the markup can sign AND color them —
+   * parenthesized prose made polarity a parse job (round-6.9 review:
+   * the battle-proven form is signed+colored, like every diff view). */
+  function deltaParts(current: EncodeRecord, previous: EncodeRecord | null): { text: string; good: boolean }[] {
+    if (!previous) return []
+    const parts: { text: string; good: boolean }[] = []
     if (previous.output_size && current.output_size) {
       const diff = current.output_size - previous.output_size
       const pct = (diff / previous.output_size) * 100
-      parts.push(`${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% size`)
+      parts.push({ text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% size`, good: diff <= 0 })
     }
     if (previous.vmaf != null && current.vmaf != null) {
       const d = current.vmaf - previous.vmaf
-      parts.push(`${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(1)} VMAF`)
+      parts.push({ text: `${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(1)} VMAF`, good: d >= 0 })
     }
-    return parts.length ? `(${parts.join(', ')})` : ''
+    return parts
   }
 </script>
 
@@ -333,7 +336,7 @@
                 <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf)}%"></span>
                 <span class="gauge-target" style="left: {targetVmaf}%"></span>
               </span>
-              <span class="mono measured">{encode.vmaf.toFixed(2)}</span>
+              <span class="mono measured">{encode.vmaf.toFixed(1)}</span>
             {:else}
               <!-- no gauge for an unmeasured row: an empty instrument track
                    next to the dash read as a broken meter (round-5) -->
@@ -464,7 +467,7 @@
               <span
                 class="num"
                 title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}
-                aria-label={rec.input_bitrate != null ? `bitrate ${rec.input_bitrate.toFixed(1)} to ${rec.output_bitrate?.toFixed(1)} MBit/s, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
+                aria-label={rec.input_bitrate != null ? `bitrate ${rec.input_bitrate.toFixed(1)} to ${rec.output_bitrate?.toFixed(1)} Mbps, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
               >
                 {#if rec.input_bitrate != null && rec.output_bitrate != null}
                   {rec.input_bitrate.toFixed(1)} → {rec.output_bitrate.toFixed(1)}
@@ -477,7 +480,15 @@
               <span class="num">{fmtGb(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
-              <span class="delta dim" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">{i < encodesDesc.length - 1 ? delta(rec, encodesDesc[i + 1]) : 'first run'}</span>
+              <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
+                {#if i < encodesDesc.length - 1}
+                  {#each deltaParts(rec, encodesDesc[i + 1]) as part, pi (pi)}
+                    <span class="mono" class:good={part.good} class:bad={!part.good}>{part.text}</span>{pi < deltaParts(rec, encodesDesc[i + 1]).length - 1 ? ' · ' : ''}
+                  {/each}
+                {:else}
+                  <span class="dim">first run</span>
+                {/if}
+              </span>
             </div>
           {/each}
         </div>
@@ -677,7 +688,11 @@
   }
   /* the row that produced the file being viewed */
   .gen.current { color: var(--teal-ink); border-color: var(--teal); }
-  .delta { text-align: right; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .delta { text-align: right; font-size: 10px; white-space: nowrap; }
+  /* signed, colored deltas: teal = the change is good (smaller, better),
+     red = it is not — polarity readable without parsing prose */
+  .delta .good { color: var(--teal-ink); }
+  .delta .bad { color: var(--red); }
 
   @media (max-width: 820px) {
     /* same min-content clamp as the overview's 640px rule (round-6 P1
