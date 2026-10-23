@@ -47,6 +47,10 @@
 - [ ] Swap-permission check (Send2Trash needs write access to the trash of
       the library's filesystem - same-mount trash only) and systemd unit
       smoke on real hardware. WSL rehearsal passed 2026-10-22.
+- [ ] Docker image (proposal, friend request "mount /media + scheduled"):
+      full trade-off map, open decisions (trash story, PUID/PGID, registry)
+      and the proposed commit series live in docs/docker.md. Build only
+      after explicit sign-off.
 
 ### Blocked
 - [ ] Dolby Vision dual-layer handling (the DV enhancement layer may be lost
