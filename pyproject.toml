@@ -56,6 +56,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrinkray"]
+# ship the marker so downstream users get the annotations (PEP 561)
+[tool.hatch.build.targets.wheel.force-include]
+"src/shrinkray/py.typed" = "shrinkray/py.typed"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -90,10 +93,27 @@ select = [
     "SIM", # flake8-simplify
     "C4",  # flake8-comprehensions
     "RUF",
+    "S",   # flake8-bandit (security)
 ]
 ignore = [
     "E501", # line length handled by formatter
     "E741", # ambiguous variable names (dict, l, ...)
+    # --- flake8-bandit, reviewed 2026-10-23 ---
+    # S603/S607: every subprocess call uses an argument list (never a shell
+    # string) and resolves its binary from PATH on purpose, because ffmpeg and
+    # HandBrakeCLI are external dependencies the user installs. AGENTS.md
+    # mandates argument lists, so there is no untrusted-input path here.
+    "S603",
+    "S607",
+    # S101: asserts inside the encode pipeline are deliberate invariant
+    # checks on internal state, not input validation (never used for user input).
+    "S101",
+    # S324: md5 is used for ETag/change detection on file metadata, not for
+    # security. Replacing it with sha256 would cost CPU for no benefit.
+    "S324",
+    # S105: a false positive - DEFAULT_TOKEN_ENV is the NAME of an environment
+    # variable that holds a token, not a token value. The value is never in source.
+    "S105",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -101,6 +121,11 @@ ignore = [
 "src/shrinkray/__main__.py" = ["B008"]
 # FastAPI Depends() in defaults is the framework's intended usage
 "src/shrinkray/app.py" = ["B008"]
+# KNOWN ISSUE, tracked as #43: the Jellyfin notifier calls urlopen on a
+# user-configured URL, and a config write can point token_env at any environment
+# variable. Remove this ignore together with the integration (issue #43); do not
+# add new S310 sites here.
+"src/shrinkray/integrations.py" = ["S310"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["shrinkray"]
@@ -111,3 +136,6 @@ source = ["shrinkray"]
 
 [tool.coverage.report]
 show_missing = true
+# a floor so a regression is a visible failure instead of a slow slide;
+# raise it deliberately as coverage improves, never lower it to pass a PR
+fail_under = 70
