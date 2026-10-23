@@ -400,6 +400,32 @@ def encode(
         connection.close()
 
 
+def _quality_progress_callback(progress, task):
+    """Builds a progress callback for the quality engine (CLI variant).
+
+    The engine streams {'stage': 'encode', 'percent': 0-100, 'movie': name}
+    during the final encode; probing emits nothing => the bar's description
+    tells the probing stage until the first percent arrives.
+
+    Args:
+        progress: The rich Progress instance.
+        task: The task id created for the quality run.
+
+    Returns:
+        Callable[[dict], None]: The callback to hand to encode_with_quality.
+    """
+
+    def callback(data: dict) -> None:
+        if data.get("stage") == "encode" and "percent" in data:
+            progress.update(
+                task,
+                description=f"Encoding '{data.get('movie', 'movie')}'",
+                completed=float(data["percent"]),
+            )
+
+    return callback
+
+
 def _record_encodes(
     connection,
     movies,
@@ -447,19 +473,45 @@ def _record_encodes(
             from shrinkray.encode_lock import guard_encodes
 
             with guard_encodes(output_dir, holder="encode-cli"):
-                for movie in movies:
-                    if str(movie) in encoded_paths:
-                        log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
-                        continue
-                    result = encode_with_quality(
-                        movie,
-                        output_dir / movie.name,
-                        target_vmaf=target_vmaf,
-                        encoder=config.handbrake_encoder,
-                        remove_bars=remove_bars,
-                        db_file=db_file,
-                        encoder_threads=cap_threads(threads or config.handbrake_max_threads),
-                    )
+                # live progress for the whole quality run: a 4-hour encode
+                # must not look like a hang. The engine streams
+                # {'stage': 'encode', 'percent': ...} during the final
+                # encode; probing has no percent => the bar shows that stage
+                # as a spinning description.
+                from rich.progress import (
+                    BarColumn,
+                    Progress,
+                    SpinnerColumn,
+                    TextColumn,
+                    TimeElapsedColumn,
+                )
+
+                progress_columns = (
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(bar_width=None),
+                    TimeElapsedColumn(),
+                )
+                with Progress(*progress_columns, console=console, transient=True) as progress:
+                    progress_task = progress.add_task("Waiting for the first movie...", total=100)
+                    quality_progress = _quality_progress_callback(progress, progress_task)
+                    for movie in movies:
+                        if str(movie) in encoded_paths:
+                            log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
+                            continue
+                        progress.update(
+                            progress_task, description=f"Probing '{movie.name}'...", completed=0
+                        )
+                        result = encode_with_quality(
+                            movie,
+                            output_dir / movie.name,
+                            target_vmaf=target_vmaf,
+                            encoder=config.handbrake_encoder,
+                            remove_bars=remove_bars,
+                            db_file=db_file,
+                            encoder_threads=cap_threads(threads or config.handbrake_max_threads),
+                            progress=quality_progress,
+                        )
                     if result.success:
                         saved = result.saved_percent
                         change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"

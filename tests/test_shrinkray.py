@@ -2378,6 +2378,76 @@ class TestEncodeLock(unittest.TestCase):
                 results = encode.encode_movies([source], out_dir)
             self.assertEqual(len(results), 1)
 
+    def test_quality_progress_callback_maps_percent(self):
+        """The CLI progress callback maps engine percent events onto the
+        rich task (encoding description + completed percent)."""
+        from shrinkray.__main__ import _quality_progress_callback
+
+        updates: list[dict] = []
+
+        class FakeProgress:
+            def update(self, task, **kwargs):
+                updates.append(kwargs)
+
+        callback = _quality_progress_callback(FakeProgress(), "task1")
+        callback({"stage": "probe", "movie": "m.mkv"})  # must be ignored
+        callback({"stage": "encode", "percent": 42.31, "movie": "m.mkv"})
+        self.assertEqual(
+            updates,
+            [{"description": "Encoding 'm.mkv'", "completed": 42.31}],
+        )
+
+    def test_encode_quality_cli_passes_progress(self):
+        """The CLI quality path hands a progress callback to the engine (a
+        4-hour encode must not be silent)."""
+        import tempfile
+
+        from shrinkray.__main__ import _record_encodes
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db_file = root / "metadata.db"
+            connection = db.connect(db_file)
+            try:
+                captured: dict = {}
+
+                def fake_quality(movie_in, output_file, **kwargs):
+                    captured["progress"] = kwargs.get("progress")
+                    return QualityResult(
+                        input=movie_in,
+                        output=output_file,
+                        success=True,
+                        input_size=100,
+                        output_size=50,
+                    )
+
+                with (
+                    mock.patch("shrinkray.quality.encode_with_quality", side_effect=fake_quality),
+                    mock.patch("shrinkray.__main__.record_quality_results"),
+                ):
+                    _record_encodes(
+                        connection,
+                        [movie],
+                        root / "enc",
+                        config_helper.load_config(),
+                        dry_run=False,
+                        overwrite=False,
+                        quality=True,
+                        target_vmaf=95.0,
+                        remove_bars=False,
+                        workers=1,
+                        threads=None,
+                        db_file=db_file,
+                    )
+                # the CLI passed a callable, and calling it does not crash
+                self.assertTrue(callable(captured["progress"]))
+                captured["progress"]({"stage": "encode", "percent": 10.0, "movie": "movie.mkv"})
+            finally:
+                connection.close()
+
     def test_check_disk_space_insufficient(self):
         """free < required => ok=False with a descriptive message."""
         import tempfile
