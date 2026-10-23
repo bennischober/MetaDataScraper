@@ -432,7 +432,7 @@ def encode(
         connection.close()
 
 
-def _quality_progress_callback(progress: Progress, task: TaskID) -> Callable[[dict], None]:
+def _quality_progress_callback(progress: Progress, task: "TaskID") -> Callable[[dict], None]:
     """Builds a progress callback for the quality engine (CLI variant).
 
     The engine streams {'stage': 'encode', 'percent': 0-100, 'movie': name}
