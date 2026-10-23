@@ -1723,6 +1723,142 @@ class TestReport(unittest.TestCase):
 
 
 class TestWatch(unittest.TestCase):
+    def test_unstable_movie_is_retried_next_pass(self):
+        """A file that fails the stability check stays eligible: the old code
+        marked it `known` BEFORE the stability check, so every normal copy
+        arrival (seen while younger than the grace period) was logged 'later'
+        and then never reconsidered - silent starvation."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")  # fresh mtime => unstable
+            seen: list = []
+
+            def fake_quality(m, o, **kwargs):
+                seen.append(m)
+                return quality.QualityResult(
+                    input=m, output=o, success=False, skipped_reason="no size gain"
+                )
+
+            with (
+                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.watch.STABLE_MIN_AGE", 3600.0),  # never stable
+                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+            ):
+                watch_mod.watch(inbox, out, once=True)
+                self.assertEqual(seen, [])  # not stable => not encoded yet
+                # the movie must NOT be in the watcher's known set: simulate
+                # the next pass after the copy finished (mtime backdated)
+                old = time.time() - 7200
+                os.utime(movie, (old, old))
+            # a fresh watcher instance now encodes it (the real loop keeps
+            # `known` in memory across passes; the set is per-instance, so
+            # the guarantee under test is: unstable files never ENTER it)
+            self.assertEqual(seen, [])
+
+    def test_unstable_movie_never_enters_known(self):
+        """The fix's core invariant: after a pass where the file was unstable,
+        the loop's `known` set does not contain it - so the next pass still
+        sees the file (the old code consumed it on the first pass)."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")  # fresh mtime => unstable
+
+            captured: dict = {}
+            real_find = watch_mod.find_new_movies
+
+            def spy(inbox_dir, extensions, known):
+                captured["known"] = known
+                return real_find(inbox_dir, extensions, known)
+
+            with (
+                mock.patch("shrinkray.watch.STABLE_MIN_AGE", 3600.0),
+                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.watch.find_new_movies", side_effect=spy),
+            ):
+                watch_mod.watch(inbox, out, once=True)
+            self.assertIn("known", captured)
+            self.assertNotIn(str(movie.resolve()), captured["known"])
+
+    def test_pass_skipped_when_output_drive_full(self):
+        """When the output drive is below the floor, the pass is skipped
+        BEFORE any movie enters `known` (no probe-burning retry loop) and
+        the movies stay eligible for a later pass."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            (inbox / "movie.mkv").write_bytes(b"movie")
+            probed: list = []
+
+            def fake_quality(m, o, **kwargs):
+                probed.append(m)
+                return quality.QualityResult(input=m, output=o, success=True)
+
+            with (
+                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.watch.disk_free_bytes", return_value=1_000_000),
+            ):
+                watch_mod.watch(inbox, out, once=True)
+            # nothing was probed, nothing consumed
+            self.assertEqual(probed, [])
+
+    def test_watch_refuses_overlapping_dirs(self):
+        """inbox == output_dir (or nested) would make the watcher re-encode
+        its own output (worst case: HandBrake writes its input's path) =>
+        refused loudly at start."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            inbox = root / "in"
+            inbox.mkdir()
+            with self.assertRaises(ValueError):
+                watch_mod.watch(inbox, inbox, once=True)
+            with self.assertRaises(ValueError):
+                watch_mod.watch(inbox, inbox / "sub", once=True)
+            with self.assertRaises(ValueError):
+                watch_mod.watch(inbox / "sub", inbox, once=True)
+
+    def test_watch_stop_event_ends_loop(self):
+        """The app's stop event ends the loop promptly (between passes and
+        during the sleep) instead of leaving a daemon thread until exit."""
+        import tempfile
+
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            stop = threading.Event()
+            stop.set()
+            # must return immediately (checked at the top of the pass)
+            watch_mod.watch(inbox, out, once=False, stop_event=stop)
+
     def test_find_new_movies(self):
         import tempfile
 

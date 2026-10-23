@@ -8,14 +8,17 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from shrinkray.config import load_config
 from shrinkray.encode import (
+    DISK_FREE_FLOOR_BYTES,
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
     cap_threads,
+    disk_free_bytes,
     find_handbrake,
     probe_duration_seconds,
 )
@@ -162,6 +165,20 @@ def acquire_lock(lock_file: Path) -> bool:
         return False
 
 
+def _sleep_or_stop(seconds: float, stop_event: threading.Event | None) -> None:
+    """Sleeps up to seconds, returning early when the stop event fires.
+
+    Args:
+        seconds (float): The sleep duration.
+        stop_event (threading.Event | None): Cooperative stop; when set,
+            this returns immediately (the caller re-checks it).
+    """
+    if stop_event is not None:
+        stop_event.wait(seconds)
+    else:
+        time.sleep(seconds)
+
+
 def release_lock(lock_file: Path):
     """Releases the single-instance lock if this process holds it.
 
@@ -184,6 +201,7 @@ def watch(
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
     max_threads: int | None = None,
+    stop_event: threading.Event | None = None,
 ):
     """Watches the inbox and encodes newly arrived movies.
 
@@ -197,17 +215,34 @@ def watch(
         target_vmaf (float): The VMAF quality floor.
         remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
-        poll_interval (float): Seconds between inbox checks.
-        once (bool): One pass and return (for tests).
-        max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         poll_interval (float): Seconds between inbox checks (grows while the
             inbox stays idle, resets on any new candidate).
-        once (bool): Run a single pass and return (used by tests).
+        once (bool): One pass and return (for tests).
+        max_threads (int | None): Per-encode thread cap (None/0 = all cores).
+        stop_event (threading.Event | None): Cooperative stop for the resident
+            app (checked between passes; the running encode finishes first).
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
     lock_file = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
     sleep_interval = poll_interval
+
+    # misconfiguration guard: when the output lands inside the watched
+    # inbox, the next pass sees it as a new movie and re-encodes - for
+    # inbox == output_dir that means HandBrake writes its own INPUT's path
+    # (truncating the source mid-read, then A1 debris-removal on it).
+    # Overlap in either direction poisons the candidate set => refuse.
+    inbox_resolved = inbox.resolve()
+    output_resolved = output_dir.resolve()
+    if (
+        inbox_resolved == output_resolved
+        or inbox_resolved in output_resolved.parents
+        or (output_resolved in inbox_resolved.parents)
+    ):
+        raise ValueError(
+            "inbox and output_dir must be separate directories (the output "
+            f"must not live inside the inbox): inbox='{inbox}', output='{output_dir}'"
+        )
 
     if not acquire_lock(lock_file):
         log_error("Another watcher seems to be running (lock file exists).")
@@ -218,12 +253,38 @@ def watch(
 
     try:
         while True:
+            if stop_event is not None and stop_event.is_set():
+                log("Watch stopped (stop event set).")
+                return
+            # pass-level disk guard: a full output drive would burn a full
+            # CRF probe per candidate per pass (probe, watchdog cancel,
+            # retry next pass, repeat). Skipping the pass BEFORE anything
+            # enters `known` keeps the movies eligible for when space frees
+            # up, and the adaptive poll backs off meanwhile.
+            free = disk_free_bytes(output_dir)
+            if free is not None and free < DISK_FREE_FLOOR_BYTES:
+                log_error(
+                    f"Output drive nearly full: {free / (1024**3):.1f} GB free "
+                    f"(floor 1.0 GB) => waiting. Movies stay eligible; the "
+                    "watcher retries when space frees up."
+                )
+                if once:
+                    return
+                _sleep_or_stop(sleep_interval, stop_event)
+                continue
             candidates = find_new_movies(inbox, extensions, known)
             for movie in candidates:
-                known.add(str(movie.resolve()))
+                if stop_event is not None and stop_event.is_set():
+                    log("Watch stopped (stop event set).")
+                    return
                 if not is_stable(movie):
+                    # NOT marked known: the file is still copying and stays
+                    # eligible (it must be reconsidered once stable - the
+                    # old code added it to `known` first and never looked
+                    # at it again, starving every normal copy arrival)
                     log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                     continue
+                known.add(str(movie.resolve()))
                 decision = decide(movie, target_vmaf, remove_bars, encoder)
                 if decision != "encode":
                     log(f"Skipping '{movie.name}': {decision}.")
@@ -275,7 +336,7 @@ def watch(
             sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
             if once:
                 return
-            time.sleep(sleep_interval)
+            _sleep_or_stop(sleep_interval, stop_event)
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
