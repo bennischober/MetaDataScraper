@@ -112,8 +112,10 @@ def record_plan(connection, movie, result, config) -> int | None:
         return None
     # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
     # engine overrides target/range and switches to the 10-bit encoder,
-    # so a plan of an HDR movie must be recorded under those values
-    encoder = "x265_10bit" if result.hdr else config.handbrake_encoder
+    # so a plan of an HDR movie must be recorded under those values. The
+    # result is the single source of truth for all of them (the engine's
+    # plan-reuse lookup matches on exactly this fingerprint)
+    encoder = result.encoder or config.handbrake_encoder
     return db.save_plan(
         connection,
         row["id"],
@@ -322,7 +324,10 @@ def record_quality_results(connection, movie, result, config) -> EncodeOutcome:
             # overrides it (DEFAULT_HDR_TARGET_VMAF), and the row must record
             # the target the encode was actually decided against
             f"VMAF>{result.target_vmaf}",
-            config.handbrake_encoder,
+            # the EFFECTIVE encoder, not the config's: for HDR the engine
+            # switched to the 10-bit variant, and a per-encoder drift or
+            # benchmark analysis would mix 8-bit and 10-bit rows otherwise
+            result.encoder or config.handbrake_encoder,
             result.input_size,
             result.output_size,
             chosen_crf=result.chosen_crf,

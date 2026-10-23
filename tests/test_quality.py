@@ -222,9 +222,11 @@ class TestPlanReuse(unittest.TestCase):
             encoder_preset="medium",
             remove_bars=False,
             crop=None,
-            crf_range=(14, 32),
+            crf_range=overrides.pop("crf_range", (14, 32)),
             sample_count=3,
             sample_seconds=10.0,
+            hdr=overrides.pop("hdr", False),
+            encoder=overrides.pop("encoder", "x265"),
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
         record_plan = overrides.pop("record_plan", service.record_plan)
@@ -356,6 +358,41 @@ class TestPlanReuse(unittest.TestCase):
         fake_probe.assert_called_once()
         self.assertEqual(result.chosen_crf, 20)
         self.assertEqual(result.crf_source, "probe")
+
+    def test_hdr_plan_reuses_after_engine_switches_to_10bit(self):
+        """An HDR plan is stored under the EFFECTIVE encoder (x265_10bit)
+        and a following encode of the same HDR file reuses it — regression:
+        plan results never carried hdr/encoder, so HDR plans were stored as
+        'x265' and the encode-side lookup (which matches on the overridden
+        encoder) never found them; every HDR encode re-probed from scratch.
+        See issues #26 and #24."""
+        movie = self._movie()
+        # plan_quality's write path: HDR override applied on the result
+        # (effective encoder x265_10bit, HDR target/range), stored via
+        # record_plan
+        self._store_plan(
+            movie,
+            target_vmaf=quality.DEFAULT_HDR_TARGET_VMAF,
+            chosen_crf=18,
+            achieved_vmaf=94.8,
+            crf_range=quality.DEFAULT_HDR_CRF_RANGE,
+            encoder="x265_10bit",
+            hdr=True,
+        )
+        row = self.connection.execute("SELECT encoder FROM plans").fetchone()
+        self.assertEqual(row["encoder"], "x265_10bit")
+        # the encode side: same HDR file => the engine switches to 10-bit
+        # and MUST find the plan under it
+        with (
+            patch.object(quality, "is_hdr_file", return_value=True),
+            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie)
+        fake_probe.assert_not_called()  # the plan replaces probing
+        self.assertEqual(result.crf_source, "plan")
+        self.assertEqual(result.chosen_crf, 18)
+        self.assertEqual(result.encoder, "x265_10bit")
 
 
 if __name__ == "__main__":

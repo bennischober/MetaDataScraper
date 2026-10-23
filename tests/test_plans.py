@@ -166,6 +166,7 @@ class TestRecordPlan(unittest.TestCase):
             remove_bars=False,
             encoder_preset="medium",
             hdr=False,
+            encoder="x265",
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
         plan_id = service.record_plan(self.connection, movie, result, config)
