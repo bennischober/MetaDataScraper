@@ -338,6 +338,34 @@ class TestWatch(unittest.TestCase):
                 # must not raise: the movie is eligible again next pass
                 watch_mod.watch(inbox, out, once=True)
 
+    def test_db_file_reaches_encode_with_quality(self):
+        """The db path given to watch() reaches encode_with_quality as
+        db_file= (stall-telemetry wiring; the watchdog fix scoped it to
+        the quality path only, watch mode was left without telemetry)."""
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")
+            seen: list = []
+
+            def fake_quality(m, o, **kwargs):
+                seen.append(kwargs.get("db_file"))
+                return quality.QualityResult(input=m, output=o, success=True)
+
+            # backdate the mtime: a fresh file is below STABLE_MIN_AGE and
+            # would never reach the encode call
+            old = time.time() - 7200
+            os.utime(movie, (old, old))
+
+            with mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality):
+                watch_mod.watch(inbox, out, once=True, db_file=Path(tmp) / "test.db")
+            self.assertEqual(seen, [Path(tmp) / "test.db"])
+
 
 class TestAdaptivePoll(unittest.TestCase):
     def test_idle_growth_caps_at_max(self):

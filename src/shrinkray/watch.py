@@ -202,6 +202,7 @@ def watch(
     once: bool = False,
     max_threads: int | None = None,
     stop_event: threading.Event | None = None,
+    db_file: Path | None = None,
 ):
     """Watches the inbox and encodes newly arrived movies.
 
@@ -221,6 +222,9 @@ def watch(
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         stop_event (threading.Event | None): Cooperative stop for the resident
             app (checked between passes; the running encode finishes first).
+        db_file (Path | None): The sqlite database file - enables the stall
+            watchdog's failure-bundle telemetry (None: no telemetry; the
+            CLI one-shot watch prints the reason instead).
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
@@ -306,6 +310,7 @@ def watch(
                             remove_bars=remove_bars,
                             encoder=encoder,
                             encoder_threads=cap_threads(max_threads),
+                            db_file=db_file,
                         )
                 except EncodeBusyError as e:
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")

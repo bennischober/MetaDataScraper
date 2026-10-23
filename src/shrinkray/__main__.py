@@ -576,6 +576,7 @@ def _record_encodes(
             overwrite=overwrite,
             workers=workers if workers > 0 else None,
             max_threads=cap_threads(threads or config.handbrake_max_threads),
+            db_file=db_file,
         )
         encoded_for_notify = [r.input for r in results if r.success]
     except (RuntimeError, FileNotFoundError) as e:
@@ -873,6 +874,7 @@ def watch_mode(
             encoder=load_config().handbrake_encoder,
             poll_interval=float(poll),
             max_threads=cap_threads(load_config().handbrake_max_threads),
+            db_file=DB_FILE,
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))

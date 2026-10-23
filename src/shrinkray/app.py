@@ -1170,6 +1170,7 @@ def watch_control(
                     poll_interval=60.0,
                     max_threads=cap_threads(load_config().handbrake_max_threads),
                     stop_event=s.watch_stop,
+                    db_file=s.db_file,
                 )
             except Exception as e:  # the thread must never die silently
                 log_error(f"watch loop crashed: {e}")

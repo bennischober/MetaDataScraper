@@ -67,8 +67,8 @@ class TestEncode(unittest.TestCase):
                 mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
                 mock.patch("shrinkray.encode._encode_with_command") as enc,
             ):
-                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
-                    input=i, output=o, success=True
+                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
+                    encode.EncodeResult(input=i, output=o, success=True)
                 )
                 # workers=2 on 16 cores would give a big share; the cap must win
                 encode.encode_movies(
@@ -320,6 +320,9 @@ class TestEncode(unittest.TestCase):
             self.assertIn(12.34, percents, f"percents: {percents}")
 
     def test_stall_watchdog_terminates_hung_child(self):
+        """No child output for stall_minutes => the engine terminates the
+        hung child itself, removes the partial and reports a FAILURE
+        (cancelled=False) so callers do not retry a stalling encode."""
         import tempfile
 
         from shrinkray import encode
@@ -424,6 +427,41 @@ class TestEncode(unittest.TestCase):
             self.assertFalse(result.cancelled)
             self.assertLess(elapsed, 15.0, f"orphan hang: returned after {elapsed:.1f}s")
             self.assertFalse(out.exists())
+
+    def test_stall_writes_telemetry_bundle(self):
+        """A stall kill with db_file leaves the evidence bundle in logs/
+        (regression: the stall path returned silently - logs/ never even
+        existed after one - and the child's collected stderr was
+        overwritten by the one-line stall message)."""
+        import tempfile
+
+        from shrinkray import encode
+        from shrinkray.telemetry import LOGS_DIRNAME
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            db_path = Path(tmp) / "test.db"
+            db_path.write_bytes(b"")  # logs/ is created next to it
+            stub = Path(tmp) / "hb_stub.cmd"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\nping -n 60 127.0.0.1 >nul\r\n")
+            else:
+                stub.write_bytes(b"#!/bin/sh\nsleep 60\n")
+                stub.chmod(0o755)
+            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+                result = encode._encode_with_command(
+                    src, out, [str(stub)], progress=lambda p: None, db_file=db_path
+                )
+            self.assertFalse(result.success)
+            self.assertFalse(result.cancelled)
+            bundles = list((db_path.parent / LOGS_DIRNAME).iterdir())
+            self.assertEqual(len(bundles), 1, f"expected one stall bundle: {bundles}")
+            # the bundle carries the stall reason AND the child's stderr
+            text = (bundles[0] / "stderr.txt").read_text(encoding="utf-8", errors="replace")
+            self.assertIn("stalled", text)
 
     def test_disk_watchdog_cancels_when_space_drops(self):
         """When free space on the output drive drops below the floor, the
@@ -574,8 +612,8 @@ class TestEncodeLock(unittest.TestCase):
                 mock.patch("shrinkray.encode.durations_match", return_value=False),
                 mock.patch("shrinkray.encode._encode_with_command") as enc,
             ):
-                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
-                    input=i, output=o, success=True
+                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
+                    encode.EncodeResult(input=i, output=o, success=True)
                 )
                 results = encode.encode_movies([source], out_dir)
             self.assertEqual(len(results), 1)
@@ -615,11 +653,33 @@ class TestEncodeLock(unittest.TestCase):
                 mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
                 mock.patch("shrinkray.encode._encode_with_command") as enc,
             ):
-                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
-                    input=i, output=o, success=True
+                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
+                    encode.EncodeResult(input=i, output=o, success=True)
                 )
                 results = encode.encode_movies([source], out_dir)
             self.assertEqual(len(results), 1)
+
+    def test_encode_movies_passes_db_file_for_stall_telemetry(self):
+        """The db path given to encode_movies reaches every
+        _encode_with_command call (fixed-mode jobs and CLI encode get the
+        stall watchdog's failure bundles, as quality mode already does)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            db_path = Path(tmp) / "test.db"
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode._encode_with_command") as enc,
+            ):
+                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
+                    encode.EncodeResult(input=i, output=o, success=True)
+                )
+                encode.encode_movies([source], out_dir, db_file=db_path)
+            self.assertEqual(enc.call_count, 1)
+            self.assertEqual(enc.call_args.kwargs.get("db_file"), db_path)
 
     def test_quality_progress_callback_maps_percent(self):
         """The CLI progress callback maps engine percent events onto the

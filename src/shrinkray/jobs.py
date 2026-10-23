@@ -800,6 +800,7 @@ def execute_encode(
                 workers=payload.get("workers"),
                 max_threads=cap_threads(config.handbrake_max_threads),
                 progress=progress,
+                db_file=_db_file_of(connection),
             )
         except EncodeBusyError as e:
             # another encoder owns the output dir (watch loop / CLI); the job

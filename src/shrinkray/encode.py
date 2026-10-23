@@ -766,6 +766,7 @@ def encode_movies(
     workers: int | None = None,
     max_threads: int | None = None,
     progress=None,
+    db_file: Path | None = None,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
 
@@ -788,6 +789,8 @@ def encode_movies(
             the per-encode CPU share.
         progress (callable | None): Callback progress(dict) for live updates
             of the running encode's percentage.
+        db_file (Path | None): The sqlite database file - enables the stall
+            watchdog's failure-bundle telemetry (None: no telemetry).
 
     Returns:
         list[EncodeResult]: The results of the encodes.
@@ -855,7 +858,9 @@ def encode_movies(
             raise RuntimeError(message)
         if message:
             log(f"Warning: {message}")
-        return _encode_pending(pending, preset, encoder, workers, max_threads, progress, results)
+        return _encode_pending(
+            pending, preset, encoder, workers, max_threads, progress, results, db_file=db_file
+        )
 
 
 def _encode_pending(
@@ -866,6 +871,7 @@ def _encode_pending(
     max_threads: int | None,
     progress,
     results: list[EncodeResult],
+    db_file: Path | None = None,
 ) -> list[EncodeResult]:
     """Runs the actual encode loop (the caller holds the encode slot).
 
@@ -877,6 +883,8 @@ def _encode_pending(
         max_threads (int | None): Per-encode thread cap.
         progress: The rich progress bar.
         results (list[EncodeResult]): The list to append results to.
+        db_file (Path | None): The sqlite database file - enables the stall
+            watchdog's failure-bundle telemetry (None: no telemetry).
 
     Returns:
         list[EncodeResult]: The results (same list as the results arg).
@@ -909,7 +917,9 @@ def _encode_pending(
         )
         # always stream: the streamed loop is the disk watchdog too (a
         # blocking subprocess.run would encode unwatched)
-        return _encode_with_command(movie, output_file, command, progress=percent_callback)
+        return _encode_with_command(
+            movie, output_file, command, progress=percent_callback, db_file=db_file
+        )
 
     with Progress() as progress:
         task = progress.add_task("Encoding movies", total=len(pending))
