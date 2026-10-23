@@ -142,6 +142,22 @@ existing video collection" and nothing more specific.
   directories, never fictional paths** (`D:/Movies` is absolute on
   Windows but a relative path on Linux/CI — scope containment and
   `resolve()` behave differently and the local gate cannot see it).
+- **`test_media/` is for real media, and it is never committed.** The
+  folder is part of the repository (tracked via `test_media/.gitkeep`); every
+  file in it is ignored by `/test_media/*`. Drop real video files there for
+  manual runs and for end-to-end validation, and expect tens of GB to sit in the
+  working tree — that is the point, and it is why the ignore rule exists. Never
+  `git add -f` a file from this folder, never remove the ignore rule, and
+  never point a test or a script at it without a skip guard.
+  **No automated test reads `test_media/` today.** `tests/test_smoke.py`
+  generates its own synthetic 100s clip in a `tempfile` directory, so the
+  default gate and the smoke tests both pass with the folder empty. Real media
+  is for a **manual** end-to-end run: `scan`, then `plan`, then `encode`
+  against the files in this folder, and `report` to read the result back. That
+  is the only way to catch a defect that only real content shows (grain,
+  letterboxing, HDR, an aspect-ratio change) — a stub-based test cannot.
+  Never commit the media itself, and never reference these filenames in code,
+  tests or docs: the set of files in the folder is the operator's business.
 - **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`,
   `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*
@@ -162,15 +178,16 @@ feature needs one of them:
   artifact exists (see the encode truncation fix for why),
 - degrade gracefully when the binary is missing (see `find_handbrake()`).
 
-## Issue workflow (every change, no exceptions)
+## Issue workflow (the default for every change)
 
 Working on an issue always means the same five steps, in this order. There is no
 "small enough to skip the branch" exception — a one-line fix goes through the same
-path, because the point is that `main` only ever receives reviewed work.
+path, because the point is that `main` only ever receives reviewed work. The only way
+around it is a deliberate direct push, which has its own rules below.
 
 1. **Claim it.** `gh issue edit <N> --add-assignee @me` (see Multi-agent etiquette
    below). An assigned issue is work in progress; an unassigned one is free to take.
-2. **Branch from an up-to-date `main`.** Never work on `main` directly:
+2. **Branch from an up-to-date `main`.** Work on a branch, not on `main`:
 
    ```sh
    git switch main && git pull --ff-only
@@ -196,13 +213,54 @@ path, because the point is that `main` only ever receives reviewed work.
    the `Closes #<N>` reference close the issue. If the work is handed off instead,
    see Multi-agent etiquette — do not open a half-finished PR as a way to park it.
 
-**Never push directly to `main`.** Not for a typo, not for a doc line, not "just this
-once". `main` is what a stranger clones; it must be green at every commit, and the only
-way to guarantee that is to make every change arrive through a checked PR.
+### When a PR does not go through
 
-Branch protection is not currently enabled on `main` (verified 2026-10-23: the protection
-API returns 404), so this rule is enforced by discipline alone. If you have admin rights and
-notice it is still unprotected, enabling it is a genuine improvement, not scope creep.
+A red or conflicting PR is not finished work, and it is yours until it merges. Do not
+close it and open a second one for the same issue, do not ask for a review while CI is
+red, and do not force-push a branch a reviewer may already have read. Bring `main` into
+the branch, fix what broke, and push the same PR again:
+
+```sh
+gh pr checks <N>                              # what is actually red
+gh pr view <N> --json mergeable,mergeStateStatus
+
+git switch <branch>
+git fetch origin && git merge origin/main       # resolve conflicts HERE, in your branch
+# fix the failure, run the five gate commands, commit
+git push                                      # the same PR updates in place
+```
+
+Repeat until every check is green and the PR reports no conflicts, then merge. This is
+the normal case, not an exception: when several agents work at once, `main` moves while
+your PR is open, so expect to merge `origin/main` into your branch at least once on any
+PR that lives longer than a few hours.
+
+**Merge, do not rebase.** `git merge origin/main` records what was resolved and keeps
+the history a reviewer already read; a rebase rewrites those commits and needs a
+force-push. If a conflict is genuinely yours to resolve (two agents edited the same
+hunk), resolve it in the branch and say in the PR body what the resolution was.
+
+This is about *updating your branch*, not about how the PR lands — squash-and-merge at the
+end is fine and is what most merges here use. Squashing the PR is safe; rebasing the open
+branch under a reviewer is not.
+
+### Pushing directly to `main`
+
+Direct pushes are technically possible — branch protection is not enabled (verified
+2026-10-23: the protection API returns 404) and the `push` permission is held — and
+they are permitted when you have a concrete reason: an urgent fix, unblocking a broken
+`main`, or a change that cannot be reviewed meaningfully as a diff. The default is still
+branch → PR → merge, for one reason: a direct push runs the gate *after* `main` is
+already red, while a PR runs CI before anything lands. `main` is what a stranger
+clones; it must be green at every commit.
+
+When you do push directly, **Multi-agent etiquette still applies in full**: claim the
+issue, keep one issue in flight, check `git status` before staging, and pull before you
+push. A direct push is a shortcut around the review step, never around the coordination.
+
+GitHub does not let an author approve their own pull request, and every PR here is opened
+by the same account that would merge it — so "approved" in practice means "green checks and
+no conflicts", which is what step 5 gates on.
 
 ## Multi-agent etiquette
 
