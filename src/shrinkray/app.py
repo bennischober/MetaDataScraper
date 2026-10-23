@@ -916,7 +916,9 @@ def library(
 @app.get("/api/movie")
 def movie_detail(path: str, conn=Depends(db_access)):
     """Returns one movie's full record: file facts plus its COMPLETE encode
-    history (the library list only carries the latest encode per title).
+    history (the library list only carries the latest encode per title)
+    and the stored plan (the prediction display's data, with a file-level
+    staleness flag).
 
     History rows carry the schema-v7 provenance chain (generation,
     input/output bitrate, chain links) so the UI can show generation
@@ -930,8 +932,9 @@ def movie_detail(path: str, conn=Depends(db_access)):
         dict: {"file": {..., "generation": N}, "history": [one entry per
         encode touching this title — its own rows plus the chain rows whose
         output produced it or whose input it produced — in generation
-        order, ties by id]} — 404 when the path is unknown to the
-        database.
+        order, ties by id], "plan": {crf, achieved_vmaf, skipped_reason,
+        estimated_size, created_at, encoder, encoder_preset, target_vmaf,
+        stale} | None} — 404 when the path is unknown to the database.
     """
     p = validate_path(path, "path")
     s = get_state()
@@ -998,6 +1001,42 @@ def movie_detail(path: str, conn=Depends(db_access)):
             (str(p),),
         ).fetchone()
         generation = int(gen_row["generation"]) + 1 if gen_row is not None else 1
+
+        # the stored plan ("quicksave"): what a future encode would do —
+        # the prediction display's data. Staleness is FILE-level only
+        # (mtime+size vs plan time); a settings mismatch simply makes the
+        # encode ignore the plan and measure fresh, which shows there.
+        plan_row = s.connection.execute(
+            """
+            SELECT p.chosen_crf, p.achieved_vmaf, p.skipped_reason,
+                   p.estimated_size, p.created_at, p.input_mtime, p.input_size,
+                   p.encoder, p.encoder_preset, p.target_vmaf
+            FROM plans p JOIN files f ON f.id = p.file_id
+            WHERE f.path = ?
+            """,
+            (str(p),),
+        ).fetchone()
+        plan = None
+        if plan_row is not None:
+            try:
+                file_ok = (
+                    p.is_file()
+                    and abs(p.stat().st_mtime - plan_row["input_mtime"]) <= 1.0
+                    and p.stat().st_size == plan_row["input_size"]
+                )
+            except OSError:
+                file_ok = False
+            plan = {
+                "crf": plan_row["chosen_crf"],
+                "achieved_vmaf": plan_row["achieved_vmaf"],
+                "skipped_reason": plan_row["skipped_reason"],
+                "estimated_size": plan_row["estimated_size"],
+                "created_at": plan_row["created_at"],
+                "encoder": plan_row["encoder"],
+                "encoder_preset": plan_row["encoder_preset"],
+                "target_vmaf": plan_row["target_vmaf"],
+                "stale": not file_ok,
+            }
     return {
         "file": {
             "path": row["path"],
@@ -1013,6 +1052,7 @@ def movie_detail(path: str, conn=Depends(db_access)):
             "generation": generation,
         },
         "history": history,
+        "plan": plan,
     }
 
 

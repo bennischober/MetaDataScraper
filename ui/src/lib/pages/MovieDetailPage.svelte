@@ -9,6 +9,7 @@
     type Movie,
     type Job,
     type EncodeRecord,
+    type MoviePlan,
   } from '../api'
 
   /** The provenance page: everything recorded about one title — source
@@ -37,6 +38,8 @@
   } = $props()
 
   let encodes = $state<EncodeRecord[] | null>(null)
+  /** The stored plan (the prediction display): null when none recorded. */
+  let plan = $state<MoviePlan | null>(null)
   /** The movie's own generation (schema v7): 1 = original source, N+1 =
    * this file is the output of a previous encode row. */
   let fileGeneration = $state<number>(1)
@@ -75,10 +78,12 @@
   $effect(() => {
     // the one fetch the detail page truly needs: the COMPLETE encode
     // history (the library list carries only the latest encode per title)
+    // plus the stored plan (the prediction display)
     api
       .movie(movie.path)
       .then((d) => {
         encodes = d.history
+        plan = d.plan ?? null
         if (d.file.generation != null) fileGeneration = d.file.generation
       })
       .catch(() => (encodes = []))
@@ -125,6 +130,33 @@
         : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
       : null
   )
+
+  /** The stored plan's predicted saving vs the current source size —
+   * the same polarity form as `est` ('grew' => red). Null when the plan
+   * carries no estimate (skip verdicts without one, pre-v9 rows). */
+  const planEst = $derived(
+    plan?.estimated_size && movie.size && movie.size > 0
+      ? ((1 - plan.estimated_size / movie.size) * 100).toFixed(1)
+      : null
+  )
+  /** The plan's verdict text for the panel head area: the skip reason in
+   * amber, or the CRF it would encode at. */
+  const planVerdict = $derived(
+    plan?.skipped_reason
+      ? plan.skipped_reason
+      : plan?.crf != null
+        ? `CRF ${plan.crf}`
+        : null
+  )
+  /** The plan-vs-encode comparison line (case 2: both exist) — the plan's
+   * predicted size against the latest encode's real output. Signed like
+   * every delta in this console. */
+  const planVsEncode = $derived.by(() => {
+    if (!plan?.estimated_size || !encode?.output_size || plan.skipped_reason) return null
+    const diff = plan.estimated_size - encode.output_size
+    const pct = (diff / encode.output_size) * 100
+    return { text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% vs encode`, good: diff <= 0 }
+  })
 
   /** Source bitrate in Mbps (size per second) — the honest "how fat is
    * this source" figure next to the encode's own bitrate. Returns a
@@ -319,9 +351,61 @@
 
     <!-- ══ latest encode: every recorded metric ══ -->
     <section class="panel">
-      <div class="panel-head"><span class="legend">LATEST ENCODE — MEASURED</span></div>
+      <div class="panel-head">
+        <span class="legend">{plan ? 'LATEST ENCODE — MEASURED · PLAN BELOW' : 'LATEST ENCODE — MEASURED'}</span>
+      </div>
       {#if !encode}
-        <div class="dim pad">not encoded yet — plan predicts, encode measures</div>
+        {#if plan}
+          <!-- case 1: no encode yet — the plan IS the prediction; the
+               measured panel stays honest by never pretending these
+               numbers were measured -->
+          <div class="facts">
+            {#if plan.skipped_reason}
+              <!-- the plan rejected the movie: the verdict IS the headline -->
+              <div class="fact big">
+                <span class="legend">PREDICTED</span>
+                <span class="mono result warn">skip — {plan.skipped_reason}</span>
+              </div>
+              {#if plan.achieved_vmaf != null && plan.crf != null}
+                <div class="fact">
+                  <span class="legend">BEST FOUND</span>
+                  <span class="mono">CRF {plan.crf} · VMAF {plan.achieved_vmaf.toFixed(1)} (samples)</span>
+                </div>
+              {/if}
+            {:else}
+              <div class="fact big">
+                <span class="legend">PREDICTED</span>
+                <span class="mono result" class:bad={planEst != null && Number(planEst) < 0}>
+                  {planEst != null ? (Number(planEst) <= 0 ? `+${Math.abs(Number(planEst))}% larger (est.)` : `${planEst}% saved (est.)`) : '—'}
+                </span>
+              </div>
+              {#if plan.estimated_size != null && planEst != null}
+                <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)} → {fmtGb(plan.estimated_size)} (est.)</span></div>
+              {/if}
+              {#if plan.crf != null}
+                <div class="fact"><span class="legend">CRF</span><span class="mono">{plan.crf}</span></div>
+              {/if}
+              {#if plan.achieved_vmaf != null}
+                <div class="fact">
+                  <span class="legend">VMAF</span>
+                  <span class="mono measured">{plan.achieved_vmaf.toFixed(1)}</span>
+                  <span class="dim">samples — encode will confirm</span>
+                </div>
+              {/if}
+            {/if}
+            <div class="fact">
+              <span class="legend">PROBED</span>
+              <span class="mono">{fmtWhen(plan.created_at)}</span>
+              {#if plan.stale}<span class="mono warn">FILE CHANGED SINCE</span>{/if}
+            </div>
+            <div class="fact">
+              <span class="legend">SETTINGS</span>
+              <span class="mono">VMAF > {plan.target_vmaf ?? '—'} · {plan.encoder ?? '—'} · {plan.encoder_preset ?? '—'}</span>
+            </div>
+          </div>
+        {:else}
+          <div class="dim pad">not encoded yet — plan predicts, encode measures</div>
+        {/if}
       {:else}
         <div class="facts">
           <div class="fact big">
@@ -362,6 +446,15 @@
           {/if}
           {#if encode.tool_versions}
             <div class="fact"><span class="legend">TOOLCHAIN</span><span class="mono tv">{encode.tool_versions}</span></div>
+          {/if}
+          {#if plan && planVsEncode}
+            <!-- case 2: encode measured AND a plan exists — the next
+                 encode's prediction, comparable against the real row -->
+            <div class="fact plan-next">
+              <span class="legend">NEXT PLAN · {fmtWhen(plan.created_at)}{plan.stale ? ' · FILE CHANGED SINCE' : ''}</span>
+              <span class="mono" class:good={planVsEncode.good} class:bad={!planVsEncode.good}>{planVsEncode.text}</span>
+              {#if plan.crf != null}<span class="mono dim">· CRF {plan.crf}</span>{/if}
+            </div>
           {/if}
         </div>
       {/if}
@@ -584,6 +677,17 @@
   .fact { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
   .fact.big .result { font-size: 15px; font-weight: 600; color: var(--teal-ink); }
   .fact.big .result.bad { color: var(--red); }
+  /* plan predictions: amber marks the file's staleness and skip verdicts —
+     visible, never blocking (an encode may still override a skip) */
+  .fact.big .result.warn { color: var(--amber); }
+  .mono.warn { color: var(--amber); }
+  .fact.plan-next {
+    border-top: 1px solid var(--row-line);
+    padding-top: 7px;
+    margin-top: 3px;
+    flex-wrap: wrap;
+  }
+  .fact.plan-next .legend { flex: none; }
   .measured { color: var(--teal-ink); font-weight: 600; }
   .tv { word-break: break-all; text-align: right; }
   .pad { padding: 16px 14px; }

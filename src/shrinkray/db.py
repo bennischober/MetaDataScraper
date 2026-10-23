@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS plans (
     crop TEXT,
     probes TEXT,
     skipped_reason TEXT,
+    estimated_size INTEGER,
     input_mtime REAL NOT NULL,
     input_size INTEGER NOT NULL,
     encoder TEXT NOT NULL,
@@ -150,6 +151,7 @@ def plans_table_migration(connection: sqlite3.Connection):
             crop TEXT,
             probes TEXT,
             skipped_reason TEXT,
+            estimated_size INTEGER,
             input_mtime REAL NOT NULL,
             input_size INTEGER NOT NULL,
             encoder TEXT NOT NULL,
@@ -490,6 +492,7 @@ def save_plan(
     crop: tuple[int, int, int, int] | None,
     probes: list,
     skipped_reason: str | None,
+    estimated_size: int | None,
     input_mtime: float,
     input_size: int,
     encoder: str,
@@ -514,6 +517,8 @@ def save_plan(
         crop (tuple | None): The crop rect (None when no bars removed).
         probes (list): The sample probes ([SampleProbe], JSON-serialized).
         skipped_reason (str | None): Skip verdict, e.g. 'no size gain'.
+        estimated_size (int | None): The predicted output size (the plan
+            run's size estimate; None for skips without one).
         input_mtime (float): The file's mtime at plan time (fingerprint).
         input_size (int): The file's size at plan time (fingerprint).
         encoder (str): The encoder used (fingerprint).
@@ -533,9 +538,10 @@ def save_plan(
         """
         INSERT INTO plans (
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
-            input_mtime, input_size, encoder, encoder_preset, target_vmaf,
-            crf_low, crf_high, sample_count, sample_seconds, remove_bars
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            estimated_size, input_mtime, input_size, encoder, encoder_preset,
+            target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
+            remove_bars
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -544,6 +550,7 @@ def save_plan(
             None if crop is None else ",".join(str(v) for v in crop),
             json.dumps([(p.crf, p.vmaf) for p in probes]),
             skipped_reason,
+            estimated_size,
             input_mtime,
             input_size,
             encoder,

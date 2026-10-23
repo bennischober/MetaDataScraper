@@ -123,6 +123,9 @@ def record_plan(connection, movie, result, config, target_vmaf: float) -> int | 
         result.crop,
         result.probes,
         result.skipped_reason,
+        # on a plan result, output_size IS the size estimate (a plan never
+        # writes a file); the estimate is the UI's prediction number
+        result.output_size if result.success else None,
         stat.st_mtime,
         stat.st_size,
         encoder,

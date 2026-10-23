@@ -41,6 +41,7 @@ class TestPlans(unittest.TestCase):
             "crop": None,
             "probes": [],
             "skipped_reason": None,
+            "estimated_size": 8,
             "input_mtime": Path(self.tmp.name).joinpath("movie.mkv").stat().st_mtime,
             "input_size": 16,
             "encoder": "x265",
@@ -156,6 +157,8 @@ class TestRecordPlan(unittest.TestCase):
             probes=[],
             skipped_reason=None,
             input_size=16,  # what was probed
+            output_size=8,  # the estimate
+            success=True,
             target_vmaf=95.0,
             crf_range=(14, 32),
             sample_count=3,
@@ -193,6 +196,8 @@ class TestRecordPlan(unittest.TestCase):
             probes=[],
             skipped_reason=None,
             input_size=16,
+            output_size=8,
+            success=True,
             target_vmaf=95.0,
             crf_range=(14, 32),
             sample_count=3,

@@ -402,6 +402,7 @@ class TestDb(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as media_tmp:
             movie_path = str(Path(media_tmp) / "detail-movie.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)  # staleness stats it
             file_id = db.upsert_file(
                 self.connection,
                 db.MovieRecord(
@@ -485,6 +486,70 @@ class TestDb(unittest.TestCase):
                 self.assertEqual(child_body["history"][0]["file_path"], movie_path)
                 self.assertEqual(child_body["history"][0]["generation"], 1)
                 self.assertEqual(child_body["history"][1]["generation"], 2)
+
+                # ── plan: the prediction display's data ──
+                # no plan recorded => the key exists, is None
+                self.assertIsNone(child_body["plan"])
+                db.save_plan(
+                    self.connection,
+                    file_id,
+                    chosen_crf=21,
+                    achieved_vmaf=95.47,
+                    crop=None,
+                    probes=[],
+                    skipped_reason=None,
+                    estimated_size=450,
+                    input_mtime=Path(movie_path).stat().st_mtime,
+                    input_size=Path(movie_path).stat().st_size,
+                    encoder="x265",
+                    encoder_preset="medium",
+                    target_vmaf=95.0,
+                    crf_low=14,
+                    crf_high=32,
+                    sample_count=3,
+                    sample_seconds=10.0,
+                    remove_bars=False,
+                )
+                self.connection.commit()
+                planned = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(planned.status_code, 200)
+                plan_body = planned.json()["plan"]
+                self.assertEqual(plan_body["crf"], 21)
+                self.assertEqual(plan_body["estimated_size"], 450)
+                self.assertIsNone(plan_body["skipped_reason"])
+                self.assertFalse(plan_body["stale"])
+                self.assertEqual(plan_body["target_vmaf"], 95.0)
+                # a changed file flips the staleness flag (mtime+size guard);
+                # the file only exists physically from this write on
+                Path(movie_path).write_bytes(b"x" * (1000 + 8))
+                stale = client.get("/api/movie", params={"path": movie_path})
+                self.assertTrue(stale.json()["plan"]["stale"])
+                # a skip verdict rides the same shape
+                db.save_plan(
+                    self.connection,
+                    file_id,
+                    chosen_crf=14,
+                    achieved_vmaf=92.8,
+                    crop=None,
+                    probes=[],
+                    skipped_reason="target unreachable",
+                    estimated_size=None,
+                    input_mtime=Path(movie_path).stat().st_mtime,
+                    input_size=Path(movie_path).stat().st_size,
+                    encoder="x265",
+                    encoder_preset="medium",
+                    target_vmaf=95.0,
+                    crf_low=14,
+                    crf_high=32,
+                    sample_count=3,
+                    sample_seconds=10.0,
+                    remove_bars=False,
+                )
+                self.connection.commit()
+                skipped = client.get("/api/movie", params={"path": movie_path})
+                skip_body = skipped.json()["plan"]
+                self.assertEqual(skip_body["skipped_reason"], "target unreachable")
+                self.assertIsNone(skip_body["estimated_size"])
             finally:
                 app_module.state.shutdown()
                 app_module.state = None

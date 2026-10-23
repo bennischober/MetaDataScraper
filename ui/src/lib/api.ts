@@ -64,6 +64,23 @@ export interface EncodeRecord extends EncodeInfo {
 export interface MovieDetail {
   file: Omit<Movie, 'encode'> & { generation?: number }
   history: EncodeRecord[]
+  /** the stored plan ("quicksave"): the prediction display's data —
+   * what a future encode would do with this file. `stale` = the file's
+   * mtime/size changed since the plan was probed. */
+  plan?: MoviePlan | null
+}
+
+/** One stored plan decision (GET /api/movie `plan` key). */
+export interface MoviePlan {
+  crf: number | null
+  achieved_vmaf: number | null
+  skipped_reason: string | null
+  estimated_size: number | null
+  created_at: string | null
+  encoder: string | null
+  encoder_preset: string | null
+  target_vmaf: number | null
+  stale: boolean
 }
 
 export interface Movie {
