@@ -26,6 +26,44 @@ _IDLE_PRIORITY = True
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", None)
 
 
+def terminate_tree(popen: subprocess.Popen) -> None:
+    """Terminates a child process INCLUDING all of its descendants.
+
+    Why the tree matters: killing only the direct child leaves grandchildren
+    alive, and they hold the inherited pipe write-handles - no EOF, the
+    drain threads block forever, the caller hangs even though the kill
+    "worked" (observed live: cmd.exe died at 1.0s, the orphaned ping kept
+    the pipe open and the function returned 58s later when ping happened to
+    finish). Windows: taskkill /T /F walks the descendant tree (terminate()
+    is TerminateProcess there anyway - force-kill is the only option, and
+    the terminate->kill escalation in the classic path is POSIX semantics).
+    POSIX: our production children (HandBrakeCLI, ffmpeg) are leaf
+    processes, so the classic SIGTERM -> SIGKILL escalation on the direct
+    child is correct; if a tree-child ever appears on POSIX, process groups
+    are the upgrade path.
+
+    Args:
+        popen (subprocess.Popen): The child to stop (all of it).
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(popen.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=10,
+            )
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass  # taskkill missing/blocked: classic escalation below
+    # POSIX (and the Windows fallback): escalate on the direct child
+    popen.terminate()
+    try:
+        popen.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        popen.kill()
+        popen.wait(timeout=5)
+
+
 def apply(config) -> None:
     """Applies the resource policy from a config (Conf) object.
 

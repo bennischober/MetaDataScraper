@@ -34,8 +34,9 @@ from shrinkray.encode import (
     _encode_with_command,
     find_handbrake,
     probe_duration_seconds,
+    stall_timeout_seconds,
 )
-from shrinkray.logger import log
+from shrinkray.logger import log, log_error
 from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
@@ -334,7 +335,9 @@ def _run(
     Returns:
         tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
     """
-    if cancel is None:
+    if cancel is None and stall_timeout_seconds() is None:
+        # neither cancellation nor stall watching is possible: the simple
+        # blocking run (used when both protections are explicitly off)
         proc = subprocess.run(command, capture_output=True, cwd=cwd, **resources.spawn_kwargs())
         return proc.returncode, proc.stderr.decode(errors="replace").strip()
     popen = subprocess.Popen(
@@ -347,12 +350,19 @@ def _run(
     assert popen.stdout is not None and popen.stderr is not None
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
+    last_output_cell = [time.monotonic()]  # drain threads report progress
 
     def _drain(pipe, chunks: list[bytes]) -> None:
-        """Reads a pipe to its EOF into chunks (runs in a daemon thread)."""
+        """Reads a pipe to its EOF into chunks (runs in a daemon thread).
+
+        Every chunk read also refreshes the shared last-output timestamp:
+        the stall watchdog in the poll loop cannot see the pipes itself,
+        and a healthy child must never be mistaken for a hung one.
+        """
         try:
             for chunk in iter(lambda: pipe.read(4096), b""):
                 chunks.append(chunk)
+                last_output_cell[0] = time.monotonic()
         except (ValueError, OSError):
             pass  # pipe closed during shutdown (cancellation race)
 
@@ -363,25 +373,40 @@ def _run(
     for drainer in drainers:
         drainer.start()
     cancelled = False
+    stalled = False
+    stall_seconds = stall_timeout_seconds()
     try:
         while popen.poll() is None:
-            if cancel.is_set():
-                popen.terminate()
-                try:
-                    popen.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    popen.kill()
-                    popen.wait(timeout=5)
+            if cancel is not None and cancel.is_set():
+                resources.terminate_tree(popen)
                 cancelled = True
+                break
+            # stall watchdog: probes/measurements must make progress too
+            # (ffmpeg can hang on odd streams); same semantics as the final
+            # encode - terminate the hung child, report it as a failure
+            if stall_seconds is not None and time.monotonic() - last_output_cell[0] > stall_seconds:
+                log_error(
+                    f"Stall watchdog: no output from the probe/measure child for "
+                    f"{stall_seconds / 60:.0f} min => terminating it (hung child)."
+                )
+                resources.terminate_tree(popen)
+                cancelled = False
+                stalled = True
                 break
             time.sleep(0.2)
         for drainer in drainers:
             drainer.join(timeout=5)
         if cancelled:
             return -1, "cancelled by user"
+        if stalled:
+            assert stall_seconds is not None  # stalled=True implies it was set
+            return -2, (f"stalled: no output for {stall_seconds / 60:.0f} min (terminated)")
         stderr = b"".join(stderr_chunks).decode(errors="replace").strip()
         return popen.returncode, stderr
     finally:
+        # close OUR read ends first: a drainer blocked in read() (orphan
+        # still holding the write end) must not deadlock close() itself -
+        # closing breaks the read, the bounded join above cleans up
         if popen.stdout:
             popen.stdout.close()
         if popen.stderr:

@@ -455,6 +455,162 @@ class TestEncode(unittest.TestCase):
             self.assertFalse(results[0].success)
             self.assertEqual(results[0].error, "no output file was written")
 
+    def test_cancel_responds_during_silence(self):
+        """The cancel event must interrupt an encode whose child has gone
+        SILENT: the old readline() loop only checked cancel between lines,
+        so a hung HandBrake was uninterruptible even by an explicit user
+        cancel. The queue-based loop polls every 0.2s."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            # a child that emits one line, then goes silent forever
+            if os.name == "nt":
+                stub = Path(tmp) / "hb_stub.cmd"
+                stub.write_bytes(
+                    b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\n"
+                    b"ping -n 60 127.0.0.1 >nul\r\n"
+                )
+            else:
+                stub = Path(tmp) / "hb_stub.sh"
+                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nsleep 60\n')
+                stub.chmod(0o755)
+            cancel = threading.Event()
+            result_holder: list = []
+
+            def runner():
+                result_holder.append(
+                    encode._encode_with_command(
+                        src, out, [str(stub)], progress=lambda p: None, cancel=cancel
+                    )
+                )
+
+            thread = threading.Thread(target=runner)
+            thread.start()
+            time.sleep(2.0)  # let the child print its one line and go silent
+            self.assertEqual(len(result_holder), 0, "encode returned before cancel")
+            cancel.set()
+            thread.join(timeout=15)
+            self.assertFalse(thread.is_alive(), "cancel was not honored during silence")
+            result = result_holder[0]
+            self.assertTrue(result.cancelled)
+            self.assertEqual(result.error, "cancelled by user")
+            self.assertFalse(out.exists())
+
+    def test_stall_watchdog_terminates_hung_child(self):
+        """No child output for stall_minutes => the engine terminates the
+        hung child itself, removes the partial and reports a FAILURE
+        (cancelled=False) so callers do not retry a stalling encode."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            if os.name == "nt":
+                stub = Path(tmp) / "hb_stub.cmd"
+                stub.write_bytes(
+                    b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\n"
+                    b"ping -n 60 127.0.0.1 >nul\r\n"
+                )
+            else:
+                stub = Path(tmp) / "hb_stub.sh"
+                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nsleep 60\n')
+                stub.chmod(0o755)
+            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+                result = encode._encode_with_command(src, out, [str(stub)], progress=lambda p: None)
+            self.assertFalse(result.success)
+            self.assertFalse(result.cancelled, "a stall must be a failure, not a cancel")
+            self.assertIn("stall", (result.error or "").lower())
+            self.assertFalse(out.exists())
+
+    def test_stall_disabled_never_terminates(self):
+        """stall_minutes=0 disables the watchdog: a silent child runs until
+        it finishes or the user cancels."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=None):
+                # a silent-but-finishing child: no percent lines at all
+                command = ["cmd", "/c", "exit 0"] if os.name == "nt" else ["true"]
+                result = encode._encode_with_command(src, out, command, progress=lambda p: None)
+            self.assertFalse(result.cancelled)
+
+    def test_configure_stall_knob(self):
+        """The config knob maps minutes to seconds; 0/negative disables."""
+        from shrinkray import encode
+
+        old = encode.stall_timeout_seconds()
+        try:
+            encode.configure_stall(2.5)
+            self.assertEqual(encode.stall_timeout_seconds(), 150.0)
+            encode.configure_stall(0)
+            self.assertIsNone(encode.stall_timeout_seconds())
+            encode.configure_stall(-1)
+            self.assertIsNone(encode.stall_timeout_seconds())
+        finally:
+            encode.configure_stall((old or 600.0) / 60.0)
+
+    def test_quality_probe_run_stall_is_failure_not_cancel(self):
+        """_run reports a stall as code -2 with a stall message - the probe
+        callers map it to RuntimeError (failure), never Cancelled."""
+        from shrinkray.quality import _run
+
+        # a SILENT child (ping's own replies would count as progress)
+        command = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        with mock.patch("shrinkray.quality.stall_timeout_seconds", return_value=1.0):
+            code, err = _run(command)
+        self.assertEqual(code, -2)
+        self.assertIn("stalled", err)
+
+    def test_terminated_tree_does_not_hang_on_orphaned_grandchild(self):
+        """Regression (the 59-second hang): killing the direct child must
+        not leave the caller waiting for an orphaned grandchild that holds
+        the pipe write-ends. taskkill /T /F (Windows) kills the whole tree;
+        the drain threads reach EOF immediately."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            # parent (cmd) spawns a LONG-running grandchild (ping) that
+            # inherits the pipes and would keep them open for ~58s
+            if os.name == "nt":
+                stub = Path(tmp) / "hb_stub.cmd"
+                stub.write_bytes(b"@echo off\r\nping -n 60 127.0.0.1 >nul\r\n")
+            else:
+                stub = Path(tmp) / "hb_stub.sh"
+                stub.write_bytes(b'#!/bin/sh\nsh -c "sleep 60" & sleep 60\n')
+                stub.chmod(0o755)
+            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+                started = time.monotonic()
+                result = encode._encode_with_command(src, out, [str(stub)], progress=lambda p: None)
+                elapsed = time.monotonic() - started
+            # the stall watchdog fired at ~1s and the FUNCTION RETURNED
+            # promptly (old code: 58s waiting for the orphan)
+            self.assertFalse(result.success)
+            self.assertFalse(result.cancelled)
+            self.assertLess(elapsed, 15.0, f"orphan hang: returned after {elapsed:.1f}s")
+            self.assertFalse(out.exists())
+
     def test_disk_watchdog_cancels_when_space_drops(self):
         """When free space on the output drive drops below the floor, the
         streamed encode is cancelled: the process is terminated, the partial

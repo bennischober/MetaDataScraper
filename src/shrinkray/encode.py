@@ -1,9 +1,11 @@
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,6 +76,43 @@ def check_disk_space(target_dir: Path, required_bytes: int) -> tuple[bool, str]:
 # encode is cancelled (partial output removed) instead of filling the shared
 # drive - a full disk harms every co-tenant, not just this run
 DISK_FREE_FLOOR_BYTES = 1 * 1024**3
+
+# default stall timeout: a healthy HandBrake reports progress at least once
+# per second; minutes of silence mean a hung child. Configurable via
+# handbrake.stall_minutes (0 = disabled). Generous by design: final muxing
+# of a large file can be silent for a while.
+DEFAULT_STALL_MINUTES = 10.0
+
+_stall_minutes: float | None = DEFAULT_STALL_MINUTES
+
+
+def configure_stall(minutes: float) -> None:
+    """Sets the stall timeout for encode/probe subprocesses.
+
+    Args:
+        minutes (float): Minutes without child output before a subprocess is
+            terminated as hung; 0 disables the watchdog.
+    """
+    global _stall_minutes
+    _stall_minutes = minutes if minutes and minutes > 0 else None
+
+
+def stall_timeout_seconds() -> float | None:
+    """Returns the stall timeout in seconds (None = disabled).
+
+    Returns:
+        float | None: Seconds of tolerated child silence, None when off.
+    """
+    return _stall_minutes * 60.0 if _stall_minutes is not None else None
+
+
+def _terminate(popen: subprocess.Popen) -> None:
+    """Terminates a child INCLUDING its descendants (tree-safe).
+
+    Args:
+        popen (subprocess.Popen): The child to stop.
+    """
+    resources.terminate_tree(popen)
 
 
 def disk_free_bytes(target_dir: Path) -> int | None:
@@ -286,7 +325,9 @@ def _encode_with_command(
 
     On any cancellation (cancel event or disk watchdog) the partial output
     file is removed: it is truncated debris by definition (A1 semantics),
-    and it is OUR product from THIS run - never a pre-existing file.
+    and it is OUR product from THIS run - never a pre-existing file. A stall
+    (no child output for stall_minutes) is self-terminated too, but recorded
+    as a FAILURE: a hung encode must not be retried by the watch loop.
 
     Args:
         input_file (Path): The source file.
@@ -305,6 +346,7 @@ def _encode_with_command(
     returncode: int
     stderr_bytes: bytes | None = None
     cancelled = False
+    stall_failed = False
     cancel_reason = "cancelled by user"
     stderr_chunks: list[bytes] = []
     try:
@@ -338,18 +380,67 @@ def _encode_with_command(
 
             stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
             stderr_thread.start()
-            for raw in iter(popen.stdout.readline, b""):
+
+            # stdout is read by a dedicated thread into a queue: the main
+            # loop polls with a timeout, so cancellation and the stall
+            # watchdog are checked EVERY 0.2s - even while HandBrake is
+            # silent. The old `for raw in iter(readline, b"")` blocked
+            # inside readline() when the child hung: the cancel event was
+            # never consulted (it is only checked between lines), so even
+            # an explicit user cancel could not interrupt a stuck encode.
+            stdout_queue: queue.Queue[bytes | None] = queue.Queue()
+
+            def _pump_stdout() -> None:
+                """Reads stdout lines into the queue until EOF (None sentinel)."""
+                stream = popen.stdout
+                if stream is None:
+                    return
+                try:
+                    for chunk in iter(stream.readline, b""):
+                        stdout_queue.put(chunk)
+                except (ValueError, OSError):
+                    pass  # pipe closed during shutdown (cancellation race)
+                finally:
+                    stdout_queue.put(None)
+
+            stdout_thread = threading.Thread(target=_pump_stdout, daemon=True)
+            stdout_thread.start()
+
+            last_output = time.monotonic()
+            stall_seconds = stall_timeout_seconds()
+            while True:
+                # cooperative cancel: checked every tick, silent child or not
                 if cancel is not None and cancel.is_set():
-                    popen.terminate()
-                    try:
-                        popen.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        popen.kill()
-                        popen.wait(timeout=5)
+                    _terminate(popen)
                     cancelled = True
                     returncode = -1
+                    cancel_reason = "cancelled by user"
                     stderr_bytes = b"cancelled by user"
+                    break  # stall watchdog: a healthy HandBrake reports at least once
+                # per second; long silences mean a hung child (deadlocked
+                # muxer, stuck network source). Self-termination after
+                # stall_seconds - a cancel the process sets ITSELF. Recorded
+                # as a FAILURE (cancelled=False): watch mode must not retry
+                # a stalled encode (it would stall again).
+                if stall_seconds is not None and time.monotonic() - last_output > stall_seconds:
+                    log_error(
+                        f"Stall watchdog: no HandBrake output for "
+                        f"{stall_seconds / 60:.0f} min => terminating the encode of "
+                        f"'{input_file.name}' (hung child)."
+                    )
+                    _terminate(popen)
+                    returncode = -1
+                    stderr_bytes = b"stalled: no HandBrake output for "
+                    stderr_bytes += f"{stall_seconds / 60:.0f} min".encode()
+                    stall_failed = True
                     break
+                try:
+                    raw = stdout_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue  # silent child: re-check cancel/stall on the next tick
+                if raw is None:  # EOF sentinel: the child exited
+                    break
+                last_output = time.monotonic()
                 line = raw.decode(errors="replace").strip()
                 match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
                 if match:
@@ -365,12 +456,7 @@ def _encode_with_command(
                             f"'{output_file.parent}' => cancelling the encode of "
                             f"'{input_file.name}' before the drive fills."
                         )
-                        popen.terminate()
-                        try:
-                            popen.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            popen.kill()
-                            popen.wait(timeout=5)
+                        resources.terminate_tree(popen)
                         cancelled = True
                         returncode = -1
                         cancel_reason = "cancelled: disk space exhausted"
@@ -383,8 +469,13 @@ def _encode_with_command(
                             "movie": input_file.name,
                         }
                     )
-            if not cancelled:
+            if not cancelled and not stall_failed:
+                # close FIRST, join second: closing our read-end breaks a
+                # reader blocked in read() (and EOF cannot depend on an
+                # orphaned grandchild still holding the write-end - the
+                # join() with a timeout below is bounded regardless)
                 popen.stdout.close()
+                stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 stderr_bytes = b"".join(stderr_chunks)
                 # Popen.returncode is None until the process is reaped:
@@ -398,6 +489,14 @@ def _encode_with_command(
                 except subprocess.TimeoutExpired:
                     popen.kill()
                     returncode = popen.wait(timeout=10)
+            else:
+                # terminated mid-stream: close our pipe ends so the reader
+                # threads unblock even if an orphan still holds the write
+                # end (bounded joins, daemon threads: tidy, never hanging)
+                popen.stdout.close()
+                popen.stderr.close()
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
     except (OSError, subprocess.SubprocessError) as e:
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
 
@@ -412,6 +511,17 @@ def _encode_with_command(
             success=False,
             cancelled=True,
             error=cancel_reason,
+        )
+    if stall_failed:
+        # the stall watchdog fired: same partial-output semantics as any
+        # termination, but NOT a cancel - the caller must not retry it
+        output_file.unlink(missing_ok=True)
+        return EncodeResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            cancelled=False,
+            error=(stderr_bytes or b"").decode(errors="replace").strip() or "stalled",
         )
 
     stderr = (stderr_bytes or b"").decode(errors="replace").strip()

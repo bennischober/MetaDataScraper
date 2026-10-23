@@ -13,6 +13,8 @@ DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
 DEFAULT_LANGUAGE = "en"
 DEFAULT_MAX_THREADS = 0  # 0 = use all cores
 DEFAULT_IDLE_PRIORITY = True
+# stall watchdog: minutes of child silence before termination (0 = off)
+DEFAULT_STALL_MINUTES = 10.0
 
 
 class Conf:
@@ -55,6 +57,11 @@ class Conf:
         # thread cap for the encoder (0 = use all cores); keeps cores free
         # for a media server running next to the encode on a small machine
         self.handbrake_max_threads: int = int(handbrake.get("max_threads", DEFAULT_MAX_THREADS))
+        # stall watchdog: minutes without child output before a hung
+        # HandBrake/ffmpeg is terminated (0 = disabled; default 10)
+        self.handbrake_stall_minutes: float = float(
+            handbrake.get("stall_minutes", DEFAULT_STALL_MINUTES)
+        )
 
         # resources => how politely the engine behaves on a shared machine
         resources: dict[str, Any] = data.get("resources") or {}
@@ -100,4 +107,10 @@ def load_config(root: str | Path | None = None) -> Conf:
     from shrinkray.resources import apply as apply_resources
 
     apply_resources(_config)
+    # the stall watchdog rides along the same way (encode.py imports config
+    # nowhere else; a single hook keeps the knob effective for CLI, app and
+    # watch alike)
+    from shrinkray.encode import configure_stall
+
+    configure_stall(_config.handbrake_stall_minutes)
     return _config
