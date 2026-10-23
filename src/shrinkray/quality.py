@@ -89,6 +89,8 @@ def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
 # top-tier floor); VMAF falls monotonically with rising CRF.
 DEFAULT_TARGET_VMAF = 95.0
+# the default video encoder (the HDR engine override is 'x265_10bit')
+DEFAULT_ENCODER = "x265"
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
 # 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
@@ -326,6 +328,10 @@ class QualityResult:
     # plan, 'probe' when measured now, None when not applicable)
     crf_source: str | None = None
     plan_created_at: str | None = None
+    # the encoder the decision was made against: the requested one, or the
+    # HDR override ('x265_10bit') — one source of truth for the record and
+    # the plan cache (a plan of an HDR movie is only valid under 10-bit)
+    encoder: str = DEFAULT_ENCODER
 
     @property
     def saved_percent(self) -> float:
@@ -1306,7 +1312,8 @@ def plan_quality(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'x265'; for HDR the engine
+            switches to the 10-bit variant and the result carries it.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars (opt-in).
         cancel (threading.Event | None): Cooperative cancellation.
@@ -1332,6 +1339,10 @@ def plan_quality(
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
 
     hdr = is_hdr_file(input_file)
+    # the effective decision inputs: for HDR the engine overrides the
+    # target/range and switches to the 10-bit encoder — every downstream
+    # call and the result's fingerprint fields carry these OVERRIDDEN values
+    effective_encoder = "x265_10bit" if hdr else encoder
     if hdr:
         # the tone-mapped measurement scale sits slightly lower; use the
         # calibrated target and the deeper CRF range for 4K headroom
@@ -1351,6 +1362,8 @@ def plan_quality(
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
         )
 
     handbrake = find_handbrake()
@@ -1372,7 +1385,7 @@ def plan_quality(
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
-            encoder="x265_10bit" if hdr else encoder,
+            encoder=effective_encoder,
             encoder_preset=encoder_preset,
             crop=crop,
             hdr=hdr,
@@ -1388,7 +1401,7 @@ def plan_quality(
             workdir,
             handbrake,
             crf,
-            "x265_10bit" if hdr else encoder,
+            effective_encoder,
             encoder_preset,
             crop=crop,
             cancel=cancel,
@@ -1415,6 +1428,8 @@ def plan_quality(
                 crf_range=crf_range,
                 sample_count=sample_count,
                 sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
             )
         if achieved < target_vmaf and crf == crf_range[0]:
             return QualityResult(
@@ -1438,6 +1453,8 @@ def plan_quality(
                 crf_range=crf_range,
                 sample_count=sample_count,
                 sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
             )
 
         return QualityResult(
@@ -1457,6 +1474,8 @@ def plan_quality(
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -1731,6 +1750,10 @@ def encode_with_quality(
     run_started = _time.perf_counter()
     snapshot = _source_snapshot(input_file)
     hdr = is_hdr_file(input_file)
+    # the effective decision inputs: for HDR the engine overrides the
+    # target/range and switches to the 10-bit encoder (same rule as
+    # plan_quality, so a stored HDR plan is found under its real encoder)
+    effective_encoder = "x265_10bit" if hdr else encoder
     if hdr:
         target_vmaf = DEFAULT_HDR_TARGET_VMAF
         crf_range = DEFAULT_HDR_CRF_RANGE
@@ -1744,6 +1767,8 @@ def encode_with_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            hdr=hdr,
+            encoder=effective_encoder,
         )
 
     # disk-space preflight: the honest worst case for one encode is its
@@ -1759,6 +1784,8 @@ def encode_with_quality(
             success=False,
             target_vmaf=target_vmaf,
             error=space_message,
+            hdr=hdr,
+            encoder=effective_encoder,
         )
     if space_message:
         log(f"Warning: {space_message}")
@@ -1773,7 +1800,7 @@ def encode_with_quality(
         plan = _lookup_plan(
             db_file,
             input_file,
-            encoder="x265_10bit" if hdr else encoder,
+            encoder=effective_encoder,
             encoder_preset=encoder_preset,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
@@ -1817,6 +1844,8 @@ def encode_with_quality(
                 sample_seconds=sample_seconds,
                 crf_source="plan",
                 plan_created_at=plan["created_at"],
+                hdr=hdr,
+                encoder=effective_encoder,
             )
         crf = int(plan["chosen_crf"])
         achieved = float(plan["achieved_vmaf"] or 0.0)
@@ -1841,7 +1870,7 @@ def encode_with_quality(
                 crf_range,
                 sample_count,
                 sample_seconds,
-                "x265_10bit" if hdr else encoder,
+                effective_encoder,
                 encoder_preset,
                 remove_bars,
                 hdr=hdr,
@@ -1866,6 +1895,8 @@ def encode_with_quality(
                 sample_count=sample_count,
                 sample_seconds=sample_seconds,
                 crf_source="probe",
+                hdr=hdr,
+                encoder=effective_encoder,
             )
         crf_source = "probe"
         probe_seconds = _time.perf_counter() - run_started
@@ -1879,7 +1910,7 @@ def encode_with_quality(
         input_file,
         output_file,
         crf,
-        "x265_10bit" if hdr else encoder,
+        effective_encoder,
         encoder_preset,
         crop=crop,
         encoder_threads=encoder_threads,
@@ -1966,6 +1997,7 @@ def encode_with_quality(
         encode_seconds=_time.perf_counter() - run_started,
         probe_seconds=probe_seconds,
         hdr=hdr,
+        encoder=effective_encoder,
         tool_versions=_tool_versions(handbrake),
         input_width=snapshot["width"],
         input_height=snapshot["height"],

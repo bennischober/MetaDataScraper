@@ -1115,6 +1115,8 @@ class TestDb(unittest.TestCase):
                 input_size=1000,
                 output_size=400,
                 hdr=True,
+                # what the engine carries on an HDR result (the 10-bit switch)
+                encoder="x265_10bit",
             )
             outcome = service.record_quality_results(
                 self.connection, movie, hdr_result, config_helper.Conf()
@@ -1122,6 +1124,36 @@ class TestDb(unittest.TestCase):
             self.assertTrue(outcome.encoded)
             row = self.connection.execute("SELECT preset, encoder FROM encodes").fetchone()
             self.assertEqual(row["preset"], "VMAF>94.5")
+            self.assertEqual(row["encoder"], "x265_10bit")
+
+    def test_records_config_encoder_for_non_hdr(self):
+        """A non-HDR result records the config encoder (the default unchanged
+        — the effective encoder field only overrides for HDR)."""
+
+        from shrinkray import service
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            result = QualityResult(
+                input=movie,
+                output=root / "enc" / "movie.mkv",
+                success=True,
+                target_vmaf=95.0,
+                chosen_crf=22,
+                achieved_vmaf=95.4,
+                input_size=1000,
+                output_size=400,
+                hdr=False,
+            )
+            outcome = service.record_quality_results(
+                self.connection, movie, result, config_helper.Conf()
+            )
+            self.assertTrue(outcome.encoded)
+            row = self.connection.execute("SELECT encoder FROM encodes").fetchone()
+            self.assertEqual(row["encoder"], "x265")  # config_helper.Conf() default
 
     def test_doctor_healthy_library(self):
         """A library whose rows all exist on disk and whose outputs are

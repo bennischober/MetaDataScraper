@@ -139,6 +139,7 @@ class TestJobs(unittest.TestCase):
             sample_count=3,
             sample_seconds=10.0,
             hdr=False,
+            encoder="x265",
         )
         with (
             patch("shrinkray.quality.plan_quality", return_value=fake_result),
