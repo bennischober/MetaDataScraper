@@ -361,14 +361,18 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.result["movies"], 1)
         self.assertGreaterEqual(len(reloaded.result["errors"]), 1)
 
-    def test_worker_captures_engine_crash_as_failure(self):
-        # a nonexistent path: on windows it raises FileNotFoundError while
-        # scanning; on linux it is just an empty relative directory =>
-        # platform-dependent failure, but the worker must survive both and
-        # record a terminal state either way
+    def test_worker_records_terminal_state_for_missing_path(self):
+        # a nonexistent path inside a real temp dir: the scan finds nothing,
+        # so posix completes with zero outcomes (windows may raise while
+        # scanning instead) - the worker must reach a terminal state either
+        # way. Real paths only: a drive-letter literal ('Z:/out') is absolute
+        # on windows but RELATIVE on posix, where the job engine created a
+        # literal 'Z:' directory in the caller's working tree (issue #38)
+        root = Path(self.tmp.name)
         job = self.queue.enqueue(
             jobs.Job(
-                kind=jobs.JobKind.ENCODE, payload={"path": "Z:/nowhere", "output_dir": "Z:/out"}
+                kind=jobs.JobKind.ENCODE,
+                payload={"path": str(root / "nowhere"), "output_dir": str(root / "out")},
             )
         )
         worker = jobs.JobWorker(self.connection, self.queue)
@@ -377,6 +381,27 @@ class TestJobs(unittest.TestCase):
         self.assertIn(reloaded.state, (jobs.JobState.FAILED, jobs.JobState.DONE))
         if reloaded.state == jobs.JobState.FAILED:
             self.assertIn("FileNotFoundError", reloaded.error)
+
+    def test_worker_captures_engine_crash_as_failure(self):
+        # deterministic crash: an engine exception must be caught by the
+        # worker and recorded as a terminal FAILED state (never propagated,
+        # never left RUNNING). On posix the missing-path case above completes
+        # cleanly, so this is the only test of the crash path on every platform
+        root = Path(self.tmp.name)
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={"path": str(root / "movies"), "output_dir": str(root / "out")},
+            )
+        )
+        worker = jobs.JobWorker(self.connection, self.queue)
+        with mock.patch(
+            "shrinkray.jobs.resolve_movies", side_effect=RuntimeError("engine exploded")
+        ):
+            worker._execute(job)  # must not raise
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.FAILED)
+        self.assertIn("RuntimeError: engine exploded", reloaded.error)
 
     def test_next_poll_interval_helper_exists(self):
         # guard the cross-module dependency used by watch mode
@@ -417,8 +442,11 @@ class TestApiPathValidation(unittest.TestCase):
 
         from shrinkray.app import validate_path
 
+        # a real directory outside the allowed root (the system temp dir that
+        # holds it): a drive-letter literal is relative on posix and would
+        # reject for the wrong reason - containment, not relativity
         with self.assertRaises(HTTPException) as ctx:
-            validate_path("C:/Windows/System32")
+            validate_path(str(self.root.parent))
         self.assertEqual(ctx.exception.status_code, 403)
 
     def test_validate_path_rejects_escape_via_dotdot(self):
