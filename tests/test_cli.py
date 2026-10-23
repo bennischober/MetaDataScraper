@@ -236,5 +236,63 @@ class TestDoctorCli(unittest.TestCase):
             self.assertIn("gone.mkv", result.output)
 
 
+class TestReadmeInvocations(unittest.TestCase):
+    """Every `shrinkray ...` invocation documented in the README must use only
+    commands and options the real CLI defines (regression: the encode example
+    showed --encoder, an option that does not exist - issue #32)."""
+
+    README = Path(__file__).resolve().parent.parent / "README.md"
+
+    def _invocations(self) -> list[list[str]]:
+        """Extracts the argv lists of all shrinkray invocations in the README."""
+        import shlex
+
+        text = self.README.read_text(encoding="utf-8")
+        # join backslash line continuations so a wrapped command is one line
+        text = text.replace("\\\n", " ")
+        invocations = []
+        for line in text.splitlines():
+            line = line.split("#", 1)[0].strip()  # strip inline comments
+            if "shrinkray" not in line:
+                continue
+            tokens = shlex.split(line)
+            if "shrinkray" not in tokens:
+                continue
+            argv = tokens[tokens.index("shrinkray") + 1 :]
+            if argv:
+                invocations.append(argv)
+        return invocations
+
+    def test_readme_options_exist(self):
+        import typer
+
+        from shrinkray.__main__ import app
+
+        commands = typer.main.get_command(app).commands
+        self.assertTrue(commands, "the CLI app exposes no commands?")
+        invocations = self._invocations()
+        self.assertGreaterEqual(len(invocations), 10, "the README stopped documenting invocations?")
+        for argv in invocations:
+            command_name = argv[0]
+            self.assertIn(
+                command_name,
+                commands,
+                f"README documents a command the CLI does not define: {command_name}",
+            )
+            known = {
+                opt for param in commands[command_name].params for opt in getattr(param, "opts", [])
+            }
+            for token in argv[1:]:
+                if not token.startswith("--"):
+                    continue
+                flag = token.split("=", 1)[0]
+                self.assertIn(
+                    flag,
+                    known,
+                    f"README documents an option the CLI does not define: "
+                    f"{flag} (on '{command_name}')",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

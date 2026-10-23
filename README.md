@@ -211,7 +211,7 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 
 # with options
 uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
-    --quality --remove-bars --target-vmaf 95 --encoder x265
+    --quality --remove-bars --target-vmaf 95
 ```
 
 | Option | Effect |
@@ -281,7 +281,7 @@ job's state is recovered on the next start.
 ### `watch` — one-shot folder watcher
 
 ```bash
-uv run shrinkray watch 'D:\Downloads' 'D:\Encoded' --remove-bars
+uv run shrinkray watch-mode 'D:\Downloads' 'D:\Encoded' --remove-bars
 ```
 
 The standalone variant of the app's watch loop: polls the inbox folder for
