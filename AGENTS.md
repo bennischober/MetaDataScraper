@@ -91,20 +91,26 @@ existing video collection" and nothing more specific.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.
-3. **Run the full gate before every commit.** All five must pass:
+3. **Run the full gate before every commit.** All six must pass:
 
    ```sh
    uv run ruff check src tests
    uv run ruff format --check src tests
-   uv run mypy
    uv run mypy --platform linux
+   uv run mypy --platform win32
    uv run pytest -q
    ```
 
-   CI runs exactly these (mypy twice: the second run is CI's platform
-   view — windows stubs know APIs like `os.startfile`, linux stubs do
-   not; the local default hides exactly this class of failure). If you
-   cannot make the gate pass, do not commit; report the blocker instead.
+   Both mypy runs are explicit so the gate is identical on every host. Running
+   them is the whole point: `--platform` defaults to `sys.platform`, so a bare
+   `uv run mypy` only ever checks the host's own view and is blind to the other
+   one. A Windows-only API (`os.startfile`) passes on a Windows machine and
+   breaks every Linux/NAS user; a POSIX-only import (`pwd`, `fcntl`) passes on the
+   Linux runner and breaks a Windows contributor. Checking both directions catches
+   both, whichever machine you are on.
+
+   CI runs exactly these six. If you cannot make the gate pass, do not commit;
+   report the blocker instead.
 
 ## Project conventions
 
