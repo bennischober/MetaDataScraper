@@ -75,6 +75,11 @@
   tombstones; sketch ~80 lines + merge tests). Trigger condition: library
   payload exceeds ~1 MB (~5k movies) or long batch runs feel laggy. Until
   then the fingerprint design is correct.
+- Terminal surface: a rich `Live` layout inside `shrinkray watch` for
+  at-a-glance monitoring over SSH (~50-100 lines, no new deps) - scope,
+  trade-offs and the full-TUI trigger condition in docs/tui.md.
+- PEP 723 inline script deps for scripts/ helpers (uv-runnable without
+  the project venv; pattern taken from the orthos TUI example).
 
 ## Decisions (2026-10-22)
 - [x] **Releases are changelog-written.** Every tag gets real release
