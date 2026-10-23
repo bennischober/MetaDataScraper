@@ -210,14 +210,18 @@
     return steps
   })
   const driftMaxBr = $derived(Math.max(...driftSteps.map((s) => s.br ?? 0), 0.1))
+  /** Chart width: measured container, capped at 220px per step band.
+   * Round-6.9 finding (user review): stretched full-panel (~1460px),
+   * three bars sat ~480px apart — isolated pillars, not a staircase.
+   * Left-aligned (xMinYMid), the descent reads as one connected shape. */
+  const chartW = $derived(Math.min(driftW || 560, Math.max(driftSteps.length, 2) * 220))
+  /** Bar top for a bitrate (bars grow up from the y=66 baseline). */
+  const stepTop = (br: number) => 66 - (br / driftMaxBr) * 52
   /** VMAF lane: fixed 85–100 domain, clamped below 85 (the table carries
    * the exact numbers; the lane's job is showing distance-to-target, and
    * a 70–100 domain gave that distance 0.47px per point — unreadable).
    * Group-local y (group translated to y=84): 100 → y6, 85 → y20. */
   const vmafLaneY = (v: number) => 20 - ((Math.min(100, Math.max(85, v)) - 85) / 15) * 14
-  /** Slot centers in viewBox units: evenly divided, each slot owns an
-   * equal band — real geometry, no stretching. */
-  const slotX = (i: number) => ((i + 0.5) / driftSlots.length) * (driftW || 560)
   /** Chart width in real pixels, measured from the container (bind:clientWidth
    * — svelte's measured width, default 560 before first layout). */
   let driftW = $state(0)
@@ -375,41 +379,46 @@
                unstretched SVG, width measured from the container. -->
           <div class="drift mono" role="img" aria-label="Drift chart: bitrate staircase and VMAF across {driftSlots.length} encodes, oldest to newest. {driftSummary}">
             <div class="drift-svg" bind:clientWidth={driftW}>
-              <svg viewBox="0 0 {driftW || 560} 110" aria-hidden="true">
+              <svg viewBox="0 0 {chartW} 110" preserveAspectRatio="xMinYMid meet" aria-hidden="true">
               <!-- bitrate staircase: one bar per step, descending left →
                    right on one shared scale; steps labeled by generation,
-                   value labeled on top; a no-data step keeps its axis -->
+                   value labeled on top; a no-data step keeps its axis.
+                   Headroom: labels sit above bar tops — the chart top is
+                   y=8, never 0 (a label at the viewBox edge amputates). -->
               <g class="br-lane">
                 {#each driftSteps as s, i (i)}
-                  {@const cx = slotX(i)}
-                  <line x1={cx} y1="0" x2={cx} y2="60" class="slot-rule"></line>
+                  {@const cx = ((i + 0.5) / driftSteps.length) * chartW}
+                  <line x1={cx} y1="8" x2={cx} y2="66" class="slot-rule"></line>
                   {#if s.br != null}
                     <rect
                       x={cx - 8}
-                      y={60 - (s.br / driftMaxBr) * 54}
+                      y={stepTop(s.br)}
                       width="16"
-                      height={(s.br / driftMaxBr) * 54}
+                      height={66 - stepTop(s.br)}
                       class="step {s.kind}"
                       class:derived={s.derived}
                     ></rect>
-                    <text x={cx} y={60 - (s.br / driftMaxBr) * 54 - 4} class="step-value" text-anchor="middle">{s.derived ? '~' : ''}{s.br.toFixed(1)}</text>
+                    <text x={cx} y={stepTop(s.br) - 4} class="step-value" text-anchor="middle">{s.derived ? '~' : ''}{s.br.toFixed(1)}</text>
                   {/if}
-                  <text x={cx} y="72" class="step-label" text-anchor="middle">{s.label}</text>
+                  <text x={cx} y="78" class="step-label" text-anchor="middle">{s.label}</text>
                 {/each}
-                <line x1="0" y1="60" x2={driftW || 560} y2="60" class="base-rule"></line>
+                <!-- the descent, drawn: thin connector across step tops so
+                     the eye reads one falling line, not three pillars -->
+                <path d="M {driftSteps.map((s, i) => `${i > 0 ? 'L' : ''} ${((i + 0.5) / driftSteps.length) * chartW} ${s.br != null ? stepTop(s.br) : 66}`).join(' ').trim()}" class="step-line"></path>
+                <line x1="0" y1="66" x2={chartW} y2="66" class="base-rule"></line>
               </g>
               <!-- VMAF lane below the staircase: fixed 85-100 domain, same
                    slot centers as the steps, so each dot sits under the
                    encode it belongs to (the source has no VMAF) -->
               <g class="vmaf-track" transform="translate(0, 84)">
                 <text x="2" y="3" class="lane-label">VMAF 100</text>
-                <line x1="0" y1="6" x2={driftW || 560} y2="6" class="track-rule"></line>
+                <line x1="0" y1="6" x2={chartW} y2="6" class="track-rule"></line>
                 <text x="2" y="17" class="lane-label">85</text>
-                <line x1="0" y1="20" x2={driftW || 560} y2="20" class="track-rule"></line>
-                <line x1="0" y1="{vmafLaneY(targetVmaf)}" x2={driftW || 560} y2="{vmafLaneY(targetVmaf)}" class="target-rule"></line>
+                <line x1="0" y1="20" x2={chartW} y2="20" class="track-rule"></line>
+                <line x1="0" y1="{vmafLaneY(targetVmaf)}" x2={chartW} y2="{vmafLaneY(targetVmaf)}" class="target-rule"></line>
                 {#each driftSteps as s, i (i)}
                   {#if s.vmaf != null}
-                    <circle cx={slotX(i)} cy={vmafLaneY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
+                    <circle cx={((i + 0.5) / driftSteps.length) * chartW} cy={vmafLaneY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
                   {/if}
                 {/each}
               </g>
@@ -606,11 +615,12 @@
 
   /* ── drift chart: the chain as a shape ── */
   .drift { padding: 10px 14px 8px; border-bottom: 1px solid var(--row-line); }
-  .drift-svg { width: 100%; }
+  .drift-svg { width: 100%; max-width: 100%; }
   .drift svg { display: block; width: 100%; height: 108px; }
   .drift .track-rule { stroke: var(--row-line); stroke-width: 1; }
   .drift .track-rule.faint { stroke: var(--row-line); stroke-dasharray: 2 3; }
   .drift .base-rule { stroke: var(--row-line); stroke-width: 1; }
+  .drift .step-line { fill: none; stroke: var(--ink-faint); stroke-width: 1; }
   .drift .lane-label { fill: var(--ink-faint); font-size: 6.5px; letter-spacing: 0.5px; }
   .drift .target-rule { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 4 3; }
   .drift .vmaf-dot { fill: var(--teal); }
