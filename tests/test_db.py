@@ -766,10 +766,17 @@ class TestDb(unittest.TestCase):
         from shrinkray.app import AppState
         from shrinkray.app import app as fast_app
 
+        # an explicit real root: the reveal test must not depend on the
+        # allowlist a previous test happened to leave behind
+        root = Path(self.tmp.name).resolve()
+        app_module.allow_roots([root])
         app_module.state = AppState(Path(self.tmp.name) / "test.db")
         try:
             client = TestClient(fast_app)
-            response = client.post("/api/reveal", json={"path": "C:/Windows/System32/cmd.exe"})
+            # a real path outside the allowed root (not a drive-letter
+            # literal: on posix that is relative and would reject for the
+            # wrong reason - relativity, not containment)
+            response = client.post("/api/reveal", json={"path": str(root.parent)})
             self.assertEqual(response.status_code, 403)
         finally:
             app_module.state.shutdown()
@@ -803,10 +810,10 @@ class TestDb(unittest.TestCase):
             )
             try:
                 client = TestClient(fast_app)
-                # outside the allowlist => rejected before any file work
-                response = client.post(
-                    "/api/duplicates/delete", json={"path": "C:/Windows/System32/cmd.exe"}
-                )
+                # outside the allowlist => rejected before any file work (a
+                # real path outside the allowed root, not a drive-letter
+                # literal, so the rejection is containment on every platform)
+                response = client.post("/api/duplicates/delete", json={"path": str(root.parent)})
                 self.assertEqual(response.status_code, 403)
                 self.assertTrue(victim.is_file())
                 # inside the allowlist but not a file => 404
