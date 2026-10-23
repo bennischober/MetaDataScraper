@@ -2,12 +2,35 @@
 
 ## Open work (what is really left)
 
+### Product direction (decided 2026-10-23 - see PRODUCT.md)
+
+ShrinkRay is a server-resident, container-installed, unattended re-encoder for a
+large existing collection. It changes a file's **bytes**, never its **identity**.
+Library management (naming, moving, organizing, matching, deduplication,
+acquisition) is out of scope. The work below follows from that decision; each item
+is tracked as a GitHub issue and none of it is implemented yet.
+
+- [ ] **Swap-in-place with a retained original** - GitHub issue #35. The
+      target workflow: encode to a temp file, verify it, then replace the
+      original *in place* with the original renamed aside - never deleted. The
+      UI lists retained originals for manual deletion by the operator. Replaces
+      the old `--replace` plan, which trashed the source; ShrinkRay must have no
+      code path that deletes a source. Needs: the replace step, the retained-file
+      ledger in the db, the UI list, and a `--keep-original` default.
+- [ ] **Remove the dedupe subsystem** - GitHub issue #37. `dedupe.py`,
+      `/api/duplicates`, `/api/duplicates/delete` (the only destructive route),
+      `DuplicatesPage.svelte`, `test_dedupe.py`, and the `send2trash` dependency
+      (used only there). Deduplication is not something that happens in the
+      collection this tool targets.
+- [ ] **Authentication for the dashboard** - GitHub issue #36. Not needed for
+      development; required before any LAN-exposed deployment. Until then the app
+      binds localhost and the README says so.
+
 ### Workflow - needs design + explicit user sign-off
-- [ ] Swap-in-place (`--replace`): completes the loop between "encode done"
-      and "library shrunk" (today the swap is manual). Would verify =>
-      trash source (recoverable) => move output into place. MUST have
-      ceremony: explicit flag, per-file confirmation in the UI, dry-run
-      mapping first. Nothing gets built before the user approves the design.
+- [ ] Swap-in-place implementation detail: the *policy* is decided (retain, never
+      delete); what is not designed is the atomic swap on a network share, the
+      retention ledger, and the UI for manual cleanup. Nothing gets built before
+      the design is reviewed.
 
 ### Small, well-specified
 - [ ] Jellyfin library refresh after successful encodes (opt-in, off by
@@ -20,11 +43,11 @@
       19.1% real vs 78% predicted on The Mandalorian). Document the
       uncertainty range in plan/README.
 - [ ] HDR test material in testdata/ for regression tests (short clip).
-- [ ] Manual "remove from library" action (UI button + CLI flag) that deletes
-      a row and its history deliberately, bypassing the grace period.
-- [ ] Re-parenting: a moved file (renamed folder) re-flags under the new path
-      while the old row ages out; a hash match could reconnect the encode
-      history instead of starting fresh.
+- [ ] ~~Manual "remove from library" action~~ - dropped 2026-10-23: out of scope
+      (library management). Removing a *db row* is not a product feature.
+- [ ] ~~Re-parenting~~ - dropped 2026-10-23: reconnecting a moved file's history
+      assumes the tool tracks identity across renames, which is library
+      management. A moved file is simply a new file.
 
 ### UI (next round) - shared with the UI agent
 - [x] Live job progress: SSE stream (/api/events, ProgressBus pub-sub) -
@@ -52,13 +75,14 @@
       possible at any time)
 
 ### On the real NAS (blocked until hardware access)
-- [ ] Swap-permission check (Send2Trash needs write access to the trash of
-      the library's filesystem - same-mount trash only) and systemd unit
-      smoke on real hardware. WSL rehearsal passed 2026-10-22.
-- [ ] Docker image (proposal, friend request "mount /media + scheduled"):
-      full trade-off map, open decisions (trash story, PUID/PGID, registry)
-      and the proposed commit series live in docs/docker.md. Build only
-      after explicit sign-off.
+- [ ] Swap-in-place smoke on real hardware: systemd unit + a container run
+      against a real share. WSL rehearsal passed 2026-10-22. (The old
+      Send2Trash trash-permission check is obsolete: ShrinkRay no longer
+      deletes files, so no host trash access is needed — see issue #35.)
+- [ ] Docker image (now the **target install shape**, not a proposal): mount
+      the library, run the resident app, watchdog on. Open decisions (retained-
+      original cleanup, PUID/PGID, registry) and the proposed commit series live
+      in docs/docker.md. Tracked as GitHub issue #34.
 
 ### Blocked
 - [ ] Dolby Vision dual-layer handling (the DV enhancement layer may be lost

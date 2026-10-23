@@ -2,11 +2,20 @@
 
 # ShrinkRay
 
-**Scan your movie library — then shrink it without losing quality.**
+**Scan your collection — then shrink it without losing quality.**
 
-A Python CLI that catalogs video metadata and re-encodes your library with
-Netflix-style, quality-measured encoding: smallest files that are still
-perceptually transparent.
+Answers one question per file: *is this file bigger than its quality requires?*
+Where the answer is yes, it re-encodes with Netflix-style, quality-measured
+encoding — the smallest file that is still perceptually transparent. Where the
+answer is no, it leaves the file alone and remembers why.
+
+Built to run unattended on a server against a whole collection, with a watchdog
+for new arrivals and a web dashboard for status. The CLI is a first-class
+product: every capability works without the resident process.
+
+**It shrinks files. It does not manage a library** — no renaming, moving,
+organizing, matching or deduplicating. That belongs to the tooling that already
+put the collection together.
 
 [![CI](https://github.com/bennischober/ShrinkRay/actions/workflows/ci.yml/badge.svg)](https://github.com/bennischober/ShrinkRay/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/bennischober/ShrinkRay/actions/workflows/codeql-analysis.yml/badge.svg)](https://github.com/bennischober/ShrinkRay/actions/workflows/codeql-analysis.yml)
@@ -127,8 +136,9 @@ uv run shrinkray scan 'D:\Movies'
 ### Linux / NAS
 
 Verified on Ubuntu 20.04 (WSL rehearsal for a mini-PC/NAS target): the full
-gate passes, VMAF measurement works, and the duplicate-delete trash policy
-is recoverable (`~/.local/share/Trash`) even without a desktop session.
+gate passes and VMAF measurement works headless. This is the intended
+production shape — a server with the library on a mounted volume, driven by
+the resident app or the CLI.
 
 ```bash
 # 1. uv + the repo (no sudo needed anywhere)
@@ -262,9 +272,11 @@ browser are just two consumers of the same engine and database:
 - the configuration (`config.json`) is editable in the UI's settings dialog
 - jobs survive restarts; jobs interrupted by a restart are marked as failed
 
-The server binds to localhost only — there is no authentication, so do not
-expose it to the network. Stop with Ctrl+C; the running job's state is
-recovered on the next start.
+The server binds to localhost by default — **there is no authentication**, so do not
+expose it to an untrusted network. Binding it to the LAN is a deliberate
+development-stage trade-off (see [TODO.md](TODO.md)); authentication is planned
+before this is recommended for an exposed deployment. Stop with Ctrl+C; the running
+job's state is recovered on the next start.
 
 ### `watch` — one-shot folder watcher
 
@@ -365,6 +377,25 @@ Releases are automated: push a tag, the workflow checks, builds and publishes.
 git tag v0.3.0
 git push origin v0.3.0
 ```
+
+## Direction
+
+ShrinkRay is heading for one shape: a container on a server, pointed at a media
+folder, answering *"could this collection be smaller at the same quality?"* and
+acting on the answer unattended. See [PRODUCT.md](PRODUCT.md) for the contract and
+[ISSUES.md](ISSUES.md) for the work that gets it there.
+
+The boundary that shape implies: **ShrinkRay may change a file's bytes, never its
+identity.** Path, filename and the set of files stay as they are. Re-encoding
+replaces a file in place — the original is renamed aside and kept, and the
+dashboard lists it for manual deletion. ShrinkRay never deletes a source file.
+Everything else — naming, moving, organizing, matching, deduplicating, acquiring —
+belongs to the tooling that already built the collection, and is out of scope here.
+
+> [!NOTE]
+> Swap-in-place and the retained-original workflow are **not implemented yet**.
+> Today `encode` writes to a separate output directory and leaves sources untouched.
+> The current commands below describe what ships now, not the target shape.
 
 ## FAQ
 

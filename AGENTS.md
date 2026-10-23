@@ -6,19 +6,88 @@ README documents the product, PRODUCT.md the product direction.
 
 ## What this project is
 
-A Python CLI + resident app that catalogs a personal movie library
+A Python CLI + resident server app that answers one question per file: **is
+this file bigger than its quality requires?** It catalogs a video collection
 (`scan`), predicts savings (`plan`), re-encodes with measured quality
 (`encode`, VMAF-driven CRF search) and renders an HTML report. The Python
 code is an orchestrator: all heavy work is delegated to external binaries
-(`ffprobe`, `ffmpeg`, `HandBrakeCLI`) via `subprocess`. The movie library
-is sacred — source files are never modified in place.
+(`ffprobe`, `ffmpeg`, `HandBrakeCLI`) via `subprocess`.
+
+It is built to be **given to the community**: it will be installed by strangers on
+their own servers, pointed at libraries they cannot re-acquire, and run unattended.
+That is why the engineering standard below is non-negotiable — a defect here can
+destroy someone else's data, not just annoy its author.
+
+The target shape is a container on a server, pointed at a media folder, running
+unattended with a watchdog and a LAN dashboard. The CLI is a first-class
+product, not a debugging surface: every capability works without the resident
+process. See PRODUCT.md for the product contract.
+
+## Engineering standard (non-negotiable)
+
+This is not a hobby project. It is built to be **given to the community**, which
+raises the bar from "works on my machine" to "a stranger can trust it with their
+library". Read every rule below as a requirement, not an aspiration.
+
+1. **Secure by construction.** Every path from an untrusted input to a file, a
+   subprocess or a socket is validated at the boundary. Argument lists, never shell
+   strings. Paths contained to an allowlist after `realpath`. No secret in a tracked
+   file. A destructive action is opt-in, explicit and recoverable. "It's only on my
+   LAN" is not a security boundary — the target deployment is a NAS reachable by
+   every device on that network.
+2. **Correct under interruption.** This runs unattended for hours against a library
+   that cannot be re-acquired. Every write is atomic or resumable; every crash leaves
+   a recoverable state, never a missing or half-written file. A zero exit code is not
+   success — verify the artifact.
+3. **Honest about failure.** No silent fallback, no swallowed exception, no "it
+   probably worked". If a decision cannot be measured, it is reported as unmeasured
+   and the file is left alone. An error a user cannot see is a bug.
+4. **Tested where it matters.** A behaviour change ships with a test that would fail
+   without it. Tests never pollute the working tree, never depend on the wall clock or
+   timing luck, and never encode a platform assumption that silently inverts on
+   another OS.
+5. **Readable by a stranger.** A module has one coherent responsibility, names state
+   intent, and the control flow is direct. The test is whether someone who has never
+   seen the file can change it safely. Cleverness is a cost, not a credential.
+6. **No unsupported claim in a doc.** Every `file:line`, every performance number,
+   every "supported" in the README is checked against the code or the measurement it
+   describes. A stale doc is a defect with a longer half-life than a stale test.
+
+"Proper" here means exactly what RULES.md means: only what is needed, never less than
+required. It does not mean maximal — it means nothing missing and nothing superfluous.
+
+## Scope boundary (read before adding a feature)
+
+ShrinkRay changes a file's **bytes**, never its **identity**. Path, filename and
+the set of files stay as they are.
+
+- **In scope:** re-encoding at measured quality, black-bar cropping, deciding
+  *whether* a file is worth touching, and recording that decision.
+- **Out of scope:** naming, renaming, moving, organizing, matching, scraping,
+  deduplicating, acquiring, playing or serving media. That work belongs to the
+  tooling that already assembled the collection.
+
+Do not add a feature whose usefulness depends on knowing what a file is *called*
+or *which* file it is. "Is this file the size its quality needs?" is the only
+question this tool answers.
+
+Never name, vendor, or assume any particular acquisition or naming automation in
+code, comments, docs or commit messages. ShrinkRay is written for "a large
+existing video collection" and nothing more specific.
 
 ## Non-negotiable rules
 
-1. **Never modify or delete source movie files.** The library is sacred
-   (see PRODUCT.md). New encodes go to a separate output directory. The
-   only exception is `--remove-bars`, which is explicit, opt-in and
-   irreversible — never enable it on your own.
+1. **Never delete a source movie file.** The library is sacred (see
+   PRODUCT.md). ShrinkRay has no code path that deletes a source; replaced
+   originals are renamed aside and kept until the operator removes them
+   manually. A destructive action in a feature request is a signal to stop and
+   ask, not to implement.
+
+   **Swap-in-place is the intended shape** (encode to a temp file, verify it,
+   then move it into the original's path with the original renamed aside), but
+   it is **not implemented yet** — today `encode` writes to a separate output
+   directory. `--remove-bars` stays explicit and opt-in; never enable it on
+   your own.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.
