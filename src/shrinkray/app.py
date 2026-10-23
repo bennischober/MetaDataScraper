@@ -783,27 +783,49 @@ def events() -> StreamingResponse:
 
     def stream():
         """Drains the mailbox into SSE frames until the client leaves."""
-        try:
-            yield "retry: 3000\n\n"
-            # always hello: authoritative seed on connect AND reconnect —
-            # carries the latest event of every live job (empty after a
-            # quiet stretch, which resets the client's map correctly)
-            yield "event: hello\n"
-            yield "data: " + json.dumps({"jobs": {str(jid): d for jid, d in seed}}) + "\n\n"
-            while True:
-                try:
-                    job_id, data = box.get(timeout=15.0)
-                    yield "data: " + json.dumps({"job_id": job_id, **data}) + "\n\n"
-                except queue.Empty:
-                    yield ": ping\n\n"
-        finally:
-            s.bus.unsubscribe(sid)
+        yield from _sse_stream(s.bus, sid, box, seed)
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _sse_stream(
+    bus: ProgressBus, sid: int, box: "queue.Queue", seed: list, ping_after: float = 15.0
+):
+    """Builds the SSE frame generator for one subscriber.
+
+    Extracted from the endpoint so tests can drive the generator directly
+    (an infinite stream cannot be read to completion through an HTTP test
+    client without blocking forever).
+
+    Args:
+        bus (ProgressBus): The bus to unsubscribe from on exit.
+        sid (int): The subscriber id.
+        box (queue.Queue): The subscriber's mailbox.
+        seed (list): The latest event per job at subscribe time.
+        ping_after (float): Mailbox wait before emitting a ping comment.
+
+    Yields:
+        str: SSE frames (retry, hello, data, ping comments).
+    """
+    try:
+        yield "retry: 3000\n\n"
+        # always hello: authoritative seed on connect AND reconnect —
+        # carries the latest event of every live job (empty after a
+        # quiet stretch, which resets the client's map correctly)
+        yield "event: hello\n"
+        yield "data: " + json.dumps({"jobs": {str(jid): d for jid, d in seed}}) + "\n\n"
+        while True:
+            try:
+                job_id, data = box.get(timeout=ping_after)
+                yield "data: " + json.dumps({"job_id": job_id, **data}) + "\n\n"
+            except queue.Empty:
+                yield ": ping\n\n"
+    finally:
+        bus.unsubscribe(sid)
 
 
 @app.get("/api/library")

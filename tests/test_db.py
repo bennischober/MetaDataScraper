@@ -653,6 +653,45 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_events_stream_frames_and_unsubscribe(self):
+        """The SSE frame generator seeds a hello on connect, streams
+        published progress as data frames, pings when idle, and
+        unregisters the subscriber when the stream ends (no leak)."""
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState, _sse_stream
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            # seed: publish BEFORE any subscriber connects
+            app_module.state.queue.enqueue(
+                __import__("shrinkray.jobs", fromlist=["Job"]).Job(
+                    kind=__import__("shrinkray.jobs", fromlist=["JobKind"]).JobKind.SCAN,
+                    payload={"paths": ["D:/x"]},
+                )
+            )
+            job = app_module.state.queue.take_next()
+            app_module.state.queue.report_progress(job, {"stage": "scan", "percent": 7})
+
+            sid, box, seed = app_module.state.bus.subscribe()
+            gen = _sse_stream(app_module.state.bus, sid, box, seed, ping_after=0.05)
+            frames = [next(gen), next(gen), next(gen)]
+            self.assertEqual(frames[0], "retry: 3000\n\n")
+            self.assertEqual(frames[1], "event: hello\n")
+            self.assertIn('"percent": 7', frames[2])
+            # next frame: the ping (empty mailbox, 0.05s wait)
+            self.assertEqual(next(gen), ": ping\n\n")
+            # publish -> the event flows to THIS subscriber
+            app_module.state.queue.report_progress(job, {"stage": "scan", "percent": 42})
+            data_frame = next(gen)
+            self.assertIn('"percent": 42', data_frame)
+            self.assertIn(f'"job_id": {job.id}', data_frame)
+            # closing the generator unregisters the subscriber (no leak)
+            gen.close()
+            self.assertEqual(len(app_module.state.bus._subs), 0)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_reveal_rejects_outside_root(self):
         """The reveal endpoint uses the same path allowlist as everything
         else (a file manager window must never open outside the roots)."""
