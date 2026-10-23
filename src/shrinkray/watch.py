@@ -21,7 +21,7 @@ from shrinkray.encode import (
 )
 from shrinkray.encode_lock import EncodeBusyError, guard_encodes
 from shrinkray.logger import log, log_error
-from shrinkray.quality import DEFAULT_TARGET_VMAF, encode_with_quality
+from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled, encode_with_quality
 
 # a file is stable when its size is unchanged between two checks ...
 STABLE_CHECK_INTERVAL = 30.0
@@ -250,18 +250,20 @@ def watch(
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
                     known.discard(str(movie.resolve()))  # eligible again next pass
                     continue
+                except Cancelled as e:
+                    # disk watchdog (free space hit the floor) or user cancel:
+                    # partial output already removed by the engine; retry
+                    # when space freed up (or the user re-ran watch)
+                    log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
+                    known.discard(str(movie.resolve()))
+                    continue
                 if result.skipped_reason:
                     log(f"Skipping '{movie.name}': {result.skipped_reason}.")
                 elif result.success:
-                    saved = (
-                        (1 - result.output_size / result.input_size) * 100
-                        if result.input_size > 0 and result.output_size > 0
-                        else 0.0
-                    )
                     log(
                         f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
                         f"(VMAF {result.achieved_vmaf}), "
-                        f"{saved:.1f}% saved (source left untouched)."
+                        f"{result.saved_percent:.1f}% saved (source left untouched)."
                     )
                     # opt-in tap on the media server's shoulder (fire-and-forget)
                     from shrinkray.integrations import notify_after_encodes

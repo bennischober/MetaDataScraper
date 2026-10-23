@@ -70,6 +70,28 @@ def check_disk_space(target_dir: Path, required_bytes: int) -> tuple[bool, str]:
     return True, ""
 
 
+# while encoding, free space below this floor trips the disk watchdog: the
+# encode is cancelled (partial output removed) instead of filling the shared
+# drive - a full disk harms every co-tenant, not just this run
+DISK_FREE_FLOOR_BYTES = 1 * 1024**3
+
+
+def disk_free_bytes(target_dir: Path) -> int | None:
+    """Reads the free bytes on the drive of target_dir (None if unreadable).
+
+    Args:
+        target_dir (Path): Any directory on the drive to check.
+
+    Returns:
+        int | None: Free bytes, or None when the drive cannot be probed
+            (the watchdog must never crash an encode on a broken statvfs).
+    """
+    try:
+        return shutil.disk_usage(target_dir).free
+    except OSError:
+        return None
+
+
 @dataclass
 class EncodeResult:
     """Result of a HandBrake encode.
@@ -256,11 +278,25 @@ def _encode_with_command(
     as {'stage': 'encode', 'percent': 42.31, 'movie': name}. With a cancel
     event, the streamed loop aborts and the process is terminated.
 
+    The streamed loop is also the disk watchdog: on every percent line the
+    free space on the output drive is checked, and when it drops to the
+    floor (DISK_FREE_FLOOR_BYTES) the encode is cancelled before the drive
+    fills - the preflight's prediction can be wrong (size estimate,
+    fixed-mode growth, a co-tenant consuming space concurrently).
+
+    On any cancellation (cancel event or disk watchdog) the partial output
+    file is removed: it is truncated debris by definition (A1 semantics),
+    and it is OUR product from THIS run - never a pre-existing file.
+
     Args:
         input_file (Path): The source file.
         output_file (Path): The target file.
         command (list[str]): The full HandBrakeCLI command.
         progress (callable | None): Callback progress(dict) for live updates.
+            MUST be a callable taking one dict (a rich Progress object is
+            NOT callable and would crash on the first percent line); pass
+            None only when neither progress nor the disk watchdog is wanted
+            (non-streamed blocking run).
 
     Returns:
         EncodeResult: The result of the encode.
@@ -269,6 +305,7 @@ def _encode_with_command(
     returncode: int
     stderr_bytes: bytes | None = None
     cancelled = False
+    cancel_reason = "cancelled by user"
     stderr_chunks: list[bytes] = []
     try:
         if progress is None:
@@ -316,6 +353,29 @@ def _encode_with_command(
                 line = raw.decode(errors="replace").strip()
                 match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
                 if match:
+                    # disk watchdog: the preflight's prediction can be wrong
+                    # (size estimate, fixed-mode growth, another process
+                    # consuming the drive). When free space drops to the
+                    # floor, cancel the encode rather than fill a shared
+                    # disk. One statvfs per percent line is effectively free.
+                    free = disk_free_bytes(output_file.parent)
+                    if free is not None and free < DISK_FREE_FLOOR_BYTES:
+                        log(
+                            f"Disk watchdog: only {free / (1024**3):.1f} GB free on "
+                            f"'{output_file.parent}' => cancelling the encode of "
+                            f"'{input_file.name}' before the drive fills."
+                        )
+                        popen.terminate()
+                        try:
+                            popen.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            popen.kill()
+                            popen.wait(timeout=5)
+                        cancelled = True
+                        returncode = -1
+                        cancel_reason = "cancelled: disk space exhausted"
+                        stderr_bytes = b"cancelled: disk space exhausted"
+                        break
                     progress(
                         {
                             "stage": "encode",
@@ -342,8 +402,16 @@ def _encode_with_command(
         return EncodeResult(input=input_file, output=output_file, success=False, error=str(e))
 
     if cancelled:
+        # a killed HandBrake leaves a truncated partial: OUR product from
+        # THIS run, debris by definition => remove it immediately (never a
+        # pre-existing file)
+        output_file.unlink(missing_ok=True)
         return EncodeResult(
-            input=input_file, output=output_file, success=False, cancelled=True, error="cancelled"
+            input=input_file,
+            output=output_file,
+            success=False,
+            cancelled=True,
+            error=cancel_reason,
         )
 
     stderr = (stderr_bytes or b"").decode(errors="replace").strip()
@@ -611,10 +679,20 @@ def _encode_pending(
             encoder,
             encoder_threads=cap,
         )
-        return _encode_with_command(movie, output_file, command, progress=progress)
+        # always stream: the streamed loop is the disk watchdog too (a
+        # blocking subprocess.run would encode unwatched)
+        return _encode_with_command(movie, output_file, command, progress=percent_callback)
 
     with Progress() as progress:
         task = progress.add_task("Encoding movies", total=len(pending))
+
+        def percent_callback(data: dict) -> None:
+            """Feeds engine percent events into the rich bar (a rich Progress
+            is not callable itself - passing it as the callback crashed on
+            the first HandBrake percent line)."""
+            if "percent" in data:
+                progress.update(task, completed=float(data["percent"]))
+
         if workers == 1:
             for movie, output_file in pending:
                 result = run_one(movie, output_file, None)

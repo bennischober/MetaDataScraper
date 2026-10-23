@@ -17,6 +17,7 @@ from shrinkray.config import load_config
 from shrinkray.encode import cap_threads
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
+from shrinkray.quality import Cancelled as _EncodeCancelled
 from shrinkray.report import generate_report
 from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
 from shrinkray.service import (
@@ -529,6 +530,12 @@ def _record_encodes(
                         record_quality_results(connection, movie, result, config, target_vmaf)
                     else:
                         log_error(f"Encoding '{movie.name}' failed: {result.error}")
+        except _EncodeCancelled as e:
+            # the disk watchdog fired (free space hit the floor mid-encode)
+            # or the job/user cancel event set in - the partial output is
+            # already removed by the engine, so exit honestly
+            log_error(str(e))
+            raise typer.Exit(1) from e
         except (RuntimeError, FileNotFoundError) as e:
             log_error(str(e))
             raise typer.Exit(1) from e

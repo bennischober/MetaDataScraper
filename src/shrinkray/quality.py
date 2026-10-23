@@ -32,7 +32,6 @@ from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
     _encode_with_command,
-    durations_match,
     find_handbrake,
     probe_duration_seconds,
 )
@@ -1565,54 +1564,20 @@ def encode_with_quality(
         crop=crop,
         encoder_threads=encoder_threads,
     )
+    # always stream the final encode: the streamed loop is the disk watchdog
+    # (free-space floor => cancel instead of filling the drive). Callers
+    # without a progress interest get a no-op callback; the events are
+    # identical either way.
     if progress is None:
-        code, err = _run(command, cancel=cancel)
-        if code == -1:
-            # terminated mid-encode: clean the partial output
-            output_file.unlink(missing_ok=True)
-            raise Cancelled("cancelled during final encode")
-    else:
-        encode_result = _encode_with_command(
-            input_file, output_file, command, progress=progress, cancel=cancel
-        )
-        if encode_result.cancelled:
-            output_file.unlink(missing_ok=True)
-            raise Cancelled("cancelled during final encode")
-        if not encode_result.success:
-            return QualityResult(
-                input=input_file,
-                output=output_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                error=encode_result.error,
-            )
-        # success path: skip the verification below (already done)
-        return QualityResult(
-            input=input_file,
-            output=output_file,
-            success=True,
-            target_vmaf=target_vmaf,
-            chosen_crf=crf,
-            achieved_vmaf=achieved,
-            probes=probes,
-            input_size=input_file.stat().st_size,
-            output_size=output_file.stat().st_size,
-            encoder_preset=encoder_preset,
-            encode_seconds=_time.perf_counter() - run_started,
-            probe_seconds=probe_seconds,
-            hdr=hdr,
-            tool_versions=_tool_versions(handbrake),
-            input_width=snapshot["width"],
-            input_height=snapshot["height"],
-            input_codec=snapshot["codec"],
-            input_duration=snapshot["duration"],
-            input_bitrate=snapshot["bitrate"],
-            output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
-        )
-    if code != 0:
+        progress = lambda data: None  # noqa: E731
+    encode_result = _encode_with_command(
+        input_file, output_file, command, progress=progress, cancel=cancel
+    )
+    if encode_result.cancelled:
+        # _encode_with_command already removed the partial output; only the
+        # engine-level skip-vs-fail classification remains
+        raise Cancelled(encode_result.error or "cancelled during final encode")
+    if not encode_result.success:
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1621,34 +1586,9 @@ def encode_with_quality(
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
-            error=err or "handbrake failed",
+            error=encode_result.error,
         )
-
-    # HandBrake may exit with 0 even if the encode failed => the output
-    # file must exist, be non-empty and have the full duration
-    if not output_file.is_file() or output_file.stat().st_size == 0:
-        return QualityResult(
-            input=input_file,
-            output=output_file,
-            success=False,
-            target_vmaf=target_vmaf,
-            chosen_crf=crf,
-            achieved_vmaf=achieved,
-            probes=probes,
-            error=err or "no output file was written",
-        )
-    if not durations_match(input_file, output_file):
-        return QualityResult(
-            input=input_file,
-            output=output_file,
-            success=False,
-            target_vmaf=target_vmaf,
-            chosen_crf=crf,
-            achieved_vmaf=achieved,
-            probes=probes,
-            error="output is truncated (duration mismatch)",
-        )
-
+    # success path: skip the verification below (already done)
     return QualityResult(
         input=input_file,
         output=output_file,

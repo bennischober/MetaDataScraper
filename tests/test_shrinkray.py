@@ -425,6 +425,99 @@ class TestEncode(unittest.TestCase):
                 f"streamed run misread exit code: success={result.success} error={result.error!r}",
             )
 
+    def test_encode_movies_rich_bar_survives_percent_lines(self):
+        """Fixed mode's rich bar wiring: the engine gets a CALLABLE (not the
+        rich Progress object) - the first HandBrake percent line used to
+        raise TypeError: 'Progress' object is not callable."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            stub = out_dir / "hb_stub.cmd" if os.name == "nt" else out_dir / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nexit 0\n')
+                stub.chmod(0o755)
+            with (
+                mock.patch("shrinkray.encode.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+            ):
+                # must not raise TypeError; the encode result is failure
+                # (stub writes no output) but the crash is the regression
+                results = encode.encode_movies([src], out_dir)
+            self.assertEqual(len(results), 1)
+            self.assertFalse(results[0].success)
+            self.assertEqual(results[0].error, "no output file was written")
+
+    def test_disk_watchdog_cancels_when_space_drops(self):
+        """When free space on the output drive drops below the floor, the
+        streamed encode is cancelled: the process is terminated, the partial
+        output (our own product) is removed and the failure names the
+        reason - never fill a shared disk."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "out.mkv"
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            out = out_dir / "out.mkv"
+            src.write_bytes(b"x" * 8)
+            # a stub "HandBrake" that writes a partial file and emits percent
+            # lines forever (until killed)
+            if os.name == "nt":
+                script = out_dir / "hb_stub.cmd"
+                script.write_bytes(
+                    b"@echo off\r\n"
+                    b":loop\r\n"
+                    b"echo Encoding: task 1 of 1, 42.31 %%\r\n"
+                    b"timeout /t 1 /nobreak >nul\r\n"
+                    b"goto loop\r\n"
+                )
+                command = [str(script)]
+            else:
+                script = out_dir / "hb_stub.sh"
+                script.write_bytes(
+                    b'#!/bin/sh\nwhile true; do echo "Encoding: task 1 of 1, 42.31 %"; sleep 1; done\n'
+                )
+                script.chmod(0o755)
+                command = [str(script)]
+            with mock.patch(
+                "shrinkray.encode.disk_free_bytes", return_value=1_000_000
+            ):  # ~1 MB: below the 1 GiB floor
+                result = encode._encode_with_command(src, out, command, progress=lambda p: None)
+            self.assertFalse(result.success)
+            self.assertTrue(result.cancelled)
+            self.assertIn("disk space", result.error or "")
+            # the partial output was removed by the engine itself
+            self.assertFalse(out.exists())
+
+    def test_disk_watchdog_ignores_unreadable_drive(self):
+        """An unreadable drive (disk_free_bytes None) never crashes or
+        cancels an encode - the watchdog degrades gracefully."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x" * 8)
+            command = ["cmd", "/c", "exit 0"] if os.name == "nt" else ["true"]
+            with mock.patch("shrinkray.encode.disk_free_bytes", return_value=None):
+                result = encode._encode_with_command(src, out, command, progress=lambda p: None)
+            # no cancellation: the watchdog stayed out of the way
+            self.assertFalse(result.cancelled)
+            self.assertIn(result.success or result.error == "no output file was written", (True,))
+
 
 class TestDb(unittest.TestCase):
     def setUp(self):
@@ -1978,6 +2071,43 @@ class TestJobs(unittest.TestCase):
         event.set()
         with self.assertRaises(Cancelled):
             _check_cancel(event)
+
+    def test_quality_final_encode_always_streams(self):
+        """Quality mode's final encode goes through the streamed loop even
+        with progress=None (watch mode) - that loop is the disk watchdog;
+        a blocking subprocess.run would encode unwatched. A watchdog
+        cancellation surfaces as Cancelled with the engine's reason and the
+        partial output already removed."""
+        import tempfile
+
+        from shrinkray.quality import Cancelled, encode_with_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "in.mkv"
+            out = root / "enc" / "in.mkv"
+            (root / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nexit 0\n')
+                stub.chmod(0o755)
+
+            def fake_probe(*args, **kwargs):
+                return 20, 95.2, [], None
+
+            with (
+                mock.patch("shrinkray.quality._probe_movie", side_effect=fake_probe),
+                mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.encode.disk_free_bytes", return_value=1_000_000),
+                self.assertRaises(Cancelled) as ctx,
+            ):
+                encode_with_quality(src, out, progress=None)
+            self.assertIn("disk space", str(ctx.exception))
+            # the streamed engine removed the partial output itself
+            self.assertFalse(out.exists())
 
     def test_encode_single_file_payload(self):
         """A per-movie encode payload (a FILE path, as the UI's detail page
