@@ -2,6 +2,37 @@
 
 ## Known limitations / planned work
 
+### Recursive-trap assessment (DONE 2026-10-23 - resident-loop cycle audit)
+Audited every cycle candidate (can the tool re-ingest its own output? can a
+failure state retry forever?). FIXED in `dcf3f23`:
+- [x] Watch starvation: `known.add()` ran before the stability check =>
+      every normal copy arrival was logged "later" and never reconsidered.
+      Unstable files now stay out of `known` (retry next pass, as promised).
+- [x] Watch disk-full retry burn: watchdog cancel + retry = a full CRF probe
+      burned per candidate per pass on a full drive, forever. Pass-level
+      guard now skips the whole pass below the floor BEFORE anything enters
+      `known`; movies stay eligible, adaptive poll backs off.
+- [x] Watch overlap misconfiguration: inbox == output_dir (or nesting) would
+      have the watcher re-encode its own output - worst case HandBrake
+      writes its input's path (source truncation). Refused with ValueError
+      in either direction.
+- [x] App could not stop the watcher (watch_stop was never consulted):
+      watch() takes stop_event now, checked between passes and during sleep.
+
+Verified safe by the audit (no change needed): CLI/jobs re-ingestion blocked
+by `scan_movies(exclude=output_dir)` (degenerate overlaps collapse to 0
+movies); generation chains terminate via the size guardrail (factor >= 1.0
+at the pessimistic CRF - x265-of-x265 gains run out); CRF bisect bounded
+(~4 probes); failed/cancelled jobs never auto-retry; two watchers blocked by
+the pid lock; watch vs CLI/job serialized by the encode slot.
+
+Remaining liveness gap (out of scope here, deliberate):
+- [ ] No subprocess timeout on `_run` / `_encode_with_command`: a hung
+      HandBrake stalls the watch pass indefinitely (stuck, not recursive).
+      A kill-after-N-hours policy would need a config knob and a
+      decision about partial-output semantics - same cleanup path as the
+      watchdog cancel.
+
 ### Reliability wave (DONE 2026-10-23 - the core loop's last honesty gaps)
 - [x] A1 Interrupted-encode debris: a crashed/killed encode leaves a partial
       output file (non-empty, truncated). `encode_movies`' resume filter
