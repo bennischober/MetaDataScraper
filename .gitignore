@@ -82,3 +82,9 @@ report.html
 ISSUES.md
 
 .opencode
+.omo
+
+# local test media: keep the folder, never its contents (any file, any depth)
+/test_media/*
+!/test_media/.gitkeep
+
