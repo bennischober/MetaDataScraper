@@ -1,6 +1,7 @@
 """Encode engine tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -232,10 +233,93 @@ class TestEncode(unittest.TestCase):
             self.assertEqual(result.error, "cancelled by user")
             self.assertFalse(out.exists())
 
+    def test_cr_progress_never_looks_stalled(self):
+        """THE round-6.11 regression: a child streaming \\r-separated
+        progress (real HandBrake's piped shape — measured: progress lines
+        contain NO \\n, largest real gap 0.27s) must NEVER be killed by
+        the stall watchdog. The old readline() pump never saw those bytes,
+        so a healthy encode died after 10 min ('stalled') with its cores
+        fully busy. Percent values split across chunks must still parse."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            # a child that streams \r-only progress CONTINUOUSLY (gaps of
+            # 0.2s, far inside the watchdog window) for ~6s and then
+            # exits: with the chunk pump the watchdog can never fire while
+            # updates flow — the old readline() pump saw NOTHING and would
+            # have killed this child at the 5s mark
+            stub = Path(tmp) / "hb_stub.py"
+            stub.write_text(
+                "import sys, time\n"
+                "for i in range(1, 31):\n"
+                "    sys.stdout.write(f'Encoding: task 1 of 1, {i}.00 %')\n"
+                "    sys.stdout.write('\\r')\n"
+                "    sys.stdout.flush()\n"
+                "    time.sleep(0.2)\n",
+                encoding="utf-8",
+            )
+            percents: list[float] = []
+            with (
+                mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=5.0),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+            ):
+                result = encode._encode_with_command(
+                    src,
+                    out,
+                    [sys.executable, str(stub)],
+                    progress=lambda d: percents.append(d["percent"]),
+                )
+            # ~40 \r-updates over ~12-40s of child runtime: the watchdog
+            # (2s) must NEVER have fired despite updates being \r-only...
+            self.assertFalse(
+                (result.error or "").startswith("stalled"),
+                f"watchdog killed a \\r-streaming child: {result.error!r}",
+            )
+            # ...and the percent parser was fed by the \r lines
+            self.assertGreaterEqual(len(percents), 10, f"percents: {percents[:5]}...")
+            self.assertIn(1.0, percents)
+            self.assertIn(30.0, percents)
+
+    def test_percent_split_across_chunks_still_parses(self):
+        """A percent value split mid-number across raw writes ('12.3' | '4 %')
+        must still produce one percent event (the tail buffer)."""
+        import tempfile
+
+        from shrinkray import encode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mkv"
+            out = Path(tmp) / "enc" / "out.mkv"
+            (Path(tmp) / "enc").mkdir()
+            src.write_bytes(b"x" * 8)
+            # printf byte-exact pieces: 'Encoding: task 1 of 1, 12.3' then '4 %'
+            stub = Path(tmp) / "hb_stub_split.py"
+            stub.write_text(
+                "import sys, time\n"
+                "sys.stdout.write('Encoding: task 1 of 1, 12.3')\n"
+                "sys.stdout.flush()\n"
+                "time.sleep(0.5)\n"
+                "sys.stdout.write('4 %')\n"
+                "sys.stdout.flush()\n",
+                encoding="utf-8",
+            )
+            percents: list[float] = []
+            with mock.patch("shrinkray.encode.durations_match", return_value=True):
+                encode._encode_with_command(
+                    src,
+                    out,
+                    [sys.executable, str(stub)],
+                    progress=lambda d: percents.append(d["percent"]),
+                )
+            self.assertIn(12.34, percents, f"percents: {percents}")
+
     def test_stall_watchdog_terminates_hung_child(self):
-        """No child output for stall_minutes => the engine terminates the
-        hung child itself, removes the partial and reports a FAILURE
-        (cancelled=False) so callers do not retry a stalling encode."""
         import tempfile
 
         from shrinkray import encode

@@ -1680,7 +1680,7 @@ def encode_with_quality(
     if progress is None:
         progress = lambda data: None  # noqa: E731
     encode_result = _encode_with_command(
-        input_file, output_file, command, progress=progress, cancel=cancel
+        input_file, output_file, command, progress=progress, cancel=cancel, db_file=db_file
     )
     if encode_result.cancelled:
         # _encode_with_command already removed the partial output; only the

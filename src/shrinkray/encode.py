@@ -309,6 +309,7 @@ def _encode_with_command(
     command: list[str],
     progress=None,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> EncodeResult:
     """Runs one HandBrake command and verifies its output.
 
@@ -338,6 +339,9 @@ def _encode_with_command(
             NOT callable and would crash on the first percent line); pass
             None only when neither progress nor the disk watchdog is wanted
             (non-streamed blocking run).
+        db_file (Path | None): The database file, used to locate logs/ for
+            the stall failure bundle (None: caller without a DB skips
+            telemetry — CLI one-shots already print the reason).
 
     Returns:
         EncodeResult: The result of the encode.
@@ -355,10 +359,18 @@ def _encode_with_command(
             returncode = proc.returncode
             stderr_bytes = proc.stderr
         else:
+            # bufsize=0: UNBUFFERED pipes. The default (~8KB buffered reader)
+            # would make stream.read(4096) block until the buffer fills —
+            # HandBrake's ~30-byte \r-updates never do, and the stall
+            # watchdog would kill a healthy encode again (the round-6.11
+            # false positive had two layers: readline() waiting for \n AND
+            # the buffered read waiting for a full buffer; raw os.read on
+            # the real binary showed updates every ~0.2s).
             popen = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                bufsize=0,
                 **resources.session_kwargs(),
                 **resources.spawn_kwargs(),
             )
@@ -392,12 +404,25 @@ def _encode_with_command(
             stdout_queue: queue.Queue[bytes | None] = queue.Queue()
 
             def _pump_stdout() -> None:
-                """Reads stdout lines into the queue until EOF (None sentinel)."""
+                """Reads raw stdout chunks into the queue until EOF (None
+                sentinel).
+
+                Chunk reads (read1), NOT readline(): HandBrake's piped
+                progress is \r-separated and never contains a \n (measured
+                live: ~14k chunks/120s, every one CR-only, largest gap
+                0.27s). readline() blocked forever between such updates, so
+                a HEALTHY encode looked silent and the stall watchdog
+                killed it after 10 minutes (the round-6.11 false positive:
+                a real encode died mid-run with cores fully busy).
+                """
                 stream = popen.stdout
                 if stream is None:
                     return
                 try:
-                    for chunk in iter(stream.readline, b""):
+                    while True:
+                        chunk = stream.read(4096)
+                        if not chunk:
+                            break
                         stdout_queue.put(chunk)
                 except (ValueError, OSError):
                     pass  # pipe closed during shutdown (cancellation race)
@@ -409,6 +434,80 @@ def _encode_with_command(
 
             last_output = time.monotonic()
             stall_seconds = stall_timeout_seconds()
+            pending = b""  # raw tail: a percent value may span chunks
+
+            def _stdout_lines(chunk: bytes) -> list[str]:
+                """Splits one raw stdout chunk into complete lines.
+
+                Both \r and \n end a line (HandBrake overwrites its
+                progress line with \r; its log lines end \r\n). The
+                incomplete tail is kept for the next chunk — a percent
+                value can be split mid-number across writes.
+
+                Args:
+                    chunk (bytes): The raw bytes just read from stdout.
+
+                Returns:
+                    list[str]: The complete lines, decoded and stripped.
+                """
+                nonlocal pending
+                pending += chunk
+                *complete, pending = re.split(rb"[\r\n]", pending)
+                return [p.decode(errors="replace").strip() for p in complete]
+
+            def _on_percent(match: re.Match) -> bool:
+                """Handles one percent match: disk watchdog, live event.
+
+                Args:
+                    match (re.Match): The percent regex match.
+
+                Returns:
+                    bool: True when the encode must abort (disk floor hit);
+                    the main loop breaks then.
+                """
+                nonlocal cancelled, returncode, cancel_reason, stderr_bytes
+                # disk watchdog: the preflight's prediction can be wrong
+                # (size estimate, fixed-mode growth, another process
+                # consuming the drive). When free space drops to the
+                # floor, cancel the encode rather than fill a shared
+                # disk. One statvfs per percent line is effectively free.
+                free = disk_free_bytes(output_file.parent)
+                if free is not None and free < DISK_FREE_FLOOR_BYTES:
+                    log(
+                        f"Disk watchdog: only {free / (1024**3):.1f} GB free on "
+                        f"'{output_file.parent}' => cancelling the encode of "
+                        f"'{input_file.name}' before the drive fills."
+                    )
+                    resources.terminate_tree(popen)
+                    cancelled = True
+                    returncode = -1
+                    cancel_reason = "cancelled: disk space exhausted"
+                    stderr_bytes = b"cancelled: disk space exhausted"
+                    return True
+                progress(
+                    {
+                        "stage": "encode",
+                        "percent": float(match.group(1)),
+                        "movie": input_file.name,
+                    }
+                )
+                return False
+
+            def _consume(raw: bytes) -> bool:
+                """Scans one chunk for percent updates.
+
+                Args:
+                    raw (bytes): The raw chunk from the pump thread.
+
+                Returns:
+                    bool: True when the encode must abort (disk floor hit).
+                """
+                for line in _stdout_lines(raw):
+                    match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
+                    if match and _on_percent(match):
+                        return True
+                return False
+
             while True:
                 # cooperative cancel: checked every tick, silent child or not
                 if cancel is not None and cancel.is_set():
@@ -431,8 +530,18 @@ def _encode_with_command(
                     )
                     _terminate(popen)
                     returncode = -1
-                    stderr_bytes = b"stalled: no HandBrake output for "
-                    stderr_bytes += f"{stall_seconds / 60:.0f} min".encode()
+                    # keep the child's own collected stderr as evidence —
+                    # the one-line stall message goes in FRONT of it (the
+                    # pre-2026-10-23 code OVERWROTE the collected stderr
+                    # here, discarding the evidence of what the child was
+                    # doing when it looked hung)
+                    collected = b"".join(stderr_chunks)
+                    stderr_bytes = (
+                        b"stalled: no HandBrake output for "
+                        + f"{stall_seconds / 60:.0f} min".encode()
+                        + b"\n--- child stderr (last output before termination) ---\n"
+                        + collected
+                    )
                     stall_failed = True
                     break
                 try:
@@ -441,28 +550,18 @@ def _encode_with_command(
                     continue  # silent child: re-check cancel/stall on the next tick
                 if raw is None:  # EOF sentinel: the child exited
                     break
-                last_output = time.monotonic()
-                line = raw.decode(errors="replace").strip()
-                match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
+                last_output = (
+                    time.monotonic()
+                )  # ANY bytes count: a working HandBrake streams \r-updates
+                if _consume(raw):
+                    break
+            # EOF flush: the last progress line may lack its terminator.
+            # Only the event fires here — the disk watchdog ran on every
+            # prior percent line, and terminating an already-exited child
+            # would turn a finished encode into a failure.
+            if pending and not cancelled and not stall_failed:
+                match = re.search(r"(\d{1,3}\.\d{2})\s*%", pending.decode(errors="replace"))
                 if match:
-                    # disk watchdog: the preflight's prediction can be wrong
-                    # (size estimate, fixed-mode growth, another process
-                    # consuming the drive). When free space drops to the
-                    # floor, cancel the encode rather than fill a shared
-                    # disk. One statvfs per percent line is effectively free.
-                    free = disk_free_bytes(output_file.parent)
-                    if free is not None and free < DISK_FREE_FLOOR_BYTES:
-                        log(
-                            f"Disk watchdog: only {free / (1024**3):.1f} GB free on "
-                            f"'{output_file.parent}' => cancelling the encode of "
-                            f"'{input_file.name}' before the drive fills."
-                        )
-                        resources.terminate_tree(popen)
-                        cancelled = True
-                        returncode = -1
-                        cancel_reason = "cancelled: disk space exhausted"
-                        stderr_bytes = b"cancelled: disk space exhausted"
-                        break
                     progress(
                         {
                             "stage": "encode",
@@ -515,8 +614,26 @@ def _encode_with_command(
         )
     if stall_failed:
         # the stall watchdog fired: same partial-output semantics as any
-        # termination, but NOT a cancel - the caller must not retry it
+        # termination, but NOT a cancel - the caller must not retry it.
+        # Telemetry: a stall kill is a diagnosis problem (was the child
+        # really hung?) - leave the same evidence bundle as any other
+        # failure (pre-2026-10-23 the path returned silently, logs/ never
+        # even existed after one)
         output_file.unlink(missing_ok=True)
+        if db_file is not None:
+            from shrinkray.telemetry import save_failure
+
+            save_failure(
+                db_file=db_file,
+                kind="encode-stall",
+                command=command,
+                stderr=(stderr_bytes or b"").decode(errors="replace").strip(),
+                context={
+                    "movie": input_file.name,
+                    "output": str(output_file),
+                    "stall_minutes": stall_seconds / 60.0 if stall_seconds else None,
+                },
+            )
         return EncodeResult(
             input=input_file,
             output=output_file,
