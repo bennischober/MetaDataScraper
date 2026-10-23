@@ -660,6 +660,8 @@ def add_encode(
     source_file: str | None = None,
     output_file: str | None = None,
     generation: int = 1,
+    crf_source: str | None = None,
+    plan_created_at: str | None = None,
 ) -> int:
     """Records an encode in the history table.
 
@@ -681,6 +683,10 @@ def add_encode(
             N+1 from this row.
         generation (int): 1 for an encode of an original source, N+1 when
             the input was itself produced by a previous encode row.
+        crf_source (str | None): Provenance of the CRF decision: 'plan'
+            when reused from a stored plan, 'probe' when measured now.
+        plan_created_at (str | None): When the trusted plan was probed
+            ('plan' provenance only).
 
     Returns:
         int: The encode id.
@@ -692,9 +698,10 @@ def add_encode(
             chosen_crf, achieved_vmaf, encoder_preset, encode_seconds,
             probe_count, probe_seconds, hdr, source_width, source_height,
             source_codec, source_duration, tool_versions,
-            input_bitrate, output_bitrate, source_file, output_file, generation
+            input_bitrate, output_bitrate, source_file, output_file, generation,
+            crf_source, plan_created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -720,6 +727,8 @@ def add_encode(
             source_file,
             output_file,
             generation,
+            crf_source,
+            plan_created_at,
         ),
     )
     connection.commit()

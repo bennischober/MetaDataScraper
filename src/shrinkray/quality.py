@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -311,6 +312,18 @@ class QualityResult:
     input_duration: float | None = None
     input_bitrate: float | None = None
     output_bitrate: float | None = None
+    # the probing pipeline's effective decision inputs (fingerprint of a
+    # stored plan): HDR overrides target/range before probing, so these
+    # carry the OVERRIDDEN values
+    crop: tuple[int, int, int, int] | None = None
+    remove_bars: bool = False
+    crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
+    sample_count: int = DEFAULT_SAMPLE_COUNT
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS
+    # provenance of the CRF decision ('plan' when reused from a stored
+    # plan, 'probe' when measured now, None when not applicable)
+    crf_source: str | None = None
+    plan_created_at: str | None = None
 
     @property
     def saved_percent(self) -> float:
@@ -1332,6 +1345,10 @@ def plan_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            remove_bars=remove_bars,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
         )
 
     handbrake = find_handbrake()
@@ -1390,6 +1407,12 @@ def plan_quality(
                 output_size=input_size,
                 error="skipped: re-encode would not shrink the file",
                 skipped_reason="no size gain",
+                encoder_preset=encoder_preset,
+                remove_bars=remove_bars,
+                crop=crop,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
             )
         if achieved < target_vmaf and crf == crf_range[0]:
             return QualityResult(
@@ -1407,6 +1430,12 @@ def plan_quality(
                     f"(best {achieved} at CRF {crf_range[0]})"
                 ),
                 skipped_reason="target unreachable",
+                encoder_preset=encoder_preset,
+                remove_bars=remove_bars,
+                crop=crop,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
             )
 
         return QualityResult(
@@ -1420,9 +1449,103 @@ def plan_quality(
             input_size=input_size,
             output_size=int(input_size * factor),
             error=None,
+            encoder_preset=encoder_preset,
+            remove_bars=remove_bars,
+            crop=crop,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _plan_crop(plan: sqlite3.Row) -> tuple[int, int, int, int] | None:
+    """Parses a stored plan's crop rect ('top,bottom,left,right').
+
+    Args:
+        plan (sqlite3.Row): The plan row.
+
+    Returns:
+        tuple[int, int, int, int] | None: The crop rect, or None.
+    """
+    raw = plan["crop"]
+    if not raw:
+        return None
+    parts = [int(v) for v in str(raw).split(",")]
+    if len(parts) != 4:
+        return None
+    return (parts[0], parts[1], parts[2], parts[3])
+
+
+def _plan_probes(plan: sqlite3.Row) -> list[SampleProbe]:
+    """Restores a stored plan's probe list from its JSON column.
+
+    Args:
+        plan (sqlite3.Row): The plan row.
+
+    Returns:
+        list[SampleProbe]: The probes that backed the plan's decision.
+    """
+    try:
+        pairs = json.loads(plan["probes"] or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [SampleProbe(crf=int(c), vmaf=float(v)) for c, v in pairs]
+
+
+def _lookup_plan(
+    db_file: Path,
+    input_file: Path,
+    *,
+    encoder: str,
+    encoder_preset: str,
+    target_vmaf: float,
+    crf_range: tuple[int, int],
+    sample_count: int,
+    sample_seconds: float,
+    remove_bars: bool,
+) -> sqlite3.Row | None:
+    """Consults the plan cache for a valid plan of this movie+settings.
+
+    Opens a short-lived read connection (the engine stays connection-free;
+    db_file already locates the logs dir, so it already knows the db).
+    Any mismatch, missing file row or vanished movie returns None — the
+    caller re-probes, never guesses.
+
+    Args:
+        db_file (Path): The database file.
+        input_file (Path): The movie to encode.
+        encoder (str): The pending encode's effective encoder.
+        encoder_preset (str): The pending encode's preset.
+        target_vmaf (float): The pending encode's (HDR-overridden) target.
+        crf_range (tuple[int, int]): The pending encode's (HDR-overridden) range.
+        sample_count (int): The pending encode's sample count.
+        sample_seconds (float): The pending encode's sample length.
+        remove_bars (bool): The pending encode's remove_bars setting.
+
+    Returns:
+        sqlite3.Row | None: The valid plan row, or None.
+    """
+    from shrinkray import db as _db
+
+    if not input_file.is_file():
+        return None
+    connection = _db.connect(db_file)
+    try:
+        return _db.get_valid_plan(
+            connection,
+            input_file,
+            encoder=encoder,
+            encoder_preset=encoder_preset,
+            target_vmaf=target_vmaf,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            remove_bars=remove_bars,
+        )
+    finally:
+        connection.close()
 
 
 def _probe_movie(
@@ -1555,6 +1678,7 @@ def encode_with_quality(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     verify: bool = False,
+    force_reprobe: bool = False,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1584,6 +1708,10 @@ def encode_with_quality(
         verify (bool): Run a full-file VMAF verification after a successful
             encode (opt-in: hours of decode for a large movie; sub-sampled
             1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
+        force_reprobe (bool): Bypass the plan lookup entirely and run the
+            normal probing pipeline even when a valid plan exists (CLI:
+            --replan). Plans are only consulted for explicit encode runs;
+            watch mode passes True to stay independent of plan staleness.
 
     Returns:
         QualityResult: The result of the encode.
@@ -1633,32 +1761,112 @@ def encode_with_quality(
     if space_message:
         log(f"Warning: {space_message}")
 
-    try:
-        crf, achieved, probes, crop = _probe_movie(
+    # plan-result reuse ("quicksave"): plan_quality and the probe pipeline
+    # are the same deterministic computation - a valid stored plan replaces
+    # probing entirely. ANY fingerprint mismatch (file changed, different
+    # settings) fails safe to the normal probing path. The lookup uses the
+    # OVERRIDDEN target/range so HDR consistency falls out of the same rule.
+    plan = None
+    if db_file is not None and not force_reprobe:
+        plan = _lookup_plan(
+            db_file,
             input_file,
-            target_vmaf,
-            crf_range,
-            sample_count,
-            sample_seconds,
-            "x265_10bit" if hdr else encoder,
-            encoder_preset,
-            remove_bars,
-            hdr=hdr,
-            cancel=cancel,
-            db_file=db_file,
-            progress=progress,
-        )
-    except SkipEncode as e:
-        return QualityResult(
-            input=input_file,
-            output=output_file,
-            success=False,
+            encoder="x265_10bit" if hdr else encoder,
+            encoder_preset=encoder_preset,
             target_vmaf=target_vmaf,
-            error=f"skipped: {e}",
-            skipped_reason=("target unreachable" if "unreachable" in str(e) else "no size gain"),
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            remove_bars=remove_bars,
         )
+    crf_source: str | None = None
+    plan_created_at: str | None = None
+    if plan is not None:
+        if plan["skipped_reason"]:
+            # the plan already rejected this movie - trust the verdict,
+            # no probing, no encode. The skip decision is as valuable
+            # as the CRF.
+            reason = str(plan["skipped_reason"])
+            if progress is not None:
+                progress(
+                    {
+                        "stage": "probe",
+                        "detail": f"using plan (probed {plan['created_at']}) · {reason}",
+                    }
+                )
+            log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): {reason}")
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                chosen_crf=plan["chosen_crf"],
+                achieved_vmaf=plan["achieved_vmaf"],
+                probes=_plan_probes(plan),
+                input_size=input_file.stat().st_size,
+                output_size=input_file.stat().st_size,
+                error=f"skipped: {reason}",
+                skipped_reason=reason,
+                encoder_preset=encoder_preset,
+                remove_bars=remove_bars,
+                crop=None,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                crf_source="plan",
+                plan_created_at=plan["created_at"],
+            )
+        crf = int(plan["chosen_crf"])
+        achieved = float(plan["achieved_vmaf"] or 0.0)
+        probes = _plan_probes(plan)
+        crop = _plan_crop(plan) if remove_bars else None
+        probe_seconds = 0.0
+        crf_source = "plan"
+        plan_created_at = plan["created_at"]
+        if progress is not None:
+            progress(
+                {
+                    "stage": "probe",
+                    "detail": f"using plan (probed {plan['created_at']}) · CRF {crf}",
+                }
+            )
+        log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): CRF {crf}")
+    else:
+        try:
+            crf, achieved, probes, crop = _probe_movie(
+                input_file,
+                target_vmaf,
+                crf_range,
+                sample_count,
+                sample_seconds,
+                "x265_10bit" if hdr else encoder,
+                encoder_preset,
+                remove_bars,
+                hdr=hdr,
+                cancel=cancel,
+                db_file=db_file,
+                progress=progress,
+            )
+        except SkipEncode as e:
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                error=f"skipped: {e}",
+                skipped_reason=(
+                    "target unreachable" if "unreachable" in str(e) else "no size gain"
+                ),
+                encoder_preset=encoder_preset,
+                remove_bars=remove_bars,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                crf_source="probe",
+            )
+        crf_source = "probe"
+        probe_seconds = _time.perf_counter() - run_started
 
-    probe_seconds = _time.perf_counter() - run_started
     log(f"Chosen CRF {crf} (VMAF {achieved})")
     handbrake = find_handbrake()
     if handbrake is None:  # already checked in _probe_movie, for mypy
@@ -1762,4 +1970,6 @@ def encode_with_quality(
         input_duration=snapshot["duration"],
         input_bitrate=snapshot["bitrate"],
         output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
+        crf_source=crf_source,
+        plan_created_at=plan_created_at,
     )

@@ -311,6 +311,9 @@ def watch(
                             encoder=encoder,
                             encoder_threads=cap_threads(max_threads),
                             db_file=db_file,
+                            # inbox automation must not silently depend on
+                            # plan staleness: watch always measures fresh
+                            force_reprobe=True,
                         )
                 except EncodeBusyError as e:
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")

@@ -23,6 +23,7 @@ from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
 from shrinkray.service import (
     finished_movies,
     record_fixed_results,
+    record_plan,
     record_quality_results,
 )
 
@@ -361,6 +362,14 @@ def encode(
             "sub-sampled 1/10 for files > 2 GB). Slow for large libraries."
         ),
     ),
+    replan: bool = typer.Option(
+        False,
+        "--replan",
+        help=(
+            "Quality mode: ignore stored plans and re-probe every movie "
+            "(a plan normally lets the encode skip probing)."
+        ),
+    ),
     workers: int = typer.Option(
         0,
         "--workers",
@@ -406,6 +415,7 @@ def encode(
             workers,
             threads,
             db_file,
+            replan,
         )
     finally:
         connection.close()
@@ -457,6 +467,7 @@ def _record_encodes(
     workers,
     threads,
     db_file,
+    replan=False,
 ):
     """Runs the encoding and records the results in the database.
 
@@ -473,6 +484,7 @@ def _record_encodes(
         verify (bool): Full-file VMAF verification after each encode.
         workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
+        replan (bool): Ignore stored plans and re-probe (quality mode).
     """
     from shrinkray.encode import encode_movies
     from shrinkray.integrations import notify_after_encodes
@@ -531,6 +543,7 @@ def _record_encodes(
                             encoder_threads=cap_threads(threads or config.handbrake_max_threads),
                             progress=quality_progress,
                             verify=verify,
+                            force_reprobe=replan,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -637,74 +650,77 @@ def plan(
     connection = db.connect(db_file)
     try:
         _, movies, _ = scan_movies(path, config, connection=connection)
-    finally:
-        connection.close()
 
-    threads_cap = cap_threads(threads or config.handbrake_max_threads)
+        threads_cap = cap_threads(threads or config.handbrake_max_threads)
 
-    table = Table(
-        title=f"Encode plan for {len(movies)} movies (target VMAF {target_vmaf})",
-        title_justify="left",
-    )
-    table.add_column("Movie", style="bold", max_width=32, overflow="ellipsis")
-    table.add_column("Decision", justify="center", no_wrap=True)
-    table.add_column("CRF", justify="right", no_wrap=True)
-    table.add_column("VMAF", justify="right", no_wrap=True)
-    table.add_column("Est. size", justify="right", no_wrap=True)
-    table.add_column("Saved", justify="right", no_wrap=True)
-    table.add_column("Note", max_width=40, overflow="fold")
+        table = Table(
+            title=f"Encode plan for {len(movies)} movies (target VMAF {target_vmaf})",
+            title_justify="left",
+        )
+        table.add_column("Movie", style="bold", max_width=32, overflow="ellipsis")
+        table.add_column("Decision", justify="center", no_wrap=True)
+        table.add_column("CRF", justify="right", no_wrap=True)
+        table.add_column("VMAF", justify="right", no_wrap=True)
+        table.add_column("Est. size", justify="right", no_wrap=True)
+        table.add_column("Saved", justify="right", no_wrap=True)
+        table.add_column("Note", max_width=40, overflow="fold")
 
-    total_input = total_output = 0
-    plans: list = []
-    for movie in movies:
-        try:
-            result = plan_quality(
-                movie,
-                target_vmaf=target_vmaf,
-                encoder=config.handbrake_encoder,
-                remove_bars=remove_bars,
-                db_file=db_file,
-                encoder_threads=threads_cap,
-            )
-        except (RuntimeError, FileNotFoundError) as e:
-            table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
-            continue
-        plans.append(result)
+        total_input = total_output = 0
+        plans: list = []
+        for movie in movies:
+            try:
+                result = plan_quality(
+                    movie,
+                    target_vmaf=target_vmaf,
+                    encoder=config.handbrake_encoder,
+                    remove_bars=remove_bars,
+                    db_file=db_file,
+                    encoder_threads=threads_cap,
+                )
+            except (RuntimeError, FileNotFoundError) as e:
+                table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+                continue
+            # quicksave: persist the decision (CRF or skip verdict) so a
+            # later encode of this movie skips probing when unchanged
+            record_plan(connection, movie, result, config, target_vmaf)
+            plans.append(result)
 
-        if result.skipped_reason is not None:
+            if result.skipped_reason is not None:
+                table.add_row(
+                    movie.name,
+                    "[yellow]skip[/yellow]",
+                    str(result.chosen_crf or ""),
+                    str(result.achieved_vmaf or ""),
+                    "-",
+                    "-",
+                    result.skipped_reason,
+                )
+                total_input += result.input_size
+                continue
+
+            est_gb = result.output_size / 1024**3
+            saved = result.saved_percent
+            total_input += result.input_size
+            total_output += result.output_size
             table.add_row(
                 movie.name,
-                "[yellow]skip[/yellow]",
-                str(result.chosen_crf or ""),
-                str(result.achieved_vmaf or ""),
-                "-",
-                "-",
-                result.skipped_reason,
+                "[green]encode[/green]",
+                str(result.chosen_crf),
+                f"{result.achieved_vmaf:.2f}" if result.achieved_vmaf else "",
+                f"{est_gb:.2f} GB",
+                f"{saved}%",
+                "bars removed" if remove_bars else "",
             )
-            total_input += result.input_size
-            continue
 
-        est_gb = result.output_size / 1024**3
-        saved = result.saved_percent
-        total_input += result.input_size
-        total_output += result.output_size
-        table.add_row(
-            movie.name,
-            "[green]encode[/green]",
-            str(result.chosen_crf),
-            f"{result.achieved_vmaf:.2f}" if result.achieved_vmaf else "",
-            f"{est_gb:.2f} GB",
-            f"{saved}%",
-            "bars removed" if remove_bars else "",
-        )
-
-    console.print(table)
-    if total_input > 0 and total_output > 0:
-        console.print(
-            f"[green]Plan: {len(plans)} movies, estimated total "
-            f"{total_input / 1024**3:.2f} GB -> {total_output / 1024**3:.2f} GB "
-            f"({round((1 - total_output / total_input) * 100, 1)}% saved)[/green]"
-        )
+        console.print(table)
+        if total_input > 0 and total_output > 0:
+            console.print(
+                f"[green]Plan: {len(plans)} movies, estimated total "
+                f"{total_input / 1024**3:.2f} GB -> {total_output / 1024**3:.2f} GB "
+                f"({round((1 - total_output / total_input) * 100, 1)}% saved)[/green]"
+            )
+    finally:
+        connection.close()
 
 
 @app.command()

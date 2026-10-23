@@ -4,8 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from shrinkray import encode, quality
+from shrinkray import db, encode, quality, service
 
 
 class TestQuality(unittest.TestCase):
@@ -166,6 +167,180 @@ class TestQuality(unittest.TestCase):
             "hb", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
         )
         self.assertNotIn("--encopts", plain)
+
+
+class TestPlanReuse(unittest.TestCase):
+    """The encode-path "quicksave": a valid plan replaces probing; any
+    fingerprint mismatch fails safe to the normal probe pipeline."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_file = Path(self.tmp.name) / "test.db"
+        self.connection = db.connect(self.db_file)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _movie(self, name: str = "movie.mkv") -> Path:
+        movie = Path(self.tmp.name) / name
+        movie.write_bytes(b"x" * 8)
+        service.ensure_file_row(self.connection, movie)
+        self.connection.commit()
+        return movie
+
+    def _store_plan(self, movie: Path, **overrides) -> None:
+        """Stores a plan for the movie via the service write path."""
+        from shrinkray.quality import SampleProbe
+
+        result = quality.QualityResult(
+            input=movie,
+            output=movie,
+            success=overrides.pop("success", True),
+            target_vmaf=overrides.pop("target_vmaf", 95.0),
+            chosen_crf=overrides.pop("chosen_crf", 21),
+            achieved_vmaf=overrides.pop("achieved_vmaf", 95.47),
+            probes=overrides.pop("probes", [SampleProbe(crf=21, vmaf=95.47)]),
+            input_size=movie.stat().st_size,
+            output_size=movie.stat().st_size // 2,
+            skipped_reason=overrides.pop("skipped_reason", None),
+            encoder_preset="medium",
+            remove_bars=False,
+            crop=None,
+            crf_range=(14, 32),
+            sample_count=3,
+            sample_seconds=10.0,
+        )
+        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        record_plan = overrides.pop("record_plan", service.record_plan)
+        record_plan(self.connection, movie, result, config, 95.0)
+
+    def _encode(self, movie: Path, **kwargs):
+        """Runs encode_with_quality with every external seam mocked."""
+        from shrinkray.encode import EncodeResult
+
+        output = Path(self.tmp.name) / "out.mkv"
+
+        def fake_encode_command(input_file, output_file, command, **kwargs):
+            output_file.write_bytes(b"y" * (input_file.stat().st_size // 2))
+            return EncodeResult(
+                input=input_file,
+                output=output_file,
+                success=True,
+                input_size=input_file.stat().st_size,
+                output_size=output_file.stat().st_size,
+            )
+
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(
+                quality,
+                "_source_snapshot",
+                return_value={
+                    "width": None,
+                    "height": None,
+                    "codec": None,
+                    "duration": None,
+                    "bitrate": None,
+                },
+            ),
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(
+                quality, "_encode_with_command", side_effect=fake_encode_command
+            ) as fake_encode,
+        ):
+            result = quality.encode_with_quality(movie, output, db_file=self.db_file, **kwargs)
+        return result, fake_encode
+
+    def test_valid_plan_skips_probing_and_encodes_planned_crf(self):
+        movie = self._movie()
+        self._store_plan(movie)
+        with (
+            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, fake_encode = self._encode(movie)
+        fake_probe.assert_not_called()  # zero probe encodes
+        fake_encode.assert_called_once()
+        self.assertTrue(result.success)
+        self.assertEqual(result.chosen_crf, 21)
+        self.assertEqual(result.achieved_vmaf, 95.47)
+        self.assertEqual(result.crf_source, "plan")
+        self.assertIsNotNone(result.plan_created_at)
+        # the final command encodes at the plan's CRF
+        command = fake_encode.call_args.args[2]
+        self.assertEqual(command[command.index("--quality") + 1], "21")
+        # the caller (job worker / CLI) persists the result; the encodes row
+        # carries the provenance
+        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        service.record_quality_results(self.connection, movie, result, config, 95.0)
+        row = self.connection.execute(
+            "SELECT crf_source, plan_created_at FROM encodes ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row["crf_source"], "plan")
+        self.assertEqual(row["plan_created_at"], result.plan_created_at)
+
+    def test_fingerprint_mismatch_runs_probe_path(self):
+        movie = self._movie()
+        self._store_plan(movie, chosen_crf=21)
+        with (
+            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie, encoder_preset="slow")
+        fake_probe.assert_called_once()
+        self.assertEqual(result.chosen_crf, 20)
+        self.assertEqual(result.crf_source, "probe")
+
+    def test_changed_file_invalidates_plan(self):
+        movie = self._movie()
+        self._store_plan(movie)
+        movie.write_bytes(b"x" * 64)  # size change => fingerprint mismatch
+        with (
+            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie)
+        fake_probe.assert_called_once()
+        self.assertEqual(result.crf_source, "probe")
+
+    def test_plan_skip_decision_short_circuits_encode(self):
+        movie = self._movie()
+        self._store_plan(movie, success=False, skipped_reason="no size gain")
+        with (
+            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(quality, "_encode_with_command") as fake_encode,
+        ):
+            result, _ = self._encode(movie)
+        fake_probe.assert_not_called()
+        fake_encode.assert_not_called()  # nothing encoded at all
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "no size gain")
+        self.assertEqual(result.crf_source, "plan")
+
+    def test_force_reprobe_bypasses_valid_plan(self):
+        movie = self._movie()
+        self._store_plan(movie)
+        with (
+            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie, force_reprobe=True)
+        fake_probe.assert_called_once()
+        self.assertEqual(result.chosen_crf, 20)
+        self.assertEqual(result.crf_source, "probe")
+
+    def test_no_plan_row_runs_probe_path(self):
+        movie = self._movie()
+        with (
+            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie)
+        fake_probe.assert_called_once()
+        self.assertEqual(result.chosen_crf, 20)
+        self.assertEqual(result.crf_source, "probe")
 
 
 if __name__ == "__main__":

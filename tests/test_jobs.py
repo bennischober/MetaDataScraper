@@ -97,6 +97,62 @@ class TestJobs(unittest.TestCase):
             # the streamed engine removed the partial output itself
             self.assertFalse(out.exists())
 
+    def test_plan_job_records_plans(self):
+        """execute_plan persists each plan decision (the quicksave write
+        path): a later encode of the same movie with the same settings
+        finds a valid plan and skips probing."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        fake_result = SimpleNamespace(
+            input=movie,
+            output=movie,
+            success=True,
+            target_vmaf=95.0,
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            probes=[],
+            input_size=16,
+            output_size=8,
+            saved_percent=50.0,
+            error=None,
+            skipped_reason=None,
+            encoder_preset="medium",
+            remove_bars=False,
+            crop=None,
+            crf_range=(14, 32),
+            sample_count=3,
+            sample_seconds=10.0,
+            hdr=False,
+        )
+        with (
+            patch("shrinkray.quality.plan_quality", return_value=fake_result),
+            patch("shrinkray.jobs.cap_threads", return_value=1),
+        ):
+            result = jobs.execute_plan(job, self.connection, threading.Event())
+        self.assertEqual(result["plans"][0]["state"], "encode")
+        row = self.connection.execute(
+            "SELECT p.chosen_crf, f.path FROM plans p JOIN files f ON f.id = p.file_id"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["chosen_crf"], 21)
+        self.assertEqual(row["path"], str(movie))
+
     def test_encode_single_file_payload(self):
         """A per-movie encode payload (a FILE path, as the UI's detail page
         sends) resolves to exactly one movie — regression: execute_encode

@@ -83,6 +83,54 @@ def derive_generation(connection, movie: Path) -> int:
     return 1
 
 
+def record_plan(connection, movie, result, config, target_vmaf: float) -> int | None:
+    """Persists a plan decision for one movie (the encode-path "quicksave").
+
+    Stores the LATEST decision per file (upsert): the chosen CRF with its
+    sample-based VMAF, or the skip verdict — both short-circuit a later
+    encode's probing when the fingerprint matches.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The input movie file.
+        result (QualityResult): The plan's engine result.
+        config (Conf): The config settings.
+        target_vmaf (float): The VMAF target of the run.
+
+    Returns:
+        int | None: The plan row id, or None when the movie has no file
+        row yet (plans are keyed by the scanned library; an unscanned
+        movie's plan is not reusable anyway).
+    """
+    row = db.get_file_by_path(connection, movie)
+    if row is None:
+        return None
+    stat = movie.stat()
+    # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
+    # engine overrides target/range and switches to the 10-bit encoder,
+    # so a plan of an HDR movie must be recorded under those values
+    encoder = "x265_10bit" if result.hdr else config.handbrake_encoder
+    return db.save_plan(
+        connection,
+        row["id"],
+        result.chosen_crf,
+        result.achieved_vmaf,
+        result.crop,
+        result.probes,
+        result.skipped_reason,
+        stat.st_mtime,
+        stat.st_size,
+        encoder,
+        result.encoder_preset or "medium",
+        result.target_vmaf,
+        result.crf_range[0],
+        result.crf_range[1],
+        result.sample_count,
+        result.sample_seconds,
+        result.remove_bars,
+    )
+
+
 def save_encode(
     connection,
     movie,
@@ -107,6 +155,8 @@ def save_encode(
     source_file: str | None = None,
     output_file: str | None = None,
     generation: int | None = None,
+    crf_source: str | None = None,
+    plan_created_at: str | None = None,
 ):
     """Stores an encode record for the given movie in the database.
 
@@ -134,6 +184,10 @@ def save_encode(
         source_file (str | None): The input path (provenance).
         output_file (str | None): The output path (generation chain link).
         generation (int | None): Derived when None (ancestry lookup).
+        crf_source (str | None): Provenance of the CRF decision: 'plan'
+            when reused from a stored plan, 'probe' when measured now.
+        plan_created_at (str | None): When the trusted plan was probed
+            ('plan' provenance only).
     """
     file_id = ensure_file_row(connection, movie)
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
@@ -164,6 +218,8 @@ def save_encode(
         source_file=source_file,
         output_file=output_file,
         generation=generation,
+        crf_source=crf_source,
+        plan_created_at=plan_created_at,
     )
 
 
@@ -276,6 +332,8 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
             output_bitrate=result.output_bitrate,
             source_file=str(movie.resolve()),
             output_file=str(result.output.resolve()) if result.output else None,
+            crf_source=result.crf_source or "probe",
+            plan_created_at=result.plan_created_at,
         )
         save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True)

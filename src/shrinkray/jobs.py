@@ -671,6 +671,13 @@ def execute_plan(
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
             continue
+        # persist the decision for later encodes ("quicksave"): chosen CRF
+        # AND skip verdicts short-circuit a future encode's probing when
+        # the fingerprint matches. Best-effort: an unscanned movie has no
+        # file row, the plan is simply not reusable then.
+        from shrinkray.service import record_plan
+
+        record_plan(connection, movie, result, config, payload.get("target_vmaf", 95.0))
         entry = {
             "movie": movie.name,
             "state": "skip" if result.skipped_reason else "encode",
