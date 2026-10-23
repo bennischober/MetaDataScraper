@@ -1270,6 +1270,30 @@ class TestDb(unittest.TestCase):
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
 
+    def test_finished_movies_excludes_truncated_output(self):
+        """The quality-mode resume set excludes truncated outputs (debris):
+        the db says encoded and the file is non-empty, but the duration does
+        not verify => re-encode instead of skip-forever."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            (out_dir / "movie.mkv").write_bytes(b"truncated debris")
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 1000, 500, 50.0)
+            with mock.patch("shrinkray.encode.durations_match", return_value=False):
+                finished = service.finished_movies(self.connection, [movie], out_dir)
+            self.assertEqual(finished, set())
+            with mock.patch("shrinkray.encode.durations_match", return_value=True):
+                finished = service.finished_movies(self.connection, [movie], out_dir)
+            self.assertEqual(finished, {str(movie)})
+
     def test_prune_missing_scoped(self):
         # a scan of one root must not wipe the history of files outside it
         # (real tmp paths: fictional drives are relative paths on linux/CI)
@@ -2177,6 +2201,70 @@ class TestEncodeLock(unittest.TestCase):
                 self.assertRaises(EncodeBusyError),
             ):
                 encode.encode_movies([source], Path(tmp) / "enc")
+
+    def test_encode_movies_reencodes_truncated_debris(self):
+        """A truncated output (interrupted encode) is removed and re-encoded,
+        not skipped forever (regression: 'output exists' trusted existence
+        alone, so crash debris blocked the movie from ever being encoded)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            debris = out_dir / "movie.mkv"
+            debris.write_bytes(b"partial garbage")  # non-empty but truncated
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode.durations_match", return_value=False),
+                mock.patch("shrinkray.encode._encode_with_command") as enc,
+            ):
+                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
+                    input=i, output=o, success=True
+                )
+                results = encode.encode_movies([source], out_dir)
+            self.assertEqual(len(results), 1)
+            self.assertTrue(results[0].success)
+            # debris was removed BEFORE the encode (no clobber risk)
+            self.assertEqual(enc.call_count, 1)
+
+    def test_encode_movies_keeps_verified_output(self):
+        """An existing, duration-verifying output is still skipped (the
+        normal resume path must keep working)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            (out_dir / "movie.mkv").write_bytes(b"real output")
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode._encode_with_command") as enc,
+            ):
+                results = encode.encode_movies([source], out_dir)
+            self.assertEqual(results, [])
+            enc.assert_not_called()
+
+    def test_encode_movies_empty_output_is_reencoded(self):
+        """A 0-byte output (very early crash) is re-encoded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            out_dir = Path(tmp) / "enc"
+            out_dir.mkdir()
+            (out_dir / "movie.mkv").write_bytes(b"")
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode._encode_with_command") as enc,
+            ):
+                enc.side_effect = lambda i, o, cmd, progress=None: encode.EncodeResult(
+                    input=i, output=o, success=True
+                )
+                results = encode.encode_movies([source], out_dir)
+            self.assertEqual(len(results), 1)
 
 
 class TestDedupe(unittest.TestCase):

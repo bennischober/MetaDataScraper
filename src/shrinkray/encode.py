@@ -474,33 +474,45 @@ def encode_movies(
         workers = 1
     workers = max(1, workers)
 
-    # filter skipped movies first (deterministic, before any encoding)
-    pending: list[tuple[Path, Path]] = []
-    for movie in movies:
-        duration = probe_duration_seconds(movie)
-        if duration is not None and duration < MIN_ENCODE_SECONDS:
-            log(
-                f"Skipping '{movie.name}': duration {duration:.0f}s is below "
-                f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
-            )
-            continue
-        output_file = output_dir / movie.name
-        if output_file.exists() and not overwrite:
-            log(f"Skipping '{movie.name}': output file already exists.")
-            continue
-        pending.append((movie, output_file))
-
-    if not pending:
-        return results
-
     # one encoder per output directory: the watch loop, the job worker and
     # CLI runs must never write the same output dir concurrently (clobbered
     # outputs); short-lived, pid-stamped lock file, stale locks are stolen.
     # EncodeBusyError propagates: the CLI exits with the message, the job
     # worker fails the job with it, the watch loop logs and retries later.
+    # The slot is held BEFORE the pending-filter runs: a concurrent encoder
+    # is writing a truncated in-flight output right now - without the slot,
+    # the filter below would classify that file as debris and delete a live
+    # encode's output.
     from shrinkray.encode_lock import guard_encodes
 
     with guard_encodes(output_dir, holder="encode"):
+        # filter inside the slot (deterministic, before any encoding); the
+        # debris check sees only our own outputs now
+        pending: list[tuple[Path, Path]] = []
+        for movie in movies:
+            duration = probe_duration_seconds(movie)
+            if duration is not None and duration < MIN_ENCODE_SECONDS:
+                log(
+                    f"Skipping '{movie.name}': duration {duration:.0f}s is below "
+                    f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
+                )
+                continue
+            output_file = output_dir / movie.name
+            if output_file.exists() and not overwrite:
+                if output_file.stat().st_size == 0:
+                    log(f"Re-encoding '{movie.name}': output file is empty (0 bytes).")
+                elif not durations_match(movie, output_file):
+                    log(
+                        f"Re-encoding '{movie.name}': existing output is truncated "
+                        f"(debris from an interrupted encode) => removing it."
+                    )
+                    output_file.unlink()
+                else:
+                    log(f"Skipping '{movie.name}': output file already exists and verifies.")
+                    continue
+            pending.append((movie, output_file))
+        if not pending:
+            return results
         return _encode_pending(pending, preset, encoder, workers, max_threads, progress, results)
 
 

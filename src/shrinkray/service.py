@@ -182,7 +182,11 @@ def finished_movies(connection, movies: list, output_dir) -> set[str]:
     """Determines which movies are already encoded (batch resume check).
 
     A movie counts as finished when the database holds a real encode (not a
-    skip marker) AND its output file still exists and is non-empty.
+    skip marker) AND its output file still exists, is non-empty AND its
+    duration verifies against the source. The duration check catches debris
+    from interrupted encodes: a crashed HandBrake leaves a non-empty but
+    truncated file which must be re-encoded, not skipped (an unverifiable
+    file stays conservatively "finished" - never delete on a guess).
 
     Args:
         connection: The database connection.
@@ -192,15 +196,26 @@ def finished_movies(connection, movies: list, output_dir) -> set[str]:
     Returns:
         set[str]: The movie paths (as strings) that can be skipped.
     """
+    from shrinkray.encode import durations_match
+
     finished: set[str] = set()
     for movie in movies:
         file_row = db.get_file_by_path(connection, movie)
         if file_row is None:
             continue
-        if db.has_output_for_latest_encode(
-            connection, int(file_row["id"]), output_dir / movie.name
-        ):
+        output_file = output_dir / movie.name
+        if not db.has_output_for_latest_encode(connection, int(file_row["id"]), output_file):
+            continue
+        # the db says encoded and the file is non-empty: verify it is whole
+        if durations_match(movie, output_file):
             finished.add(str(movie))
+        else:
+            from shrinkray.logger import log_warning
+
+            log_warning(
+                f"Output of '{movie.name}' exists but is truncated (interrupted "
+                "encode?) => it will be re-encoded."
+            )
     return finished
 
 
