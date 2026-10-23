@@ -415,8 +415,9 @@ def _quality_progress_callback(progress, task):
     """Builds a progress callback for the quality engine (CLI variant).
 
     The engine streams {'stage': 'encode', 'percent': 0-100, 'movie': name}
-    during the final encode; probing emits nothing => the bar's description
-    tells the probing stage until the first percent arrives.
+    during the final encode and {'stage': 'probe', 'detail': ...} step
+    events during probing => the bar's description tells the probing stage
+    until the first percent arrives.
 
     Args:
         progress: The rich Progress instance.

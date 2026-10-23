@@ -338,10 +338,9 @@ class JobQueue:
     def fail(self, job: Job, error: str):
         """Marks a job as failed and stores the error.
 
-        The result column is cleared: a failed job's only live payload was
-        its last progress dict (invisible once the state left 'running') —
-        keeping it wasted space and made rows look like they still carried
-        data.
+        The result column is cleared: a failed job's row is the durable
+        trail (state, error, timestamps) — anything live was flow on the
+        bus and died with the process.
 
         Args:
             job (Job): The failed job.
@@ -364,8 +363,8 @@ class JobQueue:
 
         A graceful cancel carries the engine's partial result (e.g. the
         outcomes completed before the cancel) — the UI renders those on
-        cancelled rows. Without one the result column is cleared, dropping
-        the stale progress dict the same way fail() does.
+        cancelled rows. Without one the result column stays empty, exactly
+        like fail().
 
         Args:
             job (Job): The cancelled job.

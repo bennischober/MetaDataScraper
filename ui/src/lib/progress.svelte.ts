@@ -34,6 +34,10 @@ export function eventsConnected(): boolean {
   return connected
 }
 
+// NOTE: intentionally exported for future status-bar use (e.g. a
+// "stream disconnected" indicator); svelte-check does not flag it, this
+// comment exists so a future audit does not mistake it for a leftover.
+
 /** Opens the SSE stream once (idempotent); reconnects are automatic. */
 export function connectEvents(): void {
   if (es !== null) return

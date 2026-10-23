@@ -27,9 +27,10 @@
       history instead of starting fresh.
 
 ### UI (next round) - shared with the UI agent
-- [ ] Live job progress for encodes: within-encode percent (frames encoded)
-      needs a HandBrake progress parse or a size-based estimate (also: show
-      done/total + current movie + ETA in the job sheet - critique P1)
+- [x] Live job progress: SSE stream (/api/events, ProgressBus pub-sub) -
+      percent glides during encodes (chunk pump fix 8e86d82 made the
+      piped percent lines visible at all), probe steps stream since
+      75e4139; plan-cache reuse is the agreed next round
 - [ ] Retry from job payload verbatim (current retry re-binds the form;
       critique P1) + history filter matching all job paths (multi-folder
       batches show "no jobs" per movie today)
