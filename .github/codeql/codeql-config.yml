@@ -1,0 +1,25 @@
+# CodeQL configuration for this repository (issue #55).
+#
+# The built-in py/path-injection query reports every use of a path that came
+# through the app's own validate_path (src/shrinkray/app.py), because the
+# analyzer cannot see that the function normalises with os.path.realpath and
+# rejects anything outside the allowed roots. Ten such pre-existing alerts turn
+# every pull request that touches those lines red and bury real findings.
+#
+# This config replaces that query with the boundary-aware variant in
+# .github/codeql/custom/ (pack shrinkray/security-queries): identical taint
+# analysis, plus the one missing fact. The variant was verified locally with
+# the CodeQL CLI: zero alerts on this repository, and it still reports
+# genuinely unguarded flows on a deliberately vulnerable sample.
+#
+# Why not a models-as-data barrier: MaD model rows resolve through import
+# sites, and all ten flagged call sites are inside app.py itself (the module
+# never imports itself), so the rows attach to nothing - verified locally.
+
+query-filters:
+  - exclude:
+      id: py/path-injection
+
+queries:
+  - name: Boundary-aware path-injection (shrinkray/security-queries)
+    uses: ./.github/codeql/custom

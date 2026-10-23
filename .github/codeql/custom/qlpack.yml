@@ -1,0 +1,11 @@
+name: shrinkray/security-queries
+version: 0.0.1
+description: Boundary-aware py/path-injection for ShrinkRay (issue #55)
+# Custom query pack for the CodeQL analysis of this repository: a variant of
+# py/path-injection that knows the app's own path-containment boundary
+# (shrinkray.app.validate_path). Loaded via .github/codeql/codeql-config.yml,
+# which excludes the built-in query with the same purpose. Do not delete the
+# .qll: it is what keeps the ten intra-module validate_path call sites from
+# being reported as path injection.
+dependencies:
+  codeql/python-all: "*"
