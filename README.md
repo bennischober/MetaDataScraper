@@ -383,7 +383,8 @@ git push origin v0.3.0
 ShrinkRay is heading for one shape: a container on a server, pointed at a media
 folder, answering *"could this collection be smaller at the same quality?"* and
 acting on the answer unattended. See [PRODUCT.md](PRODUCT.md) for the contract and
-[ISSUES.md](ISSUES.md) for the work that gets it there.
+the [issue tracker](https://github.com/bennischober/ShrinkRay/issues) for the work
+that gets it there.
 
 The boundary that shape implies: **ShrinkRay may change a file's bytes, never its
 identity.** Path, filename and the set of files stay as they are. Re-encoding
