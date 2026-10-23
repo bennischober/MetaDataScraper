@@ -40,8 +40,16 @@ jobs:
           uv run ruff check src tests
           uv run ruff format --check src tests
 
-      - name: Run mypy
-        run: uv run mypy
+      # mypy's --platform defaults to sys.platform, so a bare `mypy` only checks
+      # the host's own view. CI runs on ubuntu, which means a POSIX-only import
+      # (pwd, fcntl) would pass here and break a Windows contributor, and the
+      # Windows-only os.startfile path would never be checked against the linux
+      # deployment target. Check both directions explicitly.
+      - name: Run mypy (linux platform)
+        run: uv run mypy --platform linux
+
+      - name: Run mypy (win32 platform)
+        run: uv run mypy --platform win32
 
       - name: Run tests with coverage
         run: uv run pytest -q

@@ -26,7 +26,8 @@ jobs:
         run: |
           uv run ruff check src tests
           uv run ruff format --check src tests
-          uv run mypy
+          uv run mypy --platform linux
+          uv run mypy --platform win32
           uv run pytest -q --no-cov
 
       - name: Build distributions
