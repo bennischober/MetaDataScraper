@@ -106,6 +106,11 @@ def record_plan(connection, movie, result, config, target_vmaf: float) -> int | 
     if row is None:
         return None
     stat = movie.stat()
+    if result.input_size and stat.st_size != result.input_size:
+        # the file changed between probing and recording (replace while
+        # planning): storing the plan would pin the NEW fingerprint to the
+        # OLD probes - fail safe, the next plan run re-records it
+        return None
     # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
     # engine overrides target/range and switches to the 10-bit encoder,
     # so a plan of an HDR movie must be recorded under those values

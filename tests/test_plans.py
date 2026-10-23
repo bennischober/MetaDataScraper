@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from shrinkray import db
+from shrinkray import db, service
 
 
 class TestPlans(unittest.TestCase):
@@ -117,3 +117,93 @@ class TestPlans(unittest.TestCase):
     def test_no_plan_row_is_none(self):
         _, movie = self._file()
         self.assertIsNone(self._lookup(movie))
+
+
+class TestRecordPlan(unittest.TestCase):
+    """The service write path (plan runs quicksave their decisions)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_file = Path(self.tmp.name) / "test.db"
+        self.connection = db.connect(self.db_file)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _store(self, size_change: bytes = 0):
+        from types import SimpleNamespace
+
+        movie = Path(self.tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name="movie.mkv",
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        if size_change:
+            movie.write_bytes(b"x" * (16 + size_change))
+        result = SimpleNamespace(
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            crop=None,
+            probes=[],
+            skipped_reason=None,
+            input_size=16,  # what was probed
+            target_vmaf=95.0,
+            crf_range=(14, 32),
+            sample_count=3,
+            sample_seconds=10.0,
+            remove_bars=False,
+            encoder_preset="medium",
+            hdr=False,
+        )
+        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        plan_id = service.record_plan(self.connection, movie, result, config, 95.0)
+        return plan_id, movie
+
+    def test_records_plan_for_scanned_movie(self):
+        plan_id, _ = self._store()
+        self.assertIsNotNone(plan_id)
+        row = self.connection.execute("SELECT * FROM plans").fetchone()
+        self.assertEqual(row["chosen_crf"], 21)
+
+    def test_changed_file_is_not_recorded(self):
+        """A file that changed between probing and recording gets no plan:
+        storing would pin the NEW fingerprint to the OLD probes."""
+        plan_id, _ = self._store(size_change=16)
+        self.assertIsNone(plan_id)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 0)
+
+    def test_unscanned_movie_is_not_recorded(self):
+        from types import SimpleNamespace
+
+        movie = Path(self.tmp.name) / "unscanned.mkv"
+        movie.write_bytes(b"x" * 16)
+        result = SimpleNamespace(
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            crop=None,
+            probes=[],
+            skipped_reason=None,
+            input_size=16,
+            target_vmaf=95.0,
+            crf_range=(14, 32),
+            sample_count=3,
+            sample_seconds=10.0,
+            remove_bars=False,
+            encoder_preset="medium",
+            hdr=False,
+        )
+        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        self.assertIsNone(service.record_plan(self.connection, movie, result, config, 95.0))
+
+
+if __name__ == "__main__":
+    unittest.main()
