@@ -16,10 +16,12 @@ import json
 import queue
 import sqlite3
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from shrinkray.config import Conf
 from shrinkray.encode import cap_threads
 from shrinkray.quality import Cancelled
 
@@ -27,6 +29,9 @@ from shrinkray.quality import Cancelled
 # Terminated rows are the job trail (outcomes, errors, retry affordances);
 # anything beyond the cap is hard-deleted on the next terminal write. The
 # library's own history lives in files/encodes and is NOT affected.
+# the engine's live-progress callback: stage detail and counters, never persisted
+ProgressCallback = Callable[[dict], None]
+
 JOB_RETENTION = 100
 
 # live progress is FLOW, not state: it is never persisted (a running job's
@@ -135,14 +140,14 @@ class ProgressBus:
     percent matters).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the bus (no subscribers, empty seed cache)."""
         self._lock = threading.Lock()
         self._subs: dict[int, queue.Queue] = {}
         self._last: dict[int, dict] = {}
         self._next_id = 0
 
-    def publish(self, job_id: int, data: dict):
+    def publish(self, job_id: int, data: dict) -> None:
         """Fans a progress event out to every subscriber (worker thread).
 
         Non-blocking by construction: a slow consumer's mailbox drops its
@@ -175,7 +180,7 @@ class ProgressBus:
             self._subs[sid] = box
             return sid, box, list(self._last.items())
 
-    def unsubscribe(self, sid: int):
+    def unsubscribe(self, sid: int) -> None:
         """Removes a subscriber (SSE handler's finally block).
 
         Args:
@@ -184,7 +189,7 @@ class ProgressBus:
         with self._lock:
             self._subs.pop(sid, None)
 
-    def forget(self, job_id: int):
+    def forget(self, job_id: int) -> None:
         """Drops a job from the seed cache (terminal state reached).
 
         Called by the queue's terminal writes: a finished job's progress is
@@ -215,7 +220,7 @@ class JobQueue:
     the UI and the CLI). The worker thread consumes one job at a time.
     """
 
-    def __init__(self, connection: sqlite3.Connection, bus: "ProgressBus | None" = None):
+    def __init__(self, connection: sqlite3.Connection, bus: "ProgressBus | None" = None) -> None:
         """Initializes the queue on an open database connection.
 
         Args:
@@ -231,7 +236,7 @@ class JobQueue:
         self._wake = threading.Event()
         self._load_pending()
 
-    def _load_pending(self):
+    def _load_pending(self) -> None:
         """Loads queued jobs from the database (after a restart)."""
         rows = self._connection.execute(
             "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
@@ -277,7 +282,7 @@ class JobQueue:
         self._connection.commit()
         return job
 
-    def report_progress(self, job: Job, progress: dict):
+    def report_progress(self, job: Job, progress: dict) -> None:
         """Publishes a running job's live progress (flow, never persisted).
 
         The event goes to the bus (SSE subscribers + seed cache) only — the
@@ -293,7 +298,7 @@ class JobQueue:
         if self._bus is not None:
             self._bus.publish(job.id or 0, progress)
 
-    def finish(self, job: Job, result: dict):
+    def finish(self, job: Job, result: dict) -> None:
         """Marks a job as done and stores its result.
 
         Args:
@@ -311,7 +316,7 @@ class JobQueue:
             self._bus.forget(job.id)
         self._connection.commit()
 
-    def _prune_history(self):
+    def _prune_history(self) -> None:
         """Hard-deletes terminated jobs beyond the retention cap.
 
         Called on every terminal write, so the table stays bounded without
@@ -335,7 +340,7 @@ class JobQueue:
             (JOB_RETENTION,),
         )
 
-    def fail(self, job: Job, error: str):
+    def fail(self, job: Job, error: str) -> None:
         """Marks a job as failed and stores the error.
 
         The result column is cleared: a failed job's row is the durable
@@ -358,7 +363,7 @@ class JobQueue:
             self._bus.forget(job.id)
         self._connection.commit()
 
-    def mark_cancelled(self, job: Job, result: dict | None = None):
+    def mark_cancelled(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as cancelled (user request, not a failure).
 
         A graceful cancel carries the engine's partial result (e.g. the
@@ -409,7 +414,7 @@ class JobQueue:
             return True
         return False
 
-    def register_cancel_event(self, job_id: int, event: threading.Event):
+    def register_cancel_event(self, job_id: int, event: threading.Event) -> None:
         """Registers the cancel event of a running job.
 
         Args:
@@ -419,7 +424,7 @@ class JobQueue:
         with self._lock:
             self._cancel_events[job_id] = event
 
-    def unregister_cancel_event(self, job_id: int):
+    def unregister_cancel_event(self, job_id: int) -> None:
         """Removes the cancel event of a finished job.
 
         Args:
@@ -498,7 +503,12 @@ def payload_paths(payload: dict) -> list[Path]:
     return [Path(payload["path"])]
 
 
-def resolve_movies(payload: dict, config, connection=None, exclude=None) -> list[Path]:
+def resolve_movies(
+    payload: dict,
+    config: Conf,
+    connection: sqlite3.Connection | None = None,
+    exclude: Path | None = None,
+) -> list[Path]:
     """Resolves the payload's movies: scan directories, pass files through.
 
     A payload path may be a directory (scanned recursively, per the scan
@@ -544,7 +554,10 @@ def _db_file_of(connection: sqlite3.Connection) -> Path:
 
 
 def execute_scan(
-    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+    job: Job,
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None = None,
 ) -> dict:
     """Executes a scan job.
 
@@ -571,7 +584,7 @@ def execute_scan(
     errors: list = []
     by_category: dict = {}
 
-    def on_movie(index: int, data, error):
+    def on_movie(index: int, data: dict | None, error: str | None) -> None:
         """Persists each finished movie immediately (progressive UI)."""
         if progress and not cancel.is_set():
             progress(
@@ -621,7 +634,10 @@ def execute_scan(
 
 
 def execute_plan(
-    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+    job: Job,
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None = None,
 ) -> dict:
     """Executes a plan job (probing only, no encodes).
 
@@ -693,7 +709,10 @@ def execute_plan(
 
 
 def execute_encode(
-    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+    job: Job,
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None = None,
 ) -> dict:
     """Executes an encode job (quality or fixed mode).
 
@@ -835,7 +854,10 @@ def execute_encode(
 
 
 def execute_dedupe(
-    job: Job, connection: sqlite3.Connection, cancel: threading.Event, progress=None
+    job: Job,
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None = None,
 ) -> dict:
     """Executes a duplicate-analysis job.
 
@@ -877,7 +899,7 @@ class JobWorker:
     is reported as interrupted on the next start).
     """
 
-    def __init__(self, connection: sqlite3.Connection, queue: JobQueue):
+    def __init__(self, connection: sqlite3.Connection, queue: JobQueue) -> None:
         """Initializes the worker.
 
         Args:
@@ -890,12 +912,12 @@ class JobWorker:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
-    def start(self):
+    def start(self) -> None:
         """Starts the worker thread."""
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
 
-    def stop(self, join_timeout: float = 5.0):
+    def stop(self, join_timeout: float = 5.0) -> None:
         """Signals the worker to stop after the current job and joins it.
 
         Args:
@@ -906,7 +928,7 @@ class JobWorker:
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
 
-    def _run(self):
+    def _run(self) -> None:
         """Consumes jobs until stopped."""
         while not self._stop.is_set():
             job = self.queue.take_next()
@@ -915,7 +937,7 @@ class JobWorker:
                 continue
             self._execute(job)
 
-    def _execute(self, job: Job):
+    def _execute(self, job: Job) -> None:
         """Runs one job and records its outcome.
 
         Args:
@@ -927,7 +949,7 @@ class JobWorker:
         cancel = threading.Event()
         self.queue.register_cancel_event(job.id, cancel)
 
-        def progress(data: dict):
+        def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
             if not cancel.is_set():
                 self.queue.report_progress(job, data)
