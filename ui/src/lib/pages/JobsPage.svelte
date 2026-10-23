@@ -9,11 +9,23 @@
     history,
     oncancel,
     onretry,
+    onopenMovie,
   }: {
     history: Job[]
     oncancel: (id: number | null) => void
     onretry: (job: Job) => void
+    /** Open a movie's detail page (single-movie jobs link to their title). */
+    onopenMovie: (path: string) => void
   } = $props()
+
+  /** True when the job targeted exactly one movie FILE (the UI's
+   * per-movie actions) — such rows link to the title's detail page.
+   * Folder-scoped jobs (scan-all, plan-all) link nothing: their payload
+   * names a directory, not a title. */
+  function singleMoviePath(job: Job): string | null {
+    const paths = job.payload.paths as string[] | undefined
+    return paths?.length === 1 ? paths[0] : null
+  }
 
   const progress = (job: Job) => progressFor(job.id)
 
@@ -161,7 +173,16 @@
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
-            <span class="kind">{job.kind}</span>
+            <span class="kind">
+              {job.kind}
+              {#if singleMoviePath(job)}
+                <!-- single-movie jobs link to the title: the two audit
+                     trails reference each other -->
+                <button class="movie-link" onclick={() => onopenMovie(singleMoviePath(job)!)} title="Open the movie's detail page">
+                  {(job.payload.paths as string[])[0].split(/[\\/]/).pop()}
+                </button>
+              {/if}
+            </span>
             <span class="state {stateClass(job)}">
               {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
             </span>
@@ -242,6 +263,15 @@
   }
   .dim { color: var(--ink-dim); }
   .ok { color: var(--teal-ink); }
+  .movie-link {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--teal-ink);
+    cursor: pointer;
+    font: inherit;
+  }
+  .movie-link:hover { text-decoration: underline; }
   .partial { color: var(--amber); }
   .bad { color: var(--red); }
   .run { color: var(--amber); }

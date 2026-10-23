@@ -26,6 +26,7 @@
     onclose,
     onencode,
     onplan,
+    onjobs,
     backTo = 'library',
   }: {
     movie: Movie
@@ -36,7 +37,9 @@
     onclose: () => void
     onencode: (path: string) => void
     onplan: (path: string) => void
-    backTo?: 'overview' | 'library'
+    /** Navigate to the jobs page (the trail's "all jobs" link). */
+    onjobs: () => void
+    backTo?: 'overview' | 'library' | 'jobs'
   } = $props()
 
   let encodes = $state<EncodeRecord[] | null>(null)
@@ -302,7 +305,9 @@
 
 <div class="page page-in" tabindex="-1" bind:this={pageEl}>
   <header class="page-head">
-    <button class="nav-link back" onclick={onclose}>← {backTo === 'overview' ? 'OVERVIEW' : 'LIBRARY'}</button>
+    <button class="nav-link back" onclick={onclose}>← {backTo === 'overview' ? 'OVERVIEW' : backTo === 'jobs' ? 'JOBS' : 'LIBRARY'}</button>
+    <!-- the trail here is a filtered slice; the full log lives on the jobs page -->
+    <button class="nav-link" onclick={onjobs}>ALL JOBS →</button>
   </header>
 
   <!-- ══ hero: the title as the page header ══ -->
@@ -644,6 +649,7 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 14px; outline: none; }
+  .page-head { display: flex; justify-content: space-between; align-items: baseline; }
   .back {
     background: transparent;
     border: none;
@@ -656,6 +662,18 @@
     text-transform: uppercase;
   }
   .back:hover { text-decoration: underline; }
+  /* the ALL JOBS link shares the back link's voice (two trail ends) */
+  .page-head .nav-link {
+    background: transparent;
+    border: none;
+    color: var(--teal-ink);
+    cursor: pointer;
+    padding: 0;
+    font-size: var(--fs-legend);
+    letter-spacing: var(--track-legend);
+    text-transform: uppercase;
+  }
+  .page-head .nav-link:hover { text-decoration: underline; }
   .dim { color: var(--ink-dim); }
   .bad { color: var(--red); }
   .ok { color: var(--teal-ink); }
@@ -686,6 +704,9 @@
   }
   .act:hover:not(:disabled) { border-color: var(--teal); color: var(--teal-ink); }
   .act.primary { background: var(--teal); border-color: var(--teal); color: var(--ground); }
+  /* teal text on the teal fill was unreadable (round-7): the primary
+     keeps its ground-on-teal ink and brightens instead */
+  .act.primary:hover:not(:disabled) { filter: brightness(1.08); color: var(--ground); }
   .act.quiet { border-color: var(--seam); color: var(--ink-dim); }
   .act:disabled { opacity: 0.4; cursor: default; }
 

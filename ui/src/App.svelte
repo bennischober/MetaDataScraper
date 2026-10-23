@@ -41,7 +41,7 @@
   // changed `page` behind the overlay looked like nothing happened)
   let detailMovie = $state<Movie | null>(null)
   // where the detail was opened from — the back button returns there
-  let detailFrom = $state<'overview' | 'library'>('overview')
+  let detailFrom = $state<'overview' | 'library' | 'jobs'>('overview')
   function goto(next: Page) {
     detailMovie = null
     detailPath = null
@@ -49,7 +49,7 @@
     page = next
     location.hash = `/${next}`
   }
-  function openDetail(movie: Movie, from: 'overview' | 'library') {
+  function openDetail(movie: Movie, from: 'overview' | 'library' | 'jobs') {
     detailMovie = movie
     detailFrom = from
     detailPath = null
@@ -69,7 +69,7 @@
     // contract as the dialogs restoring their trigger
     queueMicrotask(() => {
       const items = document.querySelectorAll<HTMLElement>('.rail-item')
-      items[detailFrom === 'overview' ? 0 : 1]?.focus()
+      items[detailFrom === 'overview' ? 0 : detailFrom === 'jobs' ? 3 : 1]?.focus()
     })
   }
   // F5 on #/movie: restore the detail from sessionStorage (the poll may
@@ -217,15 +217,18 @@
   // deep-link restore: a reload on #/movie re-opens the detail as soon as
   // the library arrives (the path rides in sessionStorage). The origin is
   // not knowable after a reload — library is the honest default, since a
-  // fresh session has no page history to return to.
+  // fresh session has no page history to return to. openDetailFromJobs
+  // presets the origin it wants ('jobs') before the library arrives.
+  let pendingDetailFrom: 'library' | 'jobs' = 'library'
   $effect(() => {
     if (detailPath && movies.length > 0) {
       const m = movies.find((mv) => mv.path === detailPath)
       if (m) {
         detailMovie = m
-        detailFrom = 'library'
+        detailFrom = pendingDetailFrom
       }
       detailPath = null
+      pendingDetailFrom = 'library'
     }
   })
 
@@ -498,6 +501,24 @@
     requestEncode([path])
   }
 
+  // jobs → movie: a single-movie job row links to its title's detail page.
+  // The movie must be in the snapshot's library (the detail page's props
+  // come from it); when the library hasn't arrived yet, the deep-link
+  // restore effect resolves it as soon as it does.
+  function openDetailFromJobs(path: string) {
+    const m = movies.find((mv) => mv.path === path)
+    if (m) {
+      openDetail(m, 'jobs')
+    } else {
+      // library not fetched yet (or movie absent from the snapshot): the
+      // deep-link restore resolves it as soon as the library arrives
+      pendingDetailFrom = 'jobs'
+      detailPath = path
+      detailFrom = 'jobs'
+      location.hash = '/movie'
+    }
+  }
+
   let dismissed = $state<Set<number>>(new Set())
   const runningJobs = $derived(
     history.filter((j) => (j.state === 'running' || j.state === 'queued') && j.id !== null && !dismissed.has(j.id))
@@ -617,6 +638,7 @@
         onclose={closeDetail}
         onencode={encodeOne}
         onplan={(p) => enqueue('plan', [p])}
+        onjobs={() => goto('jobs')}
         backTo={detailFrom}
       />
     {:else}
@@ -694,7 +716,7 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} oncancel={cancelJob} onretry={retryJob} />
+        <JobsPage {history} oncancel={cancelJob} onretry={retryJob} onopenMovie={(p) => openDetailFromJobs(p)} />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
         <ConfigPage
