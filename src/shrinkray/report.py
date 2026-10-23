@@ -106,7 +106,7 @@ def _movie_table(rows: list[dict]) -> str:
         "<tr><th>Movie</th><th>Category</th><th>Resolution</th><th>Codec</th>"
         "<th>Duration</th><th class='num'>Size</th><th>Decision</th>"
         "<th class='num'>New size</th><th class='num'>Saved</th><th class='num'>CRF</th>"
-        "<th class='num'>VMAF</th><th>Note</th></tr>"
+        "<th class='num'>VMAF</th><th class='num'>Verified</th><th>Note</th></tr>"
     )
     body_rows = []
     for r in rows:
@@ -123,6 +123,16 @@ def _movie_table(rows: list[dict]) -> str:
         resolution = f"{r['width']}x{r['height']}" if r["width"] and r["height"] else "-"
         saved = _fmt_percent(r["saved_percent"]) if decision == "encode" else "—"
         vmaf = f"{r['achieved_vmaf']:.2f}" if r["achieved_vmaf"] is not None else "—"
+        # full-file verification (B5): shown with the sub-sample divisor when
+        # one was used (1/10 = every 10th frame measured)
+        verified = r["verified_vmaf"]
+        if verified is not None:
+            sub = r["verified_subsample"]
+            verified_cell = f"{verified:.2f}" + (
+                f" <span class='note'>(1/{sub})</span>" if sub else ""
+            )
+        else:
+            verified_cell = "—"
         note = r["note"] or ""
         body_rows.append(
             f"<tr>"
@@ -138,6 +148,7 @@ def _movie_table(rows: list[dict]) -> str:
             f"<td class='num'>{saved}</td>"
             f"<td class='num'>{r['chosen_crf'] if r['chosen_crf'] is not None else '—'}</td>"
             f"<td class='num'>{vmaf}</td>"
+            f"<td class='num'>{verified_cell}</td>"
             f"<td class='note'>{_esc(note)}</td>"
             f"</tr>"
         )
@@ -189,6 +200,7 @@ def generate_report(db_path: Path, output: Path):
         db_path (Path): Path of the sqlite database.
         output (Path): Path of the HTML file to write.
     """
+    output.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
 
@@ -198,7 +210,8 @@ def generate_report(db_path: Path, output: Path):
         SELECT f.path, f.name, f.category, f.duration, f.codec,
                f.width, f.height, f.missing_scans,
                e.input_size, e.output_size, e.saved_percent,
-               e.chosen_crf, e.achieved_vmaf, e.preset, e.encoded_at
+               e.chosen_crf, e.achieved_vmaf, e.preset, e.encoded_at,
+               e.verified_vmaf, e.verified_subsample
         FROM files f
         LEFT JOIN encodes e ON e.id = (
             SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
