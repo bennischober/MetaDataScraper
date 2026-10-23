@@ -126,18 +126,33 @@ class TestQuality(unittest.TestCase):
         rects = [(1920, 800, 0, 140), (1920, 800, 0, 140)]
         bars = quality.intersect_crop_rects(rects, frame)
         self.assertEqual(bars, (140, 140, 0, 0))
-        # one sample with smaller/different bars => conservative intersection
-        # (the picture area present in ALL samples is kept: y in [140, 940])
+        # cropdetect reports the PICTURE rectangle, so the crop may only remove
+        # bars present in ALL samples => keep the union of the picture areas
+        # (here y in [90, 990): only the 90 px bar common to both is removed)
         smaller = [(1920, 800, 0, 140), (1920, 900, 0, 90)]
-        self.assertEqual(quality.intersect_crop_rects(smaller, frame), (140, 140, 0, 0))
-        # one sample showing side bars only => top/bottom bars vanish
+        self.assertEqual(quality.intersect_crop_rects(smaller, frame), (90, 90, 0, 0))
+        # a sample with no bars at all vetoes the crop entirely
         sides = [(1920, 1080, 0, 0), (1800, 1080, 60, 0)]
-        self.assertEqual(quality.intersect_crop_rects(sides, frame), (0, 0, 60, 60))
+        self.assertIsNone(quality.intersect_crop_rects(sides, frame))
         # noise-sized bars (below 2% of the dimension) => None
         tiny = [(1920, 1060, 0, 10), (1920, 1060, 0, 10)]
         self.assertIsNone(quality.intersect_crop_rects(tiny, frame))
         # empty input
         self.assertIsNone(quality.intersect_crop_rects([], frame))
+
+    def test_intersect_crop_rects_bar_free_sample_vetoes(self):
+        """A sample with no bars must prevent cropping, not be overruled."""
+        frame = (1920, 1080)
+        # one sample is the full frame => no bar is present in every sample
+        self.assertIsNone(
+            quality.intersect_crop_rects([(1920, 800, 0, 140), (1920, 1080, 0, 0)], frame)
+        )
+        # a sample with smaller bars still restricts the crop: the 140 px bar is
+        # only a bar in one sample, so only the common 90 px may be removed
+        self.assertEqual(
+            quality.intersect_crop_rects([(1920, 800, 0, 140), (1920, 900, 0, 90)], frame),
+            (90, 90, 0, 0),
+        )
 
     def test_build_encode_command_crop(self):
         command = quality.build_encode_command(

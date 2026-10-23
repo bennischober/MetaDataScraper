@@ -136,14 +136,15 @@ def parse_crop_line(text: str) -> tuple[int, int, int, int] | None:
 def intersect_crop_rects(
     rects: list[tuple[int, int, int, int]], frame: tuple[int, int]
 ) -> tuple[int, int, int, int] | None:
-    """Intersects crop rectangles => only bars present in ALL samples.
+    """Intersects picture rectangles => only bars present in ALL samples.
 
-    The intersection is safe by construction: a sample without bars
-    (or with smaller bars) shrinks the crop accordingly, so no picture
-    content can be removed.
+    cropdetect reports the *picture* rectangle of each sample, so keeping the
+    picture area common to every sample means cropping only the bars that every
+    sample agrees on. A sample without bars keeps the full frame, which vetoes
+    the crop entirely - no picture content can be removed.
 
     Args:
-        rects (list): Detected (width, height, x, y) rectangles.
+        rects (list): Detected (width, height, x, y) picture rectangles.
         frame (tuple): The (width, height) of the source frame.
 
     Returns:
@@ -154,11 +155,11 @@ def intersect_crop_rects(
         return None
     frame_w, frame_h = frame
 
-    # intersection in absolute coordinates: the picture area present in all
-    left = max(x for _, _, x, _ in rects)
-    top = max(y for _, _, _, y in rects)
-    right = min(x + w for w, _, x, _ in rects)
-    bottom = min(y + h for _, h, _, y in rects)
+    # union of the picture areas = the bars common to every sample
+    left = min(x for _, _, x, _ in rects)
+    top = min(y for _, _, _, y in rects)
+    right = max(x + w for w, _, x, _ in rects)
+    bottom = max(y + h for _, h, _, y in rects)
 
     width = max(0, right - left)
     height = max(0, bottom - top)
@@ -194,8 +195,8 @@ def detect_crop_rect(
 ) -> tuple[int, int, int, int] | None:
     """Detects baked-in black bars (letterbox) of a movie via cropdetect.
 
-    Runs cropdetect on several segments and intersects the results, so only
-    bars that are present throughout the movie are removed.
+    Runs cropdetect on several segments and keeps the bars common to all of
+    them, so only bars that are present throughout the movie are removed.
 
     Args:
         movie (Path): The source movie file.
