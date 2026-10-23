@@ -1431,7 +1431,9 @@ def find_optimal_crf_and_skip(
         )
     ]
 
-    # cheapest CRF (largest size) of the search range as the pessimistic bound
+    # highest CRF (smallest size) of the search range as the pessimistic
+    # bound: if even the most aggressive setting cannot shrink the file,
+    # no CRF in the range can
     factor = estimate_size_factor(
         samples,
         workdir,
