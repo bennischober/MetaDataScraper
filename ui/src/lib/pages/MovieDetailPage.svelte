@@ -180,12 +180,41 @@
       }
     })
   })
-  const driftMaxBr = $derived(Math.max(...driftSlots.map((s) => Math.max(s.inBr ?? 0, s.outBr ?? 0)), 0.1))
-  /** VMAF lane: fixed 70–100 domain (the target's clamp range) — a
-   * min-max scale would let one bad encode silently stretch the axis.
-   * Labeled, bounded track (y 6→42 in the translated group): 94.1 vs
-   * 90.3 must be two visibly different heights, not dots on the line. */
-  const vmafLaneY = (v: number) => 42 - ((Math.min(100, Math.max(70, v)) - 70) / 30) * 36
+  // The staircase: one bar per step of the chain, descending left →
+  // right. Round-6.8 finding (user review): per-encode IN/OUT bar pairs
+  // duplicated every data point — along a chain out(k) IS in(k+1) — and
+  // a metrics-less run inside the steps desynced labels from bands.
+  // The staircase tells the MEASURED story only: SOURCE (the first
+  // measurable input) + one bar per encode that produced numbers,
+  // labeled by generation. Runs without numbers stay in the table
+  // below, where the em-dash vocabulary lives — the chart summarizes,
+  // the table is the complete record.
+  interface DriftStep {
+    label: string
+    br: number | null
+    derived: boolean
+    kind: 'source' | 'encode'
+    vmaf: number | null
+  }
+  const driftSteps = $derived.by<DriftStep[]>(() => {
+    if (driftSlots.length < 2) return []
+    const steps: DriftStep[] = []
+    // the source step: the first encode's measurable input (same
+    // content, so the viewed file's duration is the right denominator)
+    const first = driftSlots.find((s) => s.inBr != null)
+    if (first) steps.push({ label: 'SOURCE', br: first.inBr, derived: first.inDerived, kind: 'source', vmaf: null })
+    for (const s of driftSlots) {
+      if (s.outBr == null) continue
+      steps.push({ label: `GEN ${s.gen}`, br: s.outBr, derived: s.outDerived, kind: 'encode', vmaf: s.vmaf })
+    }
+    return steps
+  })
+  const driftMaxBr = $derived(Math.max(...driftSteps.map((s) => s.br ?? 0), 0.1))
+  /** VMAF lane: fixed 85–100 domain, clamped below 85 (the table carries
+   * the exact numbers; the lane's job is showing distance-to-target, and
+   * a 70–100 domain gave that distance 0.47px per point — unreadable).
+   * Group-local y (group translated to y=84): 100 → y6, 85 → y20. */
+  const vmafLaneY = (v: number) => 20 - ((Math.min(100, Math.max(85, v)) - 85) / 15) * 14
   /** Slot centers in viewBox units: evenly divided, each slot owns an
    * equal band — real geometry, no stretching. */
   const slotX = (i: number) => ((i + 0.5) / driftSlots.length) * (driftW || 560)
@@ -193,18 +222,15 @@
    * — svelte's measured width, default 560 before first layout). */
   let driftW = $state(0)
   const driftSummary = $derived.by(() => {
-    if (driftSlots.length < 2) return ''
-    // the drift story: the oldest measured source bitrate → the newest
-    // measured output bitrate. Slots without bitrates (pre-v7 rows with
-    // no derivable duration) must not erase the sentence — the first
-    // AVAILABLE pair wins, tilde marking the derived endpoint (the
-    // table's own ~ convention).
-    const firstSlot = driftSlots.find((s) => s.inBr != null)
-    const lastSlot = [...driftSlots].reverse().find((s) => s.outBr != null)
-    if (firstSlot?.inBr != null && lastSlot?.outBr != null) {
-      const f = firstSlot.inDerived ? '~' : ''
-      const l = lastSlot.outDerived ? '~' : ''
-      return `bitrate ${f}${firstSlot.inBr.toFixed(1)} → ${l}${lastSlot.outBr.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
+    if (driftSteps.length < 2) return ''
+    // the drift story, told by the staircase: the source step → the last
+    // step. Tilde marks a derived endpoint (the table's own convention).
+    const firstStep = driftSteps[0]
+    const lastStep = [...driftSteps].reverse().find((s) => s.br != null)
+    if (firstStep.br != null && lastStep?.br != null) {
+      const f = firstStep.derived ? '~' : ''
+      const l = lastStep.derived ? '~' : ''
+      return `bitrate ${f}${firstStep.br.toFixed(1)} → ${l}${lastStep.br.toFixed(1)} MBit/s across ${driftSlots.length} encodes`
     }
     return `${driftSlots.length} encodes, oldest → newest`
   })
@@ -343,54 +369,56 @@
         <div class="dim pad">no encode recorded — the title is untouched</div>
       {:else}
         {#if driftSlots.length >= 2}
-          <!-- the drift chart: bitrate in→out per encode (bars, oldest →
-               newest) + VMAF points on the fixed 70-100 target track.
-               Geometry lives in viewBox units on an unstretched SVG
-               (preserveAspectRatio default) — a "none" stretch turned the
-               VMAF dots into ellipses and bars into sub-pixel slivers. -->
-          <div class="drift mono" role="img" aria-label="Drift chart: bitrate and VMAF across {driftSlots.length} encodes, oldest to newest. {driftSummary}">
+          <!-- the drift chart: the provenance chain as a descending
+               staircase (SOURCE → GEN 1 → GEN 2 …) + VMAF dots on a
+               fixed 85-100 lane below. Geometry in viewBox units on an
+               unstretched SVG, width measured from the container. -->
+          <div class="drift mono" role="img" aria-label="Drift chart: bitrate staircase and VMAF across {driftSlots.length} encodes, oldest to newest. {driftSummary}">
             <div class="drift-svg" bind:clientWidth={driftW}>
               <svg viewBox="0 0 {driftW || 560} 110" aria-hidden="true">
-              <!-- VMAF lane: fixed 70–100 domain (a min-max axis would let
-                   one bad encode stretch it silently), its own lane above
-                   the bars. Bounded by VMAF-90/70 rules labeled at the left
-                   edge so the amber target reads as a mark INSIDE a scale,
-                   not a divider. -->
-              <g class="vmaf-track" transform="translate(0, 8)">
+              <!-- bitrate staircase: one bar per step, descending left →
+                   right on one shared scale; steps labeled by generation,
+                   value labeled on top; a no-data step keeps its axis -->
+              <g class="br-lane">
+                {#each driftSteps as s, i (i)}
+                  {@const cx = slotX(i)}
+                  <line x1={cx} y1="0" x2={cx} y2="60" class="slot-rule"></line>
+                  {#if s.br != null}
+                    <rect
+                      x={cx - 8}
+                      y={60 - (s.br / driftMaxBr) * 54}
+                      width="16"
+                      height={(s.br / driftMaxBr) * 54}
+                      class="step {s.kind}"
+                      class:derived={s.derived}
+                    ></rect>
+                    <text x={cx} y={60 - (s.br / driftMaxBr) * 54 - 4} class="step-value" text-anchor="middle">{s.derived ? '~' : ''}{s.br.toFixed(1)}</text>
+                  {/if}
+                  <text x={cx} y="72" class="step-label" text-anchor="middle">{s.label}</text>
+                {/each}
+                <line x1="0" y1="60" x2={driftW || 560} y2="60" class="base-rule"></line>
+              </g>
+              <!-- VMAF lane below the staircase: fixed 85-100 domain, same
+                   slot centers as the steps, so each dot sits under the
+                   encode it belongs to (the source has no VMAF) -->
+              <g class="vmaf-track" transform="translate(0, 84)">
                 <text x="2" y="3" class="lane-label">VMAF 100</text>
                 <line x1="0" y1="6" x2={driftW || 560} y2="6" class="track-rule"></line>
-                <text x="2" y="39" class="lane-label">70</text>
-                <line x1="0" y1="42" x2={driftW || 560} y2="42" class="track-rule"></line>
+                <text x="2" y="17" class="lane-label">85</text>
+                <line x1="0" y1="20" x2={driftW || 560} y2="20" class="track-rule"></line>
                 <line x1="0" y1="{vmafLaneY(targetVmaf)}" x2={driftW || 560} y2="{vmafLaneY(targetVmaf)}" class="target-rule"></line>
-                {#each driftSlots as s, i (s.i)}
+                {#each driftSteps as s, i (i)}
                   {#if s.vmaf != null}
                     <circle cx={slotX(i)} cy={vmafLaneY(s.vmaf)} r="2.5" class="vmaf-dot" class:under={s.vmaf < targetVmaf}></circle>
                   {/if}
                 {/each}
               </g>
-              <g class="br-lane" transform="translate(0, 62)">
-                {#each driftSlots as s, i (s.i)}
-                  {@const cx = slotX(i)}
-                  <!-- a slot with no numbers still occupies its space:
-                       the axis line says "measured nothing here" without
-                       leaving a hole that reads as missing data -->
-                  <line x1={cx} y1="0" x2={cx} y2="42" class="slot-rule"></line>
-                  {#if s.inBr != null}
-                    <rect x={cx - 9} y={42 - (s.inBr / driftMaxBr) * 42} width="8" height={(s.inBr / driftMaxBr) * 42} class="br-in" class:derived={s.inDerived}></rect>
-                  {/if}
-                  {#if s.outBr != null}
-                    <rect x={cx + 1} y={42 - (s.outBr / driftMaxBr) * 42} width="8" height={(s.outBr / driftMaxBr) * 42} class="br-out" class:derived={s.outDerived}></rect>
-                  {/if}
-                {/each}
-                <text x="2" y="45" class="lane-label">0</text>
-                <line x1="0" y1="42" x2={driftW || 560} y2="42" class="base-rule"></line>
-              </g>
             </svg>
             </div>
             <div class="drift-legend legend">
-              <span><span class="sw sw-in"></span> BITRATE IN</span>
-              <span><span class="sw sw-out"></span> BITRATE OUT</span>
-              <span><span class="sw sw-vmaf"></span> VMAF (70–100)</span>
+              <span><span class="sw sw-src"></span> SOURCE BITRATE</span>
+              <span><span class="sw sw-enc"></span> ENCODE OUTPUT</span>
+              <span><span class="sw sw-vmaf"></span> VMAF (85–100)</span>
               <span title="dashed bar = value derived from size/duration (pre-v7 rows without ffprobe bitrates)">DASHED = DERIVED</span>
               <span class="spacer"></span>
               <span class="dim">{driftSummary}</span>
@@ -579,7 +607,7 @@
   /* ── drift chart: the chain as a shape ── */
   .drift { padding: 10px 14px 8px; border-bottom: 1px solid var(--row-line); }
   .drift-svg { width: 100%; }
-  .drift svg { display: block; width: 100%; height: 110px; }
+  .drift svg { display: block; width: 100%; height: 108px; }
   .drift .track-rule { stroke: var(--row-line); stroke-width: 1; }
   .drift .track-rule.faint { stroke: var(--row-line); stroke-dasharray: 2 3; }
   .drift .base-rule { stroke: var(--row-line); stroke-width: 1; }
@@ -589,14 +617,14 @@
   /* under-target: amber RING, not amber fill — values cluster just under
      the target, and an amber dot ON the amber target line disappears */
   .drift .vmaf-dot.under { fill: var(--teal); stroke: var(--amber); stroke-width: 1.5; }
-  .drift .br-in { fill: var(--ink-dim); }
-  .drift .br-out { fill: var(--teal); opacity: 0.85; }
+  .drift .step { fill: var(--ink-dim); }
+  .drift .step.encode { fill: var(--teal); opacity: 0.85; }
   /* derived values (pre-v7, size/duration math) draw dashed — a derived
-     bar must not dress up as a measured one (both endpoints, not just in).
-     In-bars use --ink-dim, not --seam: a hairline color made the most
-     important bar in the chart (the source) invisible against the panel. */
-  .drift .br-in.derived { fill: none; stroke: var(--ink-dim); stroke-dasharray: 2 2; }
-  .drift .br-out.derived { fill: none; stroke: var(--teal); stroke-dasharray: 2 2; }
+     bar must not dress up as a measured one */
+  .drift .step.derived { fill: none; stroke: var(--ink-dim); stroke-dasharray: 2 2; }
+  .drift .step.encode.derived { stroke: var(--teal); }
+  .drift .step-value { fill: var(--ink-dim); font-size: 7px; }
+  .drift .step-label { fill: var(--ink-faint); font-size: 7px; letter-spacing: 0.5px; }
   .drift .slot-rule { stroke: var(--row-line); stroke-width: 1; }
   .drift-legend {
     display: flex;
@@ -615,8 +643,8 @@
     vertical-align: middle;
     border-radius: 1px;
   }
-  .drift-legend .sw-in { background: var(--ink-dim); }
-  .drift-legend .sw-out { background: var(--teal); opacity: 0.85; }
+  .drift-legend .sw-src { background: var(--ink-dim); }
+  .drift-legend .sw-enc { background: var(--teal); opacity: 0.85; }
   .drift-legend .sw-vmaf { border-radius: 50%; background: var(--teal); }  .enc-row {
     display: grid;
     grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 70px 1fr;
