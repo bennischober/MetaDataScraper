@@ -359,6 +359,7 @@ def _encode_with_command(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                **resources.session_kwargs(),
                 **resources.spawn_kwargs(),
             )
             assert popen.stdout is not None and popen.stderr is not None

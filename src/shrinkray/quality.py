@@ -352,6 +352,7 @@ def _run(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,
+        **resources.session_kwargs(),
         **resources.spawn_kwargs(),
     )
     assert popen.stdout is not None and popen.stderr is not None

@@ -89,6 +89,18 @@ class TestResources(unittest.TestCase):
         with mock.patch.object(resources, "_IDLE_PRIORITY", False):
             self.assertEqual(resources.spawn_kwargs(), {})
 
+    def test_session_kwargs_posix_own_session(self):
+        """Cancellable children spawn in their own session on POSIX (the
+        process group IS the tree, so terminate_tree can killpg it); on
+        Windows taskkill /T walks the tree, so nothing is needed."""
+        from shrinkray import resources
+
+        kwargs = resources.session_kwargs()
+        if os.name == "nt":
+            self.assertEqual(kwargs, {})
+        else:
+            self.assertEqual(kwargs, {"start_new_session": True})
+
     def test_rss_mib_sane(self):
         """The RSS is a plausible number (10 MiB .. 4 GiB) or None."""
         from shrinkray.resources import rss_mib

@@ -15,6 +15,7 @@ process niceness (POSIX), memory is read from psapi (Windows) or
 
 import contextlib
 import os
+import signal
 import subprocess
 import sys
 
@@ -24,6 +25,28 @@ _IDLE_PRIORITY = True
 # windows: priority classes are per-child creation flags; POSIX children
 # inherit the process niceness set by nice_self() instead
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", None)
+
+
+def session_kwargs() -> dict:
+    """Keyword arguments for spawning cancellable children in their own
+    session.
+
+    POSIX: `start_new_session=True` puts the child (and everything it
+    spawns) into a new process group, so `terminate_tree` can kill the
+    whole subtree with one killpg — the documented upgrade path for
+    tree-children. Production children (HandBrakeCLI, ffmpeg) are leaf
+    processes today, but the test stubs (`sh` that runs `sleep`) are not:
+    a group-kill is the only reliable way to end them AND keep the pipes
+    EOF-clean (an orphaned grandchild holds the write-end, the drainer
+    never sees EOF, the caller hangs - observed in CI on Linux).
+    Windows: taskkill /T /F already walks the tree; nothing needed here.
+
+    Returns:
+        dict: kwargs to splat into subprocess.Popen (empty on Windows).
+    """
+    if sys.platform == "win32":
+        return {}
+    return {"start_new_session": True}
 
 
 def terminate_tree(popen: subprocess.Popen) -> None:
@@ -37,10 +60,14 @@ def terminate_tree(popen: subprocess.Popen) -> None:
     finish). Windows: taskkill /T /F walks the descendant tree (terminate()
     is TerminateProcess there anyway - force-kill is the only option, and
     the terminate->kill escalation in the classic path is POSIX semantics).
-    POSIX: our production children (HandBrakeCLI, ffmpeg) are leaf
-    processes, so the classic SIGTERM -> SIGKILL escalation on the direct
-    child is correct; if a tree-child ever appears on POSIX, process groups
-    are the upgrade path.
+    POSIX: the child runs in its own session (session_kwargs at spawn, the
+    process group IS the tree) => killpg SIGTERM -> SIGKILL escalation on
+    the whole group; every member dies and the pipes reach EOF. The group
+    is only killed when the child actually sits in its own group (verified
+    via getpgid against ours) - a child spawned without a session shares
+    OUR group, and killpg there would terminate the caller itself. Such
+    children (and unreadable ones) take the classic direct-child
+    escalation below.
 
     Args:
         popen (subprocess.Popen): The child to stop (all of it).
@@ -55,7 +82,33 @@ def terminate_tree(popen: subprocess.Popen) -> None:
             return
         except (OSError, subprocess.SubprocessError):
             pass  # taskkill missing/blocked: classic escalation below
-    # POSIX (and the Windows fallback): escalate on the direct child
+    # POSIX: killpg the child's group, but only when it differs from ours
+    # (start_new_session makes the group the tree; a shared group must take
+    # the classic path - killpg on it would hit the caller too). Platform
+    # guard, not getattr-dancing: mypy narrows sys.platform, so the Windows
+    # pass never type-checks this block (its stubs lack getpgid/killpg).
+    if sys.platform != "win32":
+        child_pgid: int | None = None
+        own_pgid: int | None = None
+        try:
+            child_pgid = os.getpgid(popen.pid)
+            own_pgid = os.getpgid(0)
+        except OSError:
+            pass  # child already gone / unreadable: classic path
+        if child_pgid is not None and own_pgid is not None and child_pgid != own_pgid:
+            try:
+                os.killpg(child_pgid, signal.SIGTERM)
+            except OSError:
+                pass  # group already gone between getpgid and killpg
+            else:
+                try:
+                    popen.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child_pgid, signal.SIGKILL)
+                    popen.wait(timeout=5)
+                return
+    # classic escalation fallback (Windows non-taskkill path, or a POSIX
+    # child in our own group / already gone)
     popen.terminate()
     try:
         popen.wait(timeout=5)
