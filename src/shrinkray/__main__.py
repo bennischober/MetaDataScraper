@@ -6,10 +6,13 @@ options and the console presentation.
 """
 
 import csv
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
+from rich.progress import Progress
 from rich.table import Table
 
 from shrinkray import db
@@ -20,6 +23,14 @@ from shrinkray.logger import log, log_error
 from shrinkray.quality import Cancelled as _EncodeCancelled
 from shrinkray.report import generate_report
 from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
+
+if TYPE_CHECKING:
+    import sqlite3
+
+    from rich.progress import TaskID
+
+    from shrinkray.config import Conf
+
 from shrinkray.service import (
     finished_movies,
     record_fixed_results,
@@ -55,11 +66,11 @@ __all__ = [
 
 def write_output(
     movies_by_category: dict,
-    total_time,
-    total_size,
+    total_time: str | None,
+    total_size: float,
     separator: str,
     output_file: Path = OUTPUT_FILE,
-):
+) -> None:
     """Writes the processed data to the output file.
 
     Args:
@@ -107,7 +118,7 @@ def write_output(
         text.write(separator.join(total) + "\n")
 
 
-def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = CSV_FILE):
+def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = CSV_FILE) -> None:
     """Converts the output file into a real csv file.
 
     Args:
@@ -122,7 +133,7 @@ def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = 
             writer.writerows(lines)
 
 
-def print_table(movies_by_category: dict, total_time, total_size: float):
+def print_table(movies_by_category: dict, total_time: str | None, total_size: float) -> None:
     """Prints the scanned movies as a rich table to the console.
 
     Args:
@@ -183,7 +194,7 @@ def print_table(movies_by_category: dict, total_time, total_size: float):
     console.print(table)
 
 
-def print_summary(movies_by_category: dict, total_time, total_size: float):
+def print_summary(movies_by_category: dict, total_time: str | None, total_size: float) -> None:
     """Prints a summary of the scanned movies to the console.
 
     Args:
@@ -214,7 +225,7 @@ def app_command(
         help="Folder the API may operate on (repeatable). Defaults to all "
         "available drive roots (the app is localhost-only).",
     ),
-):
+) -> None:
     """Runs the resident app: job queue, watch loop and the local HTTP API.
 
     The app owns long-running work; terminal and web UI are just consumers
@@ -281,7 +292,7 @@ def scan(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
-):
+) -> None:
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config()
     connection = db.connect(db_file)
@@ -392,7 +403,7 @@ def encode(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
-):
+) -> None:
     """Re-encodes the found movies with HandBrake to reduce their file size."""
 
     config = load_config()
@@ -421,7 +432,7 @@ def encode(
         connection.close()
 
 
-def _quality_progress_callback(progress, task):
+def _quality_progress_callback(progress: Progress, task: TaskID) -> Callable[[dict], None]:
     """Builds a progress callback for the quality engine (CLI variant).
 
     The engine streams {'stage': 'encode', 'percent': 0-100, 'movie': name}
@@ -454,21 +465,21 @@ def _quality_progress_callback(progress, task):
 
 
 def _record_encodes(
-    connection,
-    movies,
-    output_dir,
-    config,
-    dry_run,
-    overwrite,
-    quality,
-    target_vmaf,
-    remove_bars,
-    verify,
-    workers,
-    threads,
-    db_file,
-    replan=False,
-):
+    connection: "sqlite3.Connection",
+    movies: list[Path],
+    output_dir: Path,
+    config: "Conf",
+    dry_run: bool,
+    overwrite: bool,
+    quality: bool,
+    target_vmaf: float,
+    remove_bars: bool,
+    verify: bool,
+    workers: int,
+    threads: int | None,
+    db_file: Path | None,
+    replan: bool = False,
+) -> None:
     """Runs the encoding and records the results in the database.
 
     Args:
@@ -636,7 +647,7 @@ def plan(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
-):
+) -> None:
     """Probes the movies and predicts the encode outcome without encoding.
 
     Shows which movies would be encoded (with predicted CRF, quality and
@@ -729,7 +740,7 @@ def report(
     output: Path = typer.Option(
         Path("report.html"), "--output", "-o", help="Path of the HTML report."
     ),
-):
+) -> None:
     """Generates a self-contained HTML report from the database."""
     if not db_file.is_file():
         log_error(f"Database '{db_file}' not found! Run a scan first.")
@@ -749,7 +760,7 @@ def compare(
         help="The movie file whose encode history (generation chain) to show.",
     ),
     db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
-):
+) -> None:
     """Shows the provenance chain of a movie: every generation with its data.
 
     Each row documents one generation: codec, bitrate, size, CRF/VMAF (when
@@ -818,7 +829,7 @@ def doctor(
             "(slow: ~50ms per file). Default checks existence only."
         ),
     ),
-):
+) -> None:
     """Checks the library's health: db reality vs disk reality.
 
     Reports dead paths (files the db knows but the disk lost), encode
@@ -872,7 +883,7 @@ def watch_mode(
         False, "--remove-bars", help="Detect and crop stable black bars."
     ),
     poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
-):
+) -> None:
     """Watches a folder and encodes newly arrived movies automatically.
 
     Sources stay untouched (outputs land in the output directory), so the
