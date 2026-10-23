@@ -142,3 +142,44 @@ class TestProbeProgress(unittest.TestCase):
                 progress=lambda data: None,
             )
         self.assertIsNotNone(fake_probe.call_args.kwargs.get("progress"))
+
+    def test_encode_with_quality_forwards_thread_cap_to_probes(self):
+        """A configured thread cap must reach the probe encodes, not just the
+        final encode: the cap exists to keep cores free on a shared machine,
+        and probing runs for minutes before the final encode starts."""
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(quality, "_source_snapshot", return_value=None),
+            patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            src = Path(tmp) / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            quality.encode_with_quality(
+                src,
+                Path(tmp) / "out.mkv",
+                encoder_threads=4,
+            )
+        self.assertEqual(fake_probe.call_args.kwargs.get("encoder_threads"), 4)
+
+    def test_plan_forwards_thread_cap_to_both_size_probes(self):
+        """plan's report size probe must use the same cap as the CRF search
+        and the encode that follows, or the estimate comes from a different
+        thread configuration than the real encode."""
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(
+                quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
+            ) as fake_search,
+            patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+            patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            src = Path(tmp) / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            quality.plan_quality(src, encoder_threads=4)
+        self.assertEqual(fake_search.call_args.kwargs.get("encoder_threads"), 4)
+        self.assertEqual(fake_estimate.call_args.kwargs.get("encoder_threads"), 4)

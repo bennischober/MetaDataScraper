@@ -1391,6 +1391,7 @@ def plan_quality(
             crop=crop,
             cancel=cancel,
             db_file=db_file,
+            encoder_threads=encoder_threads,
             progress=progress,
         )
 
@@ -1845,6 +1846,7 @@ def encode_with_quality(
                 hdr=hdr,
                 cancel=cancel,
                 db_file=db_file,
+                encoder_threads=encoder_threads,
                 progress=progress,
             )
         except SkipEncode as e:
