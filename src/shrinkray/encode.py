@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -968,7 +969,7 @@ def _encode_pending(
                             running.append(budget)
                         future = executor.submit(run_one, movie, output_file, budget)
 
-                        def done(fut, budget=budget):
+                        def done(fut: "Future[EncodeResult]", budget: int = budget) -> None:
                             with lock:
                                 running.remove(budget)
                             result = fut.result()
@@ -988,7 +989,7 @@ def _encode_pending(
     return results
 
 
-def _report_encode(progress: Progress, result: EncodeResult):
+def _report_encode(progress: Progress, result: EncodeResult) -> None:
     """Logs one finished encode to the progress console."""
     if result.success:
         saved = result.saved_percent

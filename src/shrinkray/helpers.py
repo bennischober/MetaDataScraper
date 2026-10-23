@@ -18,7 +18,7 @@ class SIZE_UNIT(Enum):
     GB = 4
 
 
-def convert_unit(size_in_bytes, unit):
+def convert_unit(size_in_bytes: int, unit: SIZE_UNIT) -> float:
     """Convert the size from bytes to other units like KB, MB or GB"""
     if unit == SIZE_UNIT.KB:
         return round(size_in_bytes / 1024, 2)

@@ -11,13 +11,13 @@ logger.add(
 )
 
 
-def log(message: str):
+def log(message: str) -> None:
     logger.info(message)
 
 
-def log_warning(message: str):
+def log_warning(message: str) -> None:
     logger.warning(message)
 
 
-def log_error(message: str):
+def log_error(message: str) -> None:
     logger.error(message)

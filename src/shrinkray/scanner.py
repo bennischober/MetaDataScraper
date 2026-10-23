@@ -187,7 +187,7 @@ def record_from_cache(row) -> dict:
     size = convert_unit(row["size"], SIZE_UNIT.GB)
 
     # it's not really the compression rate, it's rather size/time
-    compression_rate = 0
+    compression_rate: float = 0.0
     if row["duration_raw"] is not None:
         compression_rate = round(size / (row["duration_raw"] / 3600), 2)
     elif row["duration"] is not None:
@@ -245,7 +245,7 @@ def process_movie(
     size = convert_unit(os.path.getsize(filename), SIZE_UNIT.GB)
 
     # it's not really the compression rate, it's rather size/time
-    compression_rate = 0
+    compression_rate: float = 0.0
     if ret["duration_raw"] is not None:
         compression_rate = round(size / (ret["duration_raw"] / 3600), 2)
     elif ret["duration"] is not None:

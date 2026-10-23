@@ -19,6 +19,7 @@ import contextlib
 import os
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 from shrinkray.logger import log_warning
@@ -138,7 +139,7 @@ def _release_path(lock: Path) -> None:
 
 
 @contextlib.contextmanager
-def guard_encodes(output_dir: Path, holder: str = "encode"):
+def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
     """Context manager around a whole encode run (all entry points).
 
     Args:

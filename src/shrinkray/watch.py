@@ -179,7 +179,7 @@ def _sleep_or_stop(seconds: float, stop_event: threading.Event | None) -> None:
         time.sleep(seconds)
 
 
-def release_lock(lock_file: Path):
+def release_lock(lock_file: Path) -> None:
     """Releases the single-instance lock if this process holds it.
 
     Args:
@@ -203,7 +203,7 @@ def watch(
     max_threads: int | None = None,
     stop_event: threading.Event | None = None,
     db_file: Path | None = None,
-):
+) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
     This function blocks (unless once=True); stop it with Ctrl+C - the
