@@ -143,7 +143,7 @@ existing video collection" and nothing more specific.
   Windows but a relative path on Linux/CI — scope containment and
   `resolve()` behave differently and the local gate cannot see it).
 - **`test_media/` is for real media, and it is never committed.** The
-  folder is part of the repository (tracked via `test_media/.gitkeep`); every
+  folder is part of the repository (tracked via `test_media/README.md`); every
   file in it is ignored by `/test_media/*`. Drop real video files there for
   manual runs and for end-to-end validation, and expect tens of GB to sit in the
   working tree — that is the point, and it is why the ignore rule exists. Never

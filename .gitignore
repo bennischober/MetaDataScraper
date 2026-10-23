@@ -84,7 +84,8 @@ ISSUES.md
 .opencode
 .omo
 
-# local test media: keep the folder, never its contents (any file, any depth)
+# local test media: the folder is part of the repository, its contents never are
+# (`test_media/` alone would ignore the directory itself, so the README exception
+# could not apply; `/*` ignores everything inside, subfolders included)
 /test_media/*
-!/test_media/.gitkeep
-
+!/test_media/README.md
