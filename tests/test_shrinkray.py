@@ -3510,6 +3510,60 @@ class TestEncodeLock(unittest.TestCase):
             self.assertTrue(result.success)
             self.assertIsNone(result.verified_vmaf)
 
+    def test_encode_with_quality_verify_without_ffmpeg_stands(self):
+        """CI regression (run 160): ffmpeg is absent, the verification
+        already failed non-fatally - and then result construction crashed
+        anyway because _tool_versions() probed ffmpeg unguarded. Version
+        metadata must never fail an encode."""
+        import tempfile
+
+        from shrinkray.quality import encode_with_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "in.mkv"
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            out = out_dir / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
+                stub.chmod(0o755)
+            with (
+                mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
+                mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.quality.measure_vmaf", side_effect=RuntimeError("no ffmpeg")),
+                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+                mock.patch(
+                    "shrinkray.quality.detect_vmaf_style",
+                    side_effect=RuntimeError("ffmpeg not found"),
+                ),
+            ):
+                result = encode_with_quality(src, out, progress=None, verify=True)
+            self.assertTrue(result.success)
+            self.assertIsNone(result.verified_vmaf)
+
+    def test_tool_versions_omits_libvmaf_without_ffmpeg(self):
+        """_tool_versions degrades to the handbrake token (or an empty
+        string) when ffmpeg is absent - no exception."""
+        import tempfile
+
+        from shrinkray import quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hb = Path(tmp) / "hb.cmd"
+            hb.write_bytes(b"@echo off\r\necho HandBrake 1.11.2\r\n")
+            with mock.patch(
+                "shrinkray.quality.detect_vmaf_style",
+                side_effect=RuntimeError("ffmpeg not found"),
+            ):
+                versions = quality._tool_versions(str(hb))
+            self.assertNotIn("libvmaf=", versions)
+
     def test_check_disk_space_insufficient(self):
         """free < required => ok=False with a descriptive message."""
         import tempfile

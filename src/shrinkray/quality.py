@@ -818,7 +818,13 @@ def _tool_versions(handbrake: str) -> str:
             versions.append(f"hb={match.group(1)}")
     except (OSError, _subprocess.SubprocessError):
         pass
-    style = detect_vmaf_style()
+    try:
+        style = detect_vmaf_style()
+    except RuntimeError:
+        # ffmpeg absent (CI runners, minimal NAS installs): version
+        # metadata must never fail the encode result - the tool_versions
+        # string is documentation, not function. Omit the libvmaf token.
+        return ";".join(versions)
     versions.append("libvmaf=v3" if style == VMAF_STYLE_MODERN else "libvmaf=v2")
     return ";".join(versions)
 
