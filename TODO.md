@@ -2,8 +2,7 @@
 
 ## Known limitations / planned work
 
-### Recursive-trap assessment (DONE 2026-10-23 - resident-loop cycle audit)
-Audited every cycle candidate (can the tool re-ingest its own output? can a
+### Recursive-trap assessment (DONE 2026-10-23 - resident-loop cycle audit)Audited every cycle candidate (can the tool re-ingest its own output? can a
 failure state retry forever?). FIXED in `dcf3f23`:
 - [x] Watch starvation: `known.add()` ran before the stability check =>
       every normal copy arrival was logged "later" and never reconsidered.
@@ -27,11 +26,19 @@ at the pessimistic CRF - x265-of-x265 gains run out); CRF bisect bounded
 the pid lock; watch vs CLI/job serialized by the encode slot.
 
 Remaining liveness gap (out of scope here, deliberate):
-- [ ] No subprocess timeout on `_run` / `_encode_with_command`: a hung
-      HandBrake stalls the watch pass indefinitely (stuck, not recursive).
-      A kill-after-N-hours policy would need a config knob and a
-      decision about partial-output semantics - same cleanup path as the
-      watchdog cancel.
+- [x] Subprocess stall/hang protection (`af329c4`): three coupled fixes -
+      (1) the streamed encode loop polls every 0.2s via a pump thread +
+      queue (cancel was deaf during silence: a hung HandBrake could not be
+      interrupted even by an explicit user cancel), (2) stall watchdog -
+      no child output for `handbrake.stall_minutes` (default 10, 0=off)
+      => engine terminates the hung child itself, recorded as FAILURE not
+      cancel (watch must not retry a stalling encode), (3) tree-safe
+      termination (`resources.terminate_tree`, taskkill /T /F on Windows):
+      killing only the direct child orphans grandchildren that hold the
+      pipe write-ends => no EOF => the caller hangs (the 59-second hang,
+      observed live). All cancellation paths terminate trees now; pipe
+      ends are closed before joining drainers so close() cannot deadlock
+      on a blocked reader.
 
 ### Reliability wave (DONE 2026-10-23 - the core loop's last honesty gaps)
 - [x] A1 Interrupted-encode debris: a crashed/killed encode leaves a partial
