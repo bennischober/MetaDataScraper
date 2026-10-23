@@ -1648,6 +1648,96 @@ class TestDb(unittest.TestCase):
             row = self.connection.execute("SELECT verified_vmaf FROM encodes").fetchone()
             self.assertIsNone(row["verified_vmaf"])
 
+    def test_doctor_healthy_library(self):
+        """A library whose rows all exist on disk and whose outputs are
+        present produces no findings."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            output = root / "enc" / "movie.mkv"
+            output.parent.mkdir()
+            output.write_bytes(b"out")
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "x265",
+                1000,
+                400,
+                60.0,
+                output_file=str(output),
+            )
+            findings = service.doctor(self.connection)
+            self.assertEqual(findings, [])
+
+    def test_doctor_reports_dead_paths(self):
+        """A db row whose file is gone on disk is a finding (with the
+        soft-missing counter as detail)."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "gone.mkv"  # never created
+            db.upsert_file(self.connection, self._record(str(movie)))
+            self.connection.execute(
+                "UPDATE files SET missing_scans = 3 WHERE path = ?", (str(movie),)
+            )
+            self.connection.commit()
+            findings = service.doctor(self.connection)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].issue, "dead path")
+            self.assertIn("missing_scans=3", findings[0].detail or "")
+
+    def test_doctor_reports_vanished_outputs(self):
+        """An encode row whose output_file no longer exists is a finding."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "x265",
+                1000,
+                400,
+                60.0,
+                output_file=str(root / "enc" / "deleted.mkv"),
+            )
+            findings = service.doctor(self.connection)
+            issues = [f.issue for f in findings]
+            self.assertIn("encode output vanished", issues)
+
+    def test_doctor_probe_all_detects_corruption(self):
+        """--probe-all ffprobes every row: a file that exists but does not
+        probe is reported as unprobeable; a probeable one is silent."""
+        import tempfile
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            junk = root / "junk.mkv"
+            junk.write_bytes(b"not a movie")
+            db.upsert_file(self.connection, self._record(str(junk)))
+            with mock.patch("shrinkray.service.probe_duration", return_value=None):
+                findings = service.doctor(self.connection, probe_all=True)
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].issue, "unprobeable (corrupt/truncated?)")
+
     def test_prune_missing_scoped(self):
         # a scan of one root must not wipe the history of files outside it
         # (real tmp paths: fictional drives are relative paths on linux/CI)

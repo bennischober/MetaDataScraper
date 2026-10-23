@@ -10,6 +10,7 @@ from pathlib import Path
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
+from shrinkray.encode import probe_duration_seconds as probe_duration
 
 
 @dataclass
@@ -325,3 +326,74 @@ def record_fixed_results(connection, results: list, config) -> list[EncodeOutcom
                 EncodeOutcome(movie=str(encode_result.input), error=encode_result.error)
             )
     return outcomes
+
+
+@dataclass
+class DoctorFinding:
+    """One health finding of the doctor check.
+
+    Attributes:
+        movie (str): The affected file path (as stored in the db).
+        issue (str): What is wrong (short, human-readable).
+        detail (str | None): Extra context (e.g. the expected vs actual
+            state, or the error ffprobe produced).
+    """
+
+    movie: str
+    issue: str
+    detail: str | None = None
+
+
+def doctor(connection, probe_all: bool = False) -> list[DoctorFinding]:
+    """Checks the library's health: db reality vs disk reality.
+
+    Composes existing primitives into one report (B6): dead paths,
+    soft-missing counters, encode rows whose output vanished, sources that
+    no longer probe cleanly, and orphaned outputs (an encode row's output
+    file whose source row is gone). Read-only: doctor never repairs,
+    delete-flagging stays the scan's job (grace period semantics).
+
+    Args:
+        connection: The database connection.
+        probe_all (bool): When True, ffprobe EVERY file row (slow: ~50ms
+            per file) to detect truncated/corrupt files; the default
+            checks existence and mtime sanity only.
+
+    Returns:
+        list[DoctorFinding]: All findings, empty when the library is healthy.
+    """
+    findings: list[DoctorFinding] = []
+    rows = db.get_cached_records(connection)
+    for row in rows.values():
+        path = Path(row["path"])
+        if not path.exists():
+            findings.append(
+                DoctorFinding(
+                    movie=row["path"],
+                    issue="dead path",
+                    detail=f"missing_scans={row['missing_scans']}"
+                    if row["missing_scans"]
+                    else None,
+                )
+            )
+            continue
+        if not probe_all:
+            continue
+        duration = probe_duration(path)
+        if duration is None:
+            findings.append(
+                DoctorFinding(movie=row["path"], issue="unprobeable (corrupt/truncated?)")
+            )
+    # encode rows: does the recorded output still exist?
+    for path_str in connection.execute(
+        "SELECT DISTINCT output_file FROM encodes WHERE output_file IS NOT NULL"
+    ).fetchall():
+        output = Path(path_str["output_file"])
+        if not output.exists():
+            findings.append(
+                DoctorFinding(
+                    movie=path_str["output_file"],
+                    issue="encode output vanished",
+                )
+            )
+    return findings

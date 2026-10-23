@@ -785,6 +785,50 @@ def compare(
 
 
 @app.command()
+def doctor(
+    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
+    probe_all: bool = typer.Option(
+        False,
+        "--probe-all",
+        help=(
+            "ffprobe EVERY file row to detect truncated/corrupt files "
+            "(slow: ~50ms per file). Default checks existence only."
+        ),
+    ),
+):
+    """Checks the library's health: db reality vs disk reality.
+
+    Reports dead paths (files the db knows but the disk lost), encode
+    rows whose output vanished, and with --probe-all corrupt/truncated
+    files. Read-only: doctor never repairs anything (delete-flagging
+    stays the scan's job with its grace period).
+    """
+    if not db_file.is_file():
+        log_error(f"Database '{db_file}' not found! Run a scan first.")
+        raise typer.Exit(1)
+
+    from shrinkray.service import doctor as run_doctor
+
+    connection = db.connect(db_file)
+    try:
+        findings = run_doctor(connection, probe_all=probe_all)
+    finally:
+        connection.close()
+
+    if not findings:
+        console.print("[green]Library is healthy: no findings.[/green]")
+        return
+    table = Table(title=f"Doctor findings ({len(findings)})", title_justify="left")
+    table.add_column("File", overflow="fold")
+    table.add_column("Issue", overflow="fold")
+    table.add_column("Detail", overflow="fold")
+    for finding in findings:
+        table.add_row(finding.movie, finding.issue, finding.detail or "—")
+    console.print(table)
+    raise typer.Exit(1)  # non-zero exit: scripts/cron can detect unhealth
+
+
+@app.command()
 def watch_mode(
     inbox: Path = typer.Argument(
         ...,
