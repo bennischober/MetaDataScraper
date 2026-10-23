@@ -5,6 +5,7 @@ movie set: batch resume, skip recording and result persistence. It has no
 presentation logic — the CLI prints, this module decides and records.
 """
 
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,8 +142,8 @@ def record_plan(connection, movie, result, config) -> int | None:
 
 
 def save_encode(
-    connection,
-    movie,
+    connection: sqlite3.Connection,
+    movie: Path,
     preset: str,
     encoder: str,
     input_size: int,
@@ -166,7 +167,7 @@ def save_encode(
     generation: int | None = None,
     crf_source: str | None = None,
     plan_created_at: str | None = None,
-):
+) -> int:
     """Stores an encode record for the given movie in the database.
 
     Args:
@@ -251,7 +252,7 @@ def save_verification(connection, encode_id: int, result) -> None:
     )
 
 
-def save_skip(connection, movie, reason: str):
+def save_skip(connection: sqlite3.Connection, movie: Path, reason: str) -> None:
     """Stores a skip record for the given movie in the database.
 
     Args:

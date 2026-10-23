@@ -77,7 +77,20 @@ known-first-party = ["shrinkray"]
 # module gets its entry only once every function is annotated, so a partially
 # annotated module cannot regress while the rest are still being converted.
 [[tool.mypy.overrides]]
-module = ["shrinkray.app", "shrinkray.jobs", "shrinkray.__main__"]
+module = [
+    "shrinkray.__main__",
+    "shrinkray.app",
+    "shrinkray.config",
+    "shrinkray.db",
+    "shrinkray.dedupe",
+    "shrinkray.encode_lock",
+    "shrinkray.jobs",
+    "shrinkray.logger",
+    "shrinkray.media",
+    "shrinkray.report",
+    "shrinkray.telemetry",
+    "shrinkray.watch",
+]
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]

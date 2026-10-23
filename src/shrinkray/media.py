@@ -154,7 +154,7 @@ def seconds_to_timestr(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def try_get_width(video: dict):
+def try_get_width(video: dict) -> int | None:
     width = None
     if "width" in video:
         width = video["width"]
@@ -163,7 +163,7 @@ def try_get_width(video: dict):
     return width
 
 
-def try_get_height(video: dict):
+def try_get_height(video: dict) -> int | None:
     height = None
     if "height" in video:
         height = video["height"]

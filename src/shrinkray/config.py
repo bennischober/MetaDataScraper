@@ -23,7 +23,7 @@ class Conf:
     All values fall back to sane defaults if they are missing in the config file.
     """
 
-    def __init__(self, data: dict[str, Any] | None = None):
+    def __init__(self, data: dict[str, Any] | None = None) -> None:
         data = data or {}
 
         # codec => hdr detection

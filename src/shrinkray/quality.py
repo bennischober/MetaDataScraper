@@ -1670,7 +1670,7 @@ class Cancelled(Exception):
     """
 
 
-def _check_cancel(cancel: threading.Event | None):
+def _check_cancel(cancel: threading.Event | None) -> None:
     """Raises Cancelled when the cancel event is set.
 
     Args:

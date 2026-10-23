@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 # VMAF) and skipped movies so subsequent runs do not re-probe them
 # migration v2 -> v3: stored paths must be absolute (relative paths created
 # phantom duplicates when runs happened from different working directories)
-def job_table_migration(connection: sqlite3.Connection):
+def job_table_migration(connection: sqlite3.Connection) -> None:
     """Migration v3 -> v4: create the jobs table for the resident app."""
     connection.executescript(
         """
@@ -139,7 +139,7 @@ def job_table_migration(connection: sqlite3.Connection):
     )
 
 
-def plans_table_migration(connection: sqlite3.Connection):
+def plans_table_migration(connection: sqlite3.Connection) -> None:
     """Migration v8 -> v9: create the plans table (plan-result reuse)."""
     connection.executescript(
         """
@@ -225,7 +225,7 @@ MIGRATIONS = {
 }
 
 
-def _migrate(connection: sqlite3.Connection):
+def _migrate(connection: sqlite3.Connection) -> None:
     """Applies pending schema migrations and records the new version.
 
     Args:

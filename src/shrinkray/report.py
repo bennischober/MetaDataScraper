@@ -193,7 +193,7 @@ def _category_table(rows: list[dict]) -> str:
     return f"<table><thead>{head}</thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
-def generate_report(db_path: Path, output: Path):
+def generate_report(db_path: Path, output: Path) -> None:
     """Generates a self-contained HTML report from the database.
 
     Args:
