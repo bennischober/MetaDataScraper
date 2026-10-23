@@ -2001,6 +2001,178 @@ class TestQuality(unittest.TestCase):
         self.assertNotIn("--encopts", plain)
 
 
+class TestCompareCli(unittest.TestCase):
+    """The compare command: provenance chain table (live-smoked only until
+    now - these tests cover the db queries and the CLI exit codes)."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_file = Path(self.tmp.name) / "test.db"
+        self.connection = db.connect(self.db_file)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _chain(self, movie: Path):
+        """Stores a two-generation encode chain for the movie (with codec
+        snapshot data, as record_quality_results would write it)."""
+        file_id = db.upsert_file(
+            self.connection,
+            db.MovieRecord(path=movie, mtime=100.0, size=1000, name="movie", category="Cat"),
+        )
+        gen1 = db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>95",
+            "x265",
+            1000,
+            400,
+            60.0,
+            chosen_crf=22,
+            achieved_vmaf=95.4,
+            source_codec="h264",
+            source_file=str(movie),
+            output_file=str(movie.parent / "enc" / movie.name),
+            generation=1,
+        )
+        db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>95",
+            "x265",
+            400,
+            200,
+            50.0,
+            chosen_crf=24,
+            achieved_vmaf=95.1,
+            source_codec="hevc",
+            source_file=str(movie.parent / "enc" / movie.name),
+            output_file=str(movie.parent / "enc2" / movie.name),
+            generation=2,
+        )
+        return file_id, gen1
+
+    def test_compare_shows_chain(self):
+        """A movie with a two-generation chain renders both rows."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            self._chain(movie)
+            runner = CliRunner()
+            result = runner.invoke(app, ["compare", str(movie), "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("movie.mkv", result.output)
+
+            # both generations appear with their CRFs
+            self.assertIn("22", result.output)
+            self.assertIn("24", result.output)
+
+    def test_compare_no_encodes_exit_zero_with_hint(self):
+        """A movie without encodes prints the hint and exits 0 (not an
+        error - it is an expected state for a freshly scanned library)."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "plain.mkv"
+            movie.write_bytes(b"x")
+            runner = CliRunner()
+            result = runner.invoke(app, ["compare", str(movie), "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("No encodes recorded", result.output)
+
+    def test_compare_missing_db_exits_error(self):
+        """A missing database with an existing movie file: the command's
+        own check fires with exit 1."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "x.mkv"
+            movie.write_bytes(b"x")
+            runner = CliRunner()
+            result = runner.invoke(app, ["compare", str(movie), "--db", str(Path(tmp) / "nope.db")])
+            # exit 1 is the contract (scripts can detect it); the message
+            # goes through the logger, which the CliRunner does not capture
+            self.assertEqual(result.exit_code, 1)
+
+
+class TestDoctorCli(unittest.TestCase):
+    """The doctor command's CLI surface (service logic tested in TestDb)."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_file = Path(self.tmp.name) / "test.db"
+        self.connection = db.connect(self.db_file)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_doctor_healthy_exit_zero(self):
+        """A healthy library prints the all-clear and exits 0."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=movie, mtime=100.0, size=1, name="movie", category="C"),
+            )
+            runner = CliRunner()
+            result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("healthy", result.output)
+
+    def test_doctor_finding_exits_one(self):
+        """A dead path produces the findings table and exit 1 (scripts/
+        cron can detect unhealth)."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=root / "gone.mkv", mtime=100.0, size=1, name="gone", category="C"
+                ),
+            )
+            runner = CliRunner()
+            result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("dead path", result.output)
+            self.assertIn("gone.mkv", result.output)
+
+
 class TestReport(unittest.TestCase):
     def test_generate_report(self):
         import tempfile
@@ -2484,6 +2656,128 @@ class TestReportCategory(unittest.TestCase):
                 "<td class='num'>1.00 GB</td><td class='num'>—</td>",
                 html,
             )
+
+
+class TestReportVerification(unittest.TestCase):
+    """The Verified column added with the full-file verification (B5)."""
+
+    def test_verified_vmaf_rendered_with_subsample_divisor(self):
+        """A verified encode shows the verified VMAF and the 1/n divisor;
+        an unverified encode shows the em-dash placeholder."""
+        import tempfile
+
+        from shrinkray.report import generate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            connection = db.connect(db_path)
+            file_id = connection.execute(
+                "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("D:/Movies/v.mkv", 1.0, 1000, "v", "Movies", "01:00:00", "h264", 1920, 1080),
+            ).lastrowid
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf, verified_vmaf, verified_subsample)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (file_id, "VMAF>95.0", "x265", 1000, 400, 60.0, 20, 95.4, 95.1, 10),
+            )
+            connection.commit()
+            connection.close()
+
+            out = Path(tmp) / "report.html"
+            generate_report(db_path, out)
+            html = out.read_text(encoding="utf-8")
+            self.assertIn("<th class='num'>Verified</th>", html)
+            self.assertIn("95.10", html)
+            self.assertIn("(1/10)", html)
+
+    def test_unverified_encode_placeholder(self):
+        """An encode without verification renders '—' in the Verified column
+        (pre-v8 rows have NULL there)."""
+        import tempfile
+
+        from shrinkray.report import generate_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            connection = db.connect(db_path)
+            file_id = connection.execute(
+                "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("D:/Movies/u.mkv", 1.0, 1000, "u", "Movies", "01:00:00", "h264", 1920, 1080),
+            ).lastrowid
+            connection.execute(
+                "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+                " saved_percent, chosen_crf, achieved_vmaf)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (file_id, "VMAF>95.0", "x265", 1000, 400, 60.0, 20, 95.4),
+            )
+            connection.commit()
+            connection.close()
+
+            out = Path(tmp) / "report.html"
+            generate_report(db_path, out)
+            html = out.read_text(encoding="utf-8")
+            self.assertIn("<th class='num'>Verified</th>", html)
+            # the placeholder directly follows the achieved-VMAF cell
+            self.assertIn("<td class='num'>95.40</td><td class='num'>—</td>", html)
+
+
+class TestReportCli(unittest.TestCase):
+    """The report command's CLI surface."""
+
+    def test_report_writes_html_and_exits_zero(self):
+        """A healthy database produces the report file and a success note."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "test.db"
+            connection = db.connect(db_path)
+            connection.execute(
+                "INSERT INTO files (path, mtime, size, name, category, duration, codec, width, height)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("D:/Movies/a.mkv", 1.0, 1000, "a", "Movies", "01:00:00", "h264", 1920, 1080),
+            )
+            connection.commit()
+            connection.close()
+
+            out = Path(tmp) / "out" / "report.html"
+            runner = CliRunner()
+            result = runner.invoke(app, ["report", "--db", str(db_path), "--output", str(out)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertTrue(out.is_file())
+            html = out.read_text(encoding="utf-8")
+            self.assertIn("ShrinkRay Report", html)
+            self.assertIn("a.mkv", html)
+
+    def test_report_missing_db_exits_one(self):
+        """A missing database is a clean error with exit 1 (the message goes
+        through the logger, which the CliRunner does not capture)."""
+        import tempfile
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = CliRunner()
+            result = runner.invoke(
+                app,
+                [
+                    "report",
+                    "--db",
+                    str(Path(tmp) / "nope.db"),
+                    "--output",
+                    str(Path(tmp) / "r.html"),
+                ],
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertFalse((Path(tmp) / "r.html").exists())
 
 
 class TestJobs(unittest.TestCase):
