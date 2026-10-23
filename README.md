@@ -4,13 +4,14 @@
 
 **Scan your collection — then shrink it without losing quality.**
 
-Answers one question per file: *is this file bigger than its quality requires?*
-Where the answer is yes, it re-encodes with Netflix-style, quality-measured
-encoding — the smallest file that is still perceptually transparent. Where the
-answer is no, it leaves the file alone and remembers why.
+Answers two questions per file: *is this file bigger than its quality requires?*
+and *does it carry baked-in black bars?* Where a re-encode is warranted, it
+re-encodes with Netflix-style, quality-measured encoding — the smallest file that
+is still perceptually transparent. Where it is not, it leaves the file alone and
+remembers why.
 
-Built to run unattended on a server against a whole collection, with a watchdog
-for new arrivals and a web dashboard for status. The CLI is a first-class
+Built to run unattended on a server against a whole collection — fire and forget —
+with a watchdog for new arrivals and a web dashboard for status. The CLI is a first-class
 product: every capability works without the resident process.
 
 **It shrinks files. It does not manage a library** — no renaming, moving,
@@ -381,10 +382,30 @@ git push origin v0.3.0
 ## Direction
 
 ShrinkRay is heading for one shape: a container on a server, pointed at a media
-folder, answering *"could this collection be smaller at the same quality?"* and
-acting on the answer unattended. See [PRODUCT.md](PRODUCT.md) for the contract and
-the [issue tracker](https://github.com/bennischober/ShrinkRay/issues) for the work
-that gets it there.
+folder, answering *"could this file be smaller at the same quality, and does it carry
+black bars?"* and acting on the answer unattended. In effect it fuses an
+`ab-av1`-style CRF search and the encode at the CRF it found into one step, applied
+to a whole library. See [PRODUCT.md](PRODUCT.md) for the contract and the
+[issue tracker](https://github.com/bennischober/ShrinkRay/issues) for the work that
+gets it there.
+
+The target behaviour, per file:
+
+- **Watch, scan, record, decide.** A watchdog watches the library folder. When a file
+  appears or changes, it is scanned (codec, resolution, black bars, ...), the result
+  is written to ShrinkRay's database, and whether a re-encode is needed is decided
+  again from that fresh scan.
+- **Eligibility.** Files below 1080p or in a codec older than H.264 are never
+  re-encoded.
+- **Codec routing.** H.264 sources are candidates on size alone. HEVC and AV1 sources
+  are already efficient: they are candidates only when they have black bars to
+  remove (`--remove-bars`), and are left untouched otherwise.
+- **One encode mode.** Every re-encode, bar removal included, is a VMAF-driven CRF
+  search against a required quality floor (VMAF 96 by default) followed by one full
+  encode. There is no fixed-preset encode.
+- **Output.** AV1 only, encoded on the CPU. 8-bit and 10-bit sources are both
+  supported. Only the video stream is re-encoded; every audio and subtitle track is
+  carried over 1:1 from the source.
 
 The boundary that shape implies: **ShrinkRay may change a file's bytes, never its
 identity.** Path, filename and the set of files stay as they are. Re-encoding
@@ -394,9 +415,13 @@ Everything else — naming, moving, organizing, matching, deduplicating, acquiri
 belongs to the tooling that already built the collection, and is out of scope here.
 
 > [!NOTE]
-> Swap-in-place and the retained-original workflow are **not implemented yet**.
-> Today `encode` writes to a separate output directory and leaves sources untouched.
-> The current commands below describe what ships now, not the target shape.
+> Most of this target shape is **not implemented yet**. What ships today differs:
+> `encode` writes to a separate output directory instead of swapping in place;
+> its default mode is a fixed HandBrake preset, and `--quality` defaults to VMAF 95;
+> the output is HEVC (x265), not AV1; there is no resolution, codec-age or
+> codec-routing gate; and `watch-mode` polls a single inbox folder for new files
+> only, without re-scanning changed ones. The commands documented above describe
+> what ships now, not the target shape.
 
 ## FAQ
 

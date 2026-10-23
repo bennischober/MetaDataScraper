@@ -6,8 +6,9 @@ README documents the product, PRODUCT.md the product direction.
 
 ## What this project is
 
-A Python CLI + resident server app that answers one question per file: **is
-this file bigger than its quality requires?** It catalogs a video collection
+A Python CLI + resident server app that answers two questions per file: **is
+this file bigger than its quality requires?** and **does it carry baked-in black
+bars** (a frame whose aspect ratio differs from its content's)? It catalogs a video collection
 (`scan`), predicts savings (`plan`), re-encodes with measured quality
 (`encode`, VMAF-driven CRF search) and renders an HTML report. The Python
 code is an orchestrator: all heavy work is delegated to external binaries
@@ -22,6 +23,21 @@ The target shape is a container on a server, pointed at a media folder, running
 unattended with a watchdog and a LAN dashboard. The CLI is a first-class
 product, not a debugging surface: every capability works without the resident
 process. See PRODUCT.md for the product contract.
+
+The product rules a change must not contradict (PRODUCT.md has the detail; most
+are target behaviour, not yet implemented — check the code before assuming one):
+
+- Files below 1080p or in a codec older than H.264 are never re-encoded.
+- H.264 sources are candidates on size alone; HEVC and AV1 sources only when they
+  have black bars to remove.
+- There is exactly one encode mode: a VMAF-driven CRF search against a required
+  VMAF (96 by default), then one full encode. Never add a fixed-preset or otherwise
+  unmeasured encode path.
+- The output is AV1, encoded on the CPU, from 8-bit or 10-bit sources. No other
+  output codec, no hardware encoder.
+- Only the video stream is re-encoded; audio and subtitle tracks are copied 1:1.
+- The watchdog scans every new or changed file into the database and re-decides it
+  from the fresh scan.
 
 ## Engineering standard (non-negotiable)
 
@@ -68,8 +84,9 @@ the set of files stay as they are.
   tooling that already assembled the collection.
 
 Do not add a feature whose usefulness depends on knowing what a file is *called*
-or *which* file it is. "Is this file the size its quality needs?" is the only
-question this tool answers.
+or *which* file it is. "Is this file the size its quality needs?" and "Does its
+frame carry black bars its content does not need?" are the only questions this tool
+answers.
 
 Never name, vendor, or assume any particular acquisition or naming automation in
 code, comments, docs or commit messages. ShrinkRay is written for "a large
