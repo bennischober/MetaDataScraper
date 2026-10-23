@@ -666,9 +666,17 @@ def snapshot(
             "jobs": jobs,
             "running": running,
             "fingerprint": tuple(fingerprint),
-            # a job row never mutates except on a state transition, so
-            # (id, state) over the window is a sound change signal
-            "jobs_fp": tuple((j.id, j.state.value) for j in jobs),
+            # a FINISHED job row never mutates, so (id, state) is a sound
+            # change signal — but a RUNNING job's result column is the live
+            # progress feed (report_progress writes it every few seconds
+            # while state stays 'running'). The fingerprint must cover the
+            # running window's result too, or the UI's progress bars freeze
+            # mid-encode (the round-6.10 miss: enqueue-only test never saw
+            # it — the sim plan/encode on the review copy caught it live).
+            "jobs_fp": tuple(
+                (j.id, j.state.value, j.result if j.state.value == "running" else None)
+                for j in jobs
+            ),
             "rss_mib": rss_mib(),
         }
 
