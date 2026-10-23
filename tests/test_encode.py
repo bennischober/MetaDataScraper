@@ -724,6 +724,7 @@ class TestEncodeLock(unittest.TestCase):
 
                 def fake_quality(movie_in, output_file, **kwargs):
                     captured["progress"] = kwargs.get("progress")
+                    captured["encoder_preset"] = kwargs.get("encoder_preset")
                     return QualityResult(
                         input=movie_in,
                         output=output_file,
@@ -750,9 +751,13 @@ class TestEncodeLock(unittest.TestCase):
                         workers=1,
                         threads=None,
                         db_file=db_file,
+                        encoder_preset="slow",
                     )
                 # the CLI passed a callable, and calling it does not crash
                 self.assertTrue(callable(captured["progress"]))
+                # the CLI's --encoder-preset reaches the engine (issue #31:
+                # the preset was a constant no caller could override)
+                self.assertEqual(captured["encoder_preset"], "slow")
                 captured["progress"]({"stage": "encode", "percent": 10.0, "movie": "movie.mkv"})
             finally:
                 connection.close()

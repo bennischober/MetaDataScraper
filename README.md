@@ -219,6 +219,7 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 |---|---|
 | `--quality` | VMAF-driven CRF search per movie (see above) |
 | `--target-vmaf N` | quality floor for quality mode (default: `95`) |
+| `--encoder-preset NAME` | quality mode's encoder speed preset (`medium` default; changing it invalidates stored plans) |
 | `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
@@ -311,8 +312,9 @@ Optional [config.json](config.json) (defaults are used when missing):
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }
     },
     "handbrake": {
-        "preset": "Fast 1080p30",   // fixed-mode preset
+        "preset": "Fast 1080p30",   // fixed-mode HandBrake preset NAME
         "encoder": "x265",
+        "encoder_preset": "medium", // quality mode's encoder SPEED preset
         "max_threads": 0            // per-encode thread cap (0 = all cores)
     },
     "resources": {
@@ -322,6 +324,15 @@ Optional [config.json](config.json) (defaults are used when missing):
     "language": "en"
 }
 ```
+
+Two keys named "preset" with different meanings — the distinction:
+`handbrake.preset` is the **fixed-mode** HandBrake preset *name* (a full
+quality/speed/content bundle, e.g. `Fast 1080p30`). `handbrake.encoder_preset`
+is **quality mode's** encoder *speed* preset — the x264/x265 ladder
+(`ultrafast`…`placebo`) that sets how hard every probe and the final encode
+work; it changes encode time (and nothing about measured quality) and a change
+invalidates stored plans, which are then re-probed. Values outside the encoder's
+vocabulary are rejected at load, never passed to HandBrake.
 
 **Resource politeness** (why the defaults are what they are): encodes and
 quality probes run **below normal priority** — they yield instantly to

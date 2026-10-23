@@ -16,7 +16,7 @@ from rich.progress import Progress
 from rich.table import Table
 
 from shrinkray import db
-from shrinkray.config import load_config
+from shrinkray.config import DEFAULT_ENCODER_PRESET, load_config
 from shrinkray.encode import cap_threads
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
@@ -381,6 +381,15 @@ def encode(
             "(a plan normally lets the encode skip probing)."
         ),
     ),
+    encoder_preset: str = typer.Option(
+        DEFAULT_ENCODER_PRESET,
+        "--encoder-preset",
+        help=(
+            "Quality mode: encoder speed preset for the CRF search and the "
+            "final encode (x264/x265 ladder, e.g. medium/slow). Changing it "
+            "invalidates stored plans (they are re-probed)."
+        ),
+    ),
     workers: int = typer.Option(
         0,
         "--workers",
@@ -427,6 +436,7 @@ def encode(
             threads,
             db_file,
             replan,
+            encoder_preset,
         )
     finally:
         connection.close()
@@ -479,6 +489,7 @@ def _record_encodes(
     threads: int | None,
     db_file: Path | None,
     replan: bool = False,
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -496,6 +507,7 @@ def _record_encodes(
         workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
         replan (bool): Ignore stored plans and re-probe (quality mode).
+        encoder_preset (str): Quality mode's encoder speed preset.
     """
     from shrinkray.encode import encode_movies
     from shrinkray.quality import encode_with_quality
@@ -553,6 +565,7 @@ def _record_encodes(
                             progress=quality_progress,
                             verify=verify,
                             force_reprobe=replan,
+                            encoder_preset=encoder_preset,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -637,6 +650,11 @@ def plan(
         min=0,
         help="Per-encode thread cap for the probes (0 = all cores).",
     ),
+    encoder_preset: str = typer.Option(
+        DEFAULT_ENCODER_PRESET,
+        "--encoder-preset",
+        help="Encoder speed preset for the probes (x264/x265 ladder).",
+    ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
@@ -680,6 +698,7 @@ def plan(
                     remove_bars=remove_bars,
                     db_file=db_file,
                     encoder_threads=threads_cap,
+                    encoder_preset=encoder_preset,
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
@@ -885,15 +904,17 @@ def watch_mode(
     """
     from shrinkray.watch import watch
 
+    config = load_config()
     try:
         watch(
             inbox,
             output_dir,
             target_vmaf=target_vmaf,
             remove_bars=remove_bars,
-            encoder=load_config().handbrake_encoder,
+            encoder=config.handbrake_encoder,
+            encoder_preset=config.handbrake_encoder_preset,
             poll_interval=float(poll),
-            max_threads=cap_threads(load_config().handbrake_max_threads),
+            max_threads=cap_threads(config.handbrake_max_threads),
             db_file=DB_FILE,
         )
     except (RuntimeError, FileNotFoundError) as e:

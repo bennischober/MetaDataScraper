@@ -101,5 +101,28 @@ class TestRemovedIntegrationsKey(unittest.TestCase):
             self.assertFalse(any("integrations" in str(call.args) for call in warn.call_args_list))
 
 
+class TestEncoderPresetConfig(unittest.TestCase):
+    """handbrake.encoder_preset (issue #31): quality mode's encoder speed
+    preset must be configurable, validated, and reachable from every entry
+    point — before this, 'medium' was a constant no caller could override."""
+
+    def test_default_is_medium(self):
+        conf = config_helper.Conf({})
+        self.assertEqual(conf.handbrake_encoder_preset, "medium")
+
+    def test_config_value_overrides_default(self):
+        conf = config_helper.Conf({"handbrake": {"encoder_preset": "slow"}})
+        self.assertEqual(conf.handbrake_encoder_preset, "slow")
+
+    def test_invalid_preset_is_rejected_at_load(self):
+        # a value outside the encoder's vocabulary must never reach HandBrake
+        # ('Fast 1080p30' is the FIXED-mode preset; passing it as a speed
+        # preset is exactly the footgun this validation prevents)
+        with self.assertRaises(ValueError) as ctx:
+            config_helper.Conf({"handbrake": {"encoder_preset": "Fast 1080p30"}})
+        self.assertIn("encoder_preset", str(ctx.exception))
+        self.assertIn("Fast 1080p30", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

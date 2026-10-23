@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, load_config
+from shrinkray.config import ENCODER_PRESETS, Conf, load_config
 from shrinkray.dedupe import find_duplicates
 from shrinkray.encode import cap_threads
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
@@ -149,6 +149,8 @@ class JobRequest(BaseModel):
         overwrite (bool): Re-encode already encoded movies.
         verify (bool): Full-file VMAF verification after each quality encode.
         workers (int | None): Concurrent encodes (fixed mode).
+        encoder_preset (str | None): Quality mode's encoder speed preset
+            (None = the configured value).
         rescan (bool): Ignore the scan cache.
         hash (bool): Compute content hashes while scanning.
     """
@@ -163,6 +165,7 @@ class JobRequest(BaseModel):
     overwrite: bool = False
     verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
+    encoder_preset: str | None = None
     rescan: bool = False
     hash: bool = False
 
@@ -605,9 +608,27 @@ def create_job(request: JobRequest) -> dict:
         payload["overwrite"] = request.overwrite
         payload["workers"] = request.workers
         payload["verify"] = request.verify
+        if request.encoder_preset is not None:
+            # reject before enqueueing: HandBrake must never see a value
+            # outside the encoder's speed-preset vocabulary (issue #31)
+            if request.encoder_preset not in ENCODER_PRESETS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"encoder_preset: '{request.encoder_preset}' is not a valid "
+                    f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
+                )
+            payload["encoder_preset"] = request.encoder_preset
     elif request.kind == JobKind.PLAN:
         payload["target_vmaf"] = request.target_vmaf
         payload["remove_bars"] = request.remove_bars
+        if request.encoder_preset is not None:
+            if request.encoder_preset not in ENCODER_PRESETS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"encoder_preset: '{request.encoder_preset}' is not a valid "
+                    f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
+                )
+            payload["encoder_preset"] = request.encoder_preset
     else:  # scan
         payload["rescan"] = request.rescan
         payload["hash"] = request.hash
