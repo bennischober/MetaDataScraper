@@ -1509,6 +1509,23 @@ def encode_with_quality(
             skipped_reason="too short",
         )
 
+    # disk-space preflight: the honest worst case for one encode is its
+    # input (CRF 0 can grow slightly above it); failing 90 minutes into a
+    # 4-hour encode on a full drive is the failure mode this prevents
+    from shrinkray.encode import check_disk_space
+
+    ok, space_message = check_disk_space(output_file.parent, input_file.stat().st_size)
+    if not ok:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=space_message,
+        )
+    if space_message:
+        log(f"Warning: {space_message}")
+
     try:
         crf, achieved, probes, crop = _probe_movie(
             input_file,

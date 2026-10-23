@@ -31,6 +31,45 @@ def cap_threads(max_threads: int | None) -> int | None:
     return max_threads
 
 
+def check_disk_space(target_dir: Path, required_bytes: int) -> tuple[bool, str]:
+    """Checks whether the target's drive can hold the required bytes.
+
+    The honest worst-case bound for a re-encode run is the SUM of the
+    pending inputs (the estimate can be wrong; the inputs exist and can
+    not shrink below themselves). Returns a problem description instead
+    of raising so callers can choose error vs warning.
+
+    Args:
+        target_dir (Path): The directory the encodes write into (its drive
+            is checked; created if missing).
+        required_bytes (int): The worst-case bytes needed.
+
+    Returns:
+        tuple[bool, str]: (ok, message). ok=False => the encode cannot
+            finish; ok=True with a non-empty message => tight but possible
+            (the caller warns); ok=True with an empty message => plenty.
+    """
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(target_dir).free
+    except OSError as e:
+        # unreadable drive (network share without statvfs etc.): degrade
+        # gracefully - never block an encode on a broken probe
+        return True, f"disk space could not be checked ({e})"
+    if free < required_bytes:
+        return False, (
+            f"not enough disk space on '{target_dir}': "
+            f"{free / (1024**3):.1f} GB free, need up to {required_bytes / (1024**3):.1f} GB "
+            f"(worst case = the pending inputs' total size)"
+        )
+    if free < required_bytes * 1.5:
+        return True, (
+            f"disk space is tight on '{target_dir}': {free / (1024**3):.1f} GB free, "
+            f"up to {required_bytes / (1024**3):.1f} GB needed"
+        )
+    return True, ""
+
+
 @dataclass
 class EncodeResult:
     """Result of a HandBrake encode.
@@ -513,6 +552,13 @@ def encode_movies(
             pending.append((movie, output_file))
         if not pending:
             return results
+        # worst-case bound: the pending inputs themselves (the size estimate
+        # can be optimistic; the inputs exist and cannot shrink)
+        ok, message = check_disk_space(output_dir, sum(m.stat().st_size for m, _ in pending))
+        if not ok:
+            raise RuntimeError(message)
+        if message:
+            log(f"Warning: {message}")
         return _encode_pending(pending, preset, encoder, workers, max_threads, progress, results)
 
 

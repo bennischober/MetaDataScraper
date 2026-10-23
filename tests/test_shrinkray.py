@@ -2266,6 +2266,58 @@ class TestEncodeLock(unittest.TestCase):
                 results = encode.encode_movies([source], out_dir)
             self.assertEqual(len(results), 1)
 
+    def test_check_disk_space_insufficient(self):
+        """free < required => ok=False with a descriptive message."""
+        import tempfile
+
+        from shrinkray.encode import check_disk_space
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ok, message = check_disk_space(Path(tmp), 10**15)  # 1 PB: never free
+            self.assertFalse(ok)
+            self.assertIn("not enough disk space", message)
+            self.assertIn("worst case", message)
+
+    def test_check_disk_space_plenty(self):
+        """free >> required => ok=True, empty message."""
+        import tempfile
+
+        from shrinkray.encode import check_disk_space
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ok, message = check_disk_space(Path(tmp), 1)  # 1 byte
+            self.assertTrue(ok)
+            self.assertEqual(message, "")
+
+    def test_check_disk_space_unreadable_degrades(self):
+        """An unreadable drive must not block encodes (graceful degrade)."""
+        import tempfile
+
+        from shrinkray.encode import check_disk_space
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # a path that cannot exist as a directory (file in the way)
+            blocker = Path(tmp) / "blocker"
+            blocker.write_bytes(b"x")
+            ok, _message = check_disk_space(blocker / "sub", 10)
+            self.assertTrue(ok)  # degraded, not failed
+            self.assertIn("could not be checked", _message)
+
+    def test_encode_movies_raises_on_full_disk(self):
+        """encode_movies refuses to start when the drive cannot hold the inputs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x" * 100)
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch(
+                    "shrinkray.encode.check_disk_space", return_value=(False, "no space left")
+                ),
+                self.assertRaises(RuntimeError) as ctx,
+            ):
+                encode.encode_movies([source], Path(tmp) / "enc")
+        self.assertIn("no space left", str(ctx.exception))
+
 
 class TestDedupe(unittest.TestCase):
     def setUp(self):
