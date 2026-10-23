@@ -1,0 +1,74 @@
+# Plan-result reuse ("quicksave")
+
+An encode run skips probing when a valid plan exists — and equally skips
+movies the plan already rejected (skip decisions are as valuable as the
+CRF).
+
+## Why this is sound
+
+`plan_quality()` and `encode_with_quality()` (src/shrinkray/quality.py)
+run the EXACT same probing pipeline: `_probe_movie()` ->
+`find_optimal_crf_and_skip()` — same samples, same bisect, same VMAF
+measurement. The plan's `chosen_crf` is precisely what the encode would
+recompute. Reuse = caching a deterministic computation, not an
+approximation.
+
+## Contract
+
+1. **Write path** — every successful `plan_quality()` run (job worker AND
+   CLI `plan` command) stores the plan via `service.record_plan()`. Skip
+   outcomes are stored too (`skipped_reason` + chosen_crf/achieved): they
+   short-circuit encodes later.
+2. **Read path** — `encode_with_quality()` looks up a valid plan BEFORE
+   probing. Valid hit:
+   - skip decision => return the skip `QualityResult` immediately (no
+     probing, no encode);
+   - encode decision => proceed straight to the final encode with the
+     plan's `chosen_crf` and `crop`; the plan's `achieved_vmaf` carries
+     over as the sample-based measurement.
+3. **Fingerprint validation** — reuse ONLY when ALL match; ANY mismatch
+   => normal probing path (fail-safe to re-probe, never guess):
+   input mtime+size, encoder, encoder_preset, target_vmaf, crf_range,
+   sample_count, sample_seconds, remove_bars.
+   Deliberately EXCLUDED: `encoder_threads` (does not change output
+   bytes). HDR: `encode_with_quality()` overrides target_vmaf/crf_range
+   for HDR before the lookup — the lookup derives from the OVERRIDDEN
+   values, so HDR consistency falls out of the same rule.
+4. **Provenance** — a plan-driven encode records `crf_source='plan'` +
+   `plan_created_at` (in the QualityResult AND the encodes row). A
+   decision's origin stays visible: "probed now" vs "trusted plan from
+   <date>". The tool's credibility rests on measured decisions.
+5. **Escape hatch** — `force_reprobe: bool = False` on
+   `encode_with_quality()` (CLI: `--replan`) bypasses lookup entirely.
+6. **Scope guard** — watch mode stays as-is (no plan lookup): inbox
+   automation must not silently depend on plan staleness. Only explicit
+   encode runs (CLI quality mode + job worker) consult plans.
+
+## Schema (v9)
+
+- table `plans`: one row per file (upsert replaces the previous plan;
+  plan history stays in the job payloads). Columns: file_id (FK files),
+  chosen_crf, achieved_vmaf, crop (nullable), probes (JSON),
+  skipped_reason, input_mtime, input_size, encoder, encoder_preset,
+  target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
+  remove_bars, created_at.
+- `encodes` gains `crf_source` (nullable TEXT: 'plan' | 'probe') and
+  `plan_created_at` (nullable TEXT).
+
+## Pitfalls (from the review)
+
+- The crop rect is only valid under the same `remove_bars` setting (the
+  fingerprint covers it; `crop=None` is passed when remove_bars is False).
+- Plans for soft-missing files are ignored (mtime+size guard covers a
+  rescanned file; no lookup when the file no longer exists).
+- `achieved_vmaf` from a plan is SAMPLE-based; `--verify` (full-file) is
+  unaffected and still runs when requested.
+- Size estimates stay the plan's job; the encode path never recomputes
+  them.
+
+## Honest payoff
+
+Probing is usually the minor share of a quality run — this saves tens of
+minutes per movie (the plan's ~6 min on Lilyhammer), not hours. The
+second encode of an unchanged file with unchanged settings performs zero
+probe encodes.

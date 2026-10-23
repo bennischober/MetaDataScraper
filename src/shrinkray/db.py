@@ -1,9 +1,10 @@
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -70,8 +71,33 @@ CREATE TABLE IF NOT EXISTS encodes (
     verified_vmaf REAL,
     verified_at TEXT,
     verified_subsample INTEGER,
+    crf_source TEXT,
+    plan_created_at TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    chosen_crf INTEGER,
+    achieved_vmaf REAL,
+    crop TEXT,
+    probes TEXT,
+    skipped_reason TEXT,
+    input_mtime REAL NOT NULL,
+    input_size INTEGER NOT NULL,
+    encoder TEXT NOT NULL,
+    encoder_preset TEXT NOT NULL,
+    target_vmaf REAL NOT NULL,
+    crf_low INTEGER NOT NULL,
+    crf_high INTEGER NOT NULL,
+    sample_count INTEGER NOT NULL,
+    sample_seconds REAL NOT NULL,
+    remove_bars INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id);
 
 CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
 
@@ -108,6 +134,35 @@ def job_table_migration(connection: sqlite3.Connection):
             started_at TEXT,
             finished_at TEXT
         );
+        """
+    )
+
+
+def plans_table_migration(connection: sqlite3.Connection):
+    """Migration v8 -> v9: create the plans table (plan-result reuse)."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            chosen_crf INTEGER,
+            achieved_vmaf REAL,
+            crop TEXT,
+            probes TEXT,
+            skipped_reason TEXT,
+            input_mtime REAL NOT NULL,
+            input_size INTEGER NOT NULL,
+            encoder TEXT NOT NULL,
+            encoder_preset TEXT NOT NULL,
+            target_vmaf REAL NOT NULL,
+            crf_low INTEGER NOT NULL,
+            crf_high INTEGER NOT NULL,
+            sample_count INTEGER NOT NULL,
+            sample_seconds REAL NOT NULL,
+            remove_bars INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id);
         """
     )
 
@@ -155,6 +210,16 @@ MIGRATIONS = {
         "ALTER TABLE encodes ADD COLUMN verified_at TEXT",
         "ALTER TABLE encodes ADD COLUMN verified_subsample INTEGER",
     ],
+    9: [
+        # plan-result reuse ("quicksave"): plan_quality and the encode's
+        # probe phase are the same computation - a valid plan lets the
+        # encode skip probing entirely. The plans table stores one row per
+        # file (upsert); crf_source/plan_created_at record whether an
+        # encode's CRF decision was probed now or trusted from a plan.
+        "__plans_table__",
+        "ALTER TABLE encodes ADD COLUMN crf_source TEXT",
+        "ALTER TABLE encodes ADD COLUMN plan_created_at TEXT",
+    ],
 }
 
 
@@ -200,6 +265,8 @@ def _migrate(connection: sqlite3.Connection):
                         connection.execute("DELETE FROM files WHERE id = ?", (row["id"],))
             elif statement == "__job_table__":
                 job_table_migration(connection)
+            elif statement == "__plans_table__":
+                plans_table_migration(connection)
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")
@@ -413,6 +480,146 @@ def get_file_by_path(connection: sqlite3.Connection, path: Path) -> sqlite3.Row 
         sqlite3.Row | None: The row, or None if not stored.
     """
     return connection.execute("SELECT * FROM files WHERE path = ?", (str(path),)).fetchone()
+
+
+def save_plan(
+    connection: sqlite3.Connection,
+    file_id: int,
+    chosen_crf: int | None,
+    achieved_vmaf: float | None,
+    crop: tuple[int, int, int, int] | None,
+    probes: list,
+    skipped_reason: str | None,
+    input_mtime: float,
+    input_size: int,
+    encoder: str,
+    encoder_preset: str,
+    target_vmaf: float,
+    crf_low: int,
+    crf_high: int,
+    sample_count: int,
+    sample_seconds: float,
+    remove_bars: bool,
+) -> int:
+    """Stores (upserts) the plan decision for one file — one row per file.
+
+    Plan history stays in the job payloads; this table holds only the
+    LATEST decision per file, the thing an encode consults before probing.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        file_id (int): The file id of the planned movie.
+        chosen_crf (int | None): The planned CRF (None for some skips).
+        achieved_vmaf (float | None): The VMAF measured at that CRF.
+        crop (tuple | None): The crop rect (None when no bars removed).
+        probes (list): The sample probes ([SampleProbe], JSON-serialized).
+        skipped_reason (str | None): Skip verdict, e.g. 'no size gain'.
+        input_mtime (float): The file's mtime at plan time (fingerprint).
+        input_size (int): The file's size at plan time (fingerprint).
+        encoder (str): The encoder used (fingerprint).
+        encoder_preset (str): The speed preset used (fingerprint).
+        target_vmaf (float): The VMAF target (fingerprint).
+        crf_low (int): The search range's low bound (fingerprint).
+        crf_high (int): The search range's high bound (fingerprint).
+        sample_count (int): Samples per probe (fingerprint).
+        sample_seconds (float): Sample length (fingerprint).
+        remove_bars (bool): The remove_bars setting (fingerprint).
+
+    Returns:
+        int: The plan row id.
+    """
+    connection.execute("DELETE FROM plans WHERE file_id = ?", (file_id,))
+    cursor = connection.execute(
+        """
+        INSERT INTO plans (
+            file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
+            input_mtime, input_size, encoder, encoder_preset, target_vmaf,
+            crf_low, crf_high, sample_count, sample_seconds, remove_bars
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            chosen_crf,
+            achieved_vmaf,
+            None if crop is None else ",".join(str(v) for v in crop),
+            json.dumps([(p.crf, p.vmaf) for p in probes]),
+            skipped_reason,
+            input_mtime,
+            input_size,
+            encoder,
+            encoder_preset,
+            target_vmaf,
+            crf_low,
+            crf_high,
+            sample_count,
+            sample_seconds,
+            int(remove_bars),
+        ),
+    )
+    connection.commit()
+    return int(cursor.lastrowid or 0)
+
+
+def get_valid_plan(
+    connection: sqlite3.Connection,
+    path: Path,
+    *,
+    encoder: str,
+    encoder_preset: str,
+    target_vmaf: float,
+    crf_range: tuple[int, int],
+    sample_count: int,
+    sample_seconds: float,
+    remove_bars: bool,
+) -> sqlite3.Row | None:
+    """Returns the file's stored plan when the fingerprint matches.
+
+    A plan is valid ONLY when every decision input matches: the file
+    itself (mtime + size), the encoder settings, the quality target, the
+    search range and the sampling parameters. ANY mismatch returns None —
+    fail-safe to re-probe, never guess.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        path (Path): The movie file path.
+        encoder (str): The encoder of the pending encode.
+        encoder_preset (str): The speed preset of the pending encode.
+        target_vmaf (float): The VMAF target of the pending encode.
+        crf_range (tuple[int, int]): The pending encode's search range.
+        sample_count (int): The pending encode's sample count.
+        sample_seconds (float): The pending encode's sample length.
+        remove_bars (bool): The pending encode's remove_bars setting.
+
+    Returns:
+        sqlite3.Row | None: The valid plan row, or None.
+    """
+    if not path.is_file():
+        return None
+    row = connection.execute(
+        """
+        SELECT p.*, f.mtime AS files_mtime, f.size AS files_size
+        FROM plans p JOIN files f ON f.id = p.file_id
+        WHERE f.path = ?
+        """,
+        (str(path),),
+    ).fetchone()
+    if row is None:
+        return None
+    stat = path.stat()
+    if (
+        abs(stat.st_mtime - row["input_mtime"]) > 1.0
+        or stat.st_size != row["input_size"]
+        or row["encoder"] != encoder
+        or row["encoder_preset"] != encoder_preset
+        or abs(row["target_vmaf"] - target_vmaf) > 0.01
+        or row["crf_low"] != crf_range[0]
+        or row["crf_high"] != crf_range[1]
+        or row["sample_count"] != sample_count
+        or abs(row["sample_seconds"] - sample_seconds) > 0.01
+        or bool(row["remove_bars"]) != remove_bars
+    ):
+        return None
+    return row
 
 
 def get_cached_records(connection: sqlite3.Connection) -> dict[str, sqlite3.Row]:
