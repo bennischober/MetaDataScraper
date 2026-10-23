@@ -559,12 +559,12 @@ def _record_encodes(
                             f"{result.output_size / (1024**3):.2f} GB ({change}) "
                             f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                         )
-                        record_quality_results(connection, movie, result, config, target_vmaf)
+                        record_quality_results(connection, movie, result, config)
                         encoded_for_notify.append(movie)
                     elif result.skipped_reason is not None:
                         # guardrail skip => record it so future runs do not re-probe
                         console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
-                        record_quality_results(connection, movie, result, config, target_vmaf)
+                        record_quality_results(connection, movie, result, config)
                     else:
                         log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except _EncodeCancelled as e:
@@ -682,7 +682,7 @@ def plan(
                 continue
             # quicksave: persist the decision (CRF or skip verdict) so a
             # later encode of this movie skips probing when unchanged
-            record_plan(connection, movie, result, config, target_vmaf)
+            record_plan(connection, movie, result, config)
             plans.append(result)
 
             if result.skipped_reason is not None:

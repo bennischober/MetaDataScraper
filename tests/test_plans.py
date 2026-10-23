@@ -168,7 +168,7 @@ class TestRecordPlan(unittest.TestCase):
             hdr=False,
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
-        plan_id = service.record_plan(self.connection, movie, result, config, 95.0)
+        plan_id = service.record_plan(self.connection, movie, result, config)
         return plan_id, movie
 
     def test_records_plan_for_scanned_movie(self):
@@ -207,7 +207,7 @@ class TestRecordPlan(unittest.TestCase):
             hdr=False,
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
-        self.assertIsNone(service.record_plan(self.connection, movie, result, config, 95.0))
+        self.assertIsNone(service.record_plan(self.connection, movie, result, config))
 
 
 if __name__ == "__main__":

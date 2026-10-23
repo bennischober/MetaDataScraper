@@ -1053,7 +1053,7 @@ class TestDb(unittest.TestCase):
                 verified_subsample=10,
             )
             outcome = service.record_quality_results(
-                self.connection, movie, result, config_helper.Conf(), 95.0
+                self.connection, movie, result, config_helper.Conf()
             )
             self.assertTrue(outcome.encoded)
             file_id = self.connection.execute(
@@ -1087,11 +1087,41 @@ class TestDb(unittest.TestCase):
                 input_size=1000,
                 output_size=400,
             )
-            service.record_quality_results(
-                self.connection, movie, result, config_helper.Conf(), 95.0
-            )
+            service.record_quality_results(self.connection, movie, result, config_helper.Conf())
             row = self.connection.execute("SELECT verified_vmaf FROM encodes").fetchone()
             self.assertIsNone(row["verified_vmaf"])
+
+    def test_records_effective_target_vmaf(self):
+        """The preset column carries the EFFECTIVE target: for HDR the engine
+        overrides the requested target (DEFAULT_HDR_TARGET_VMAF), and the row
+        must record the target the encode was actually decided against —
+        regression: both callers persisted the caller's value, so every HDR
+        encode was recorded as VMAF>95.0 while decided against 94.5."""
+
+        from shrinkray import service
+        from shrinkray.quality import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            hdr_result = QualityResult(
+                input=movie,
+                output=root / "enc" / "movie.mkv",
+                success=True,
+                target_vmaf=94.5,  # the engine's HDR override, not the caller's 95.0
+                chosen_crf=22,
+                achieved_vmaf=94.6,
+                input_size=1000,
+                output_size=400,
+                hdr=True,
+            )
+            outcome = service.record_quality_results(
+                self.connection, movie, hdr_result, config_helper.Conf()
+            )
+            self.assertTrue(outcome.encoded)
+            row = self.connection.execute("SELECT preset, encoder FROM encodes").fetchone()
+            self.assertEqual(row["preset"], "VMAF>94.5")
 
     def test_doctor_healthy_library(self):
         """A library whose rows all exist on disk and whose outputs are

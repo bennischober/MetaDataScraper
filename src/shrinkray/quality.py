@@ -279,7 +279,8 @@ class QualityResult:
         input (Path): The input file.
         output (Path): The output file.
         success (bool): True if the encode succeeded.
-        target_vmaf (float): The VMAF quality floor that was requested.
+        target_vmaf (float): The effective VMAF quality floor that was met:
+            the requested one, or the HDR override when the movie is HDR.
         chosen_crf (int | None): The CRF selected by the bisect.
         achieved_vmaf (float | None): The worst per-sample VMAF measured at
             the chosen CRF (None if no probe was possible).
