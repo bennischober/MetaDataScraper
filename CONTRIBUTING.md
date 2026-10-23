@@ -1,0 +1,90 @@
+# Contributing to ShrinkRay
+
+Thanks for wanting to contribute. This project is built to be given to the
+community — installed by strangers, pointed at video libraries that cannot be
+re-acquired, run unattended. That standard, not "it works on my machine",
+is what your contribution is held to. This file covers the human-facing part
+(how to propose a change, what will not be accepted); the machine-facing part
+lives in [AGENTS.md](AGENTS.md), which documents the same gate, conventions
+and issue workflow for coding agents — **the two must not drift**, so when
+you change one, check the other.
+
+## Before you start
+
+1. **Check the issue tracker.** Work happens on issues. Pick an unassigned
+   one (or propose a new one — see below). If you take one, assign it to
+   yourself first; an assigned issue means work in progress.
+2. **Read [PRODUCT.md](PRODUCT.md)** for the product contract, and the scope
+   boundary in [AGENTS.md](AGENTS.md). ShrinkRay changes a file's **bytes**,
+   never its **identity**: no renaming, moving, organizing, deduplicating,
+   acquiring, or playing. A feature whose usefulness depends on knowing what
+   a file is *called* is out of scope and will be declined.
+3. **Branch from an up-to-date `main`** — never work on `main` directly, and
+   never push to it. Every change arrives through a pull request:
+
+   ```sh
+   git switch main && git pull --ff-only
+   git switch -c <type>/<issue>-<slug>   # e.g. fix/38-test-pollutes-tree
+   ```
+
+## The gate (all five, before every commit)
+
+```sh
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run mypy
+uv run mypy --platform linux
+uv run pytest -q
+```
+
+CI runs exactly these. The second mypy run matters: the local default uses
+Windows stubs, CI uses Linux stubs — APIs like `os.startfile` type-check on
+one and not the other. If you cannot make the gate pass, stop and report the
+blocker; do not commit around it.
+
+## Test rules
+
+- New behaviour ships with a test that would fail without it; a bug fix ships
+  with a test that would have caught the bug.
+- Tests must not require the ffmpeg/HandBrake binaries or network access —
+  mock, or use `tmp_path`/`tempfile` fixtures.
+- Tests that touch the filesystem use **real temp directories, never
+  fictional paths**: `D:/Movies` is absolute on Windows but relative on
+  Linux, and scope containment behaves differently — a test that passes on
+  your machine may silently invert on CI.
+- Tests never pollute the working tree. There is a conftest guard that fails
+  the session if a test leaves files behind — this rule exists because that
+  exact defect shipped once (issue #38).
+- No dependence on wall-clock time or timing luck.
+
+## Commit and PR conventions
+
+- Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`,
+  `chore`, `ci`, `build`, `style`), one logical change per commit.
+- The PR body states what changed **and how it was verified** — a PR that
+  cannot state its verification is not ready. Reference the issue
+  (`Closes #N`) so it links and closes on merge.
+- Merge only when CI is green.
+
+## What a change to the quality decision requires
+
+The question this tool answers per file — *is this file bigger than its
+quality requires?* — is decided by measurement (VMAF), not opinion. A change
+to how that decision is made (targets, presets, probe strategy) needs a
+measurement or study behind it, not just a passing test suite. Say in the PR
+what was measured and what changed.
+
+## Proposing a change
+
+Open an issue first for anything that changes the product's shape —
+especially anything in the scope boundary above, anything destructive
+(there is no code path that deletes a source media file, and requests to add
+one will be declined), and anything that changes the encode target (AV1-only,
+VMAF-driven, per PRODUCT.md). Small, uncontroversial fixes (docs, typos,
+test gaps) can go straight to a PR referencing the problem.
+
+## Security issues
+
+Do not open a public issue for anything you believe is exploitable — see
+[SECURITY.md](SECURITY.md) for the private disclosure path and the current
+security posture (notably: the dashboard has no authentication).
