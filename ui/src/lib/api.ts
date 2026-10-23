@@ -22,6 +22,45 @@ export function jobPaths(job: Job): string[] {
   return payload.path ? [payload.path] : []
 }
 
+/** One per-movie entry inside a job's result payload (encode `outcomes`,
+ * plan `plans`). The detail trail reads these to show THIS movie's
+ * outcome inside a batch job — the job-level state alone hides it. */
+export interface JobOutcome {
+  movie: string
+  state: string
+  error?: string
+  crf?: number | null
+  vmaf?: number | null
+  estimated_size?: number | null
+  saved_percent?: number | null
+  reason?: string
+}
+
+/** The movie's own entry in a job's per-movie result list (null when the
+ * job didn't touch this movie individually — scans, dedupe). */
+export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
+  if (job.kind !== 'encode' && job.kind !== 'plan') return null
+  const r = job.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
+  if (!r) return null
+  const list = job.kind === 'encode' ? r.outcomes : r.plans
+  if (!Array.isArray(list)) return null
+  return list.find((o) => o.movie === movieName) ?? null
+}
+
+/** A DONE job whose per-movie outcomes failed is not a clean done: the
+ * lifecycle completed, but the work did not. Shared by the jobs page and
+ * the detail trail — two audit trails must speak one language. */
+export function failedOutcomeNote(job: Job): string {
+  if (job.state !== 'done' || job.kind !== 'encode') return ''
+  const r = job.result as { outcomes?: JobOutcome[] } | null
+  if (!r?.outcomes) return ''
+  const failed = r.outcomes.filter((o) => o.state === 'failed')
+  if (failed.length === 0) return ''
+  return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
+    .map((o) => o.movie)
+    .join(', ')}`
+}
+
 export interface EncodeInfo {
   preset: string | null
   crf: number | null

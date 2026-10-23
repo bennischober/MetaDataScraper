@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtWhen, fmtSpan, humanizeError, type Job } from '../api'
+  import { fmtGb, fmtWhen, fmtSpan, humanizeError, failedOutcomeNote, type Job } from '../api'
   import { progressFor } from '../progress.svelte'
 
   /** The run log as an event log: every job with its timestamps, wall
@@ -61,23 +61,8 @@
 
   /** A DONE job whose per-movie outcomes failed is not a clean done: the
    * lifecycle completed, but the work did not. The row says so in red and
-   * offers RETRY — a green DONE must never hide failed work. */
-  interface JobOutcome {
-    movie: string
-    state: string
-    error?: string
-  }
-  const failedOutcomeNote = (job: Job) => {
-    if (job.state !== 'done' || job.kind !== 'encode') return ''
-    const r = job.result as { outcomes?: JobOutcome[] } | null
-    if (!r?.outcomes) return ''
-    const failed = r.outcomes.filter((o) => o.state === 'failed')
-    if (failed.length === 0) return ''
-    return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
-      .map((o) => o.movie)
-      .join(', ')}`
-  }
-
+   * offers RETRY — a green DONE must never hide failed work. The helper
+   * lives in api.ts (shared with the detail trail). */
   function stateClass(job: Job): string {
     if (job.state === 'done') {
       // a DONE with failed outcomes is a warning, not a confirmation —

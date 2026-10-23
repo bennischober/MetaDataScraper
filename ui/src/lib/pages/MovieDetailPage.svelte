@@ -6,6 +6,8 @@
     fmtWhen,
     humanizeError,
     jobPaths,
+    failedOutcomeNote,
+    movieOutcome,
     type Movie,
     type Job,
     type EncodeRecord,
@@ -595,15 +597,44 @@
         <div class="dim pad">no jobs for this movie yet</div>
       {:else}
         {#each jobs as job (job.id)}
+          {@const outcome = job.id != null ? movieOutcome(job, movie.name) : null}
+          {@const partial = failedOutcomeNote(job) !== ''}
           <div class="hist-row mono">
             <span class="dim">#{job.id}</span>
             <span>{job.kind}</span>
-            <span class={job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>{job.state}</span>
+            <!-- the job's lifecycle state, plus what THIS movie's slice of
+                 it did: a batch DONE can hold this movie's failure (the
+                 watchdog case read as green 'done' here), a plan DONE
+                 holds this movie's verdict -->
+            <span class={partial ? 'partial' : job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>
+              {job.state}{#if partial} · partial{/if}
+            </span>
             <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
-            <!-- same translation voice as the jobs page (two audit trails
-                 must speak one language, round-6 P2); the raw exception
-                 stays reachable as the hover title -->
-            <span class="dim err" title={job.error ?? ''}>{job.error ? humanizeError(null, job.error) : ''}</span>
+            <!-- the movie's own outcome first (it names the real failure),
+                 then the job-level error as fallback -->
+            <span
+              class="dim err"
+              class:bad={outcome?.state === 'failed'}
+              title={outcome?.error ?? job.error ?? ''}
+            >
+              {#if outcome?.state === 'failed'}
+                {outcome.error ? humanizeError(null, outcome.error) : 'failed'}
+              {:else if outcome?.state === 'skip'}
+                skip — {outcome.reason ?? 'no size gain'}
+              {:else if outcome?.state === 'already_encoded'}
+                already encoded
+              {:else if outcome?.state === 'cancelled'}
+                cancelled
+              {:else if job.error}
+                {humanizeError(null, job.error)}
+              {:else if job.kind === 'plan' && outcome}
+                {#if outcome.crf != null}
+                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {outcome.vmaf.toFixed(1)}{/if}
+                {:else}
+                  done
+                {/if}
+              {/if}
+            </span>
           </div>
         {/each}
       {/if}
@@ -700,6 +731,9 @@
   }
   .hist-row:last-child { border-bottom: none; }
   .err { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .err.bad { color: var(--red); }
+  /* batch DONE holding this movie's failure — the jobs page's semantics */
+  .partial { color: var(--amber); }
 
   /* VMAF gauge: fill vs the target mark */
   .fact .gauge {
