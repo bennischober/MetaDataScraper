@@ -214,6 +214,9 @@
    * Round-6.9 finding (user review): stretched full-panel (~1460px),
    * three bars sat ~480px apart — isolated pillars, not a staircase.
    * Left-aligned (xMinYMid), the descent reads as one connected shape. */
+  /** Chart width in real pixels, measured from the container (bind:clientWidth
+   * — svelte's measured width, default 560 before first layout). */
+  let driftW = $state(0)
   const chartW = $derived(Math.min(driftW || 560, Math.max(driftSteps.length, 2) * 220))
   /** Bar top for a bitrate (bars grow up from the y=66 baseline). */
   const stepTop = (br: number) => 66 - (br / driftMaxBr) * 52
@@ -222,9 +225,6 @@
    * a 70–100 domain gave that distance 0.47px per point — unreadable).
    * Group-local y (group translated to y=84): 100 → y6, 85 → y20. */
   const vmafLaneY = (v: number) => 20 - ((Math.min(100, Math.max(85, v)) - 85) / 15) * 14
-  /** Chart width in real pixels, measured from the container (bind:clientWidth
-   * — svelte's measured width, default 560 before first layout). */
-  let driftW = $state(0)
   const driftSummary = $derived.by(() => {
     if (driftSteps.length < 2) return ''
     // the drift story, told by the staircase: the source step → the last
