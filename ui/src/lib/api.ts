@@ -189,27 +189,34 @@ export function rawErrorText(raw: string): string {
   return raw.trim()
 }
 
-/** The library ETag: kept across polls, sent as If-None-Match; a 304
- * keeps the previous array (the poll becomes nearly free). */
+/** Known collection ETags: kept across polls, sent as If-None-Match (a
+ * comma list — standard syntax); an unchanged collection comes back as
+ * null and the client keeps its copy (the poll becomes nearly free). */
 let libraryEtag: string | null = null
+let jobsEtag: string | null = null
 
 export interface Snapshot {
   status: Status
-  jobs: Job[]
+  /** null when unchanged since the last poll (client keeps its copy). */
+  jobs: Job[] | null
+  jobs_etag: string
   /** null when the library is unchanged (client keeps its copy). */
   library: Movie[] | null
   library_etag: string
 }
 
 export const api = {
-  /** One round-trip for the whole poll: status + jobs + library (ETag-aware). */
+  /** One round-trip for the whole poll: status + jobs + library, both
+   * collections ETag-cached. */
   snapshot: async (): Promise<Snapshot> => {
+    const tags = [libraryEtag, jobsEtag].filter((t) => t != null).join(', ')
     const response = await fetch('/api/snapshot', {
-      headers: libraryEtag ? { 'If-None-Match': libraryEtag } : {},
+      headers: tags ? { 'If-None-Match': tags } : {},
     })
     if (!response.ok) throw new Error(`API ${response.status}: snapshot`)
     const snap = (await response.json()) as Snapshot
     libraryEtag = snap.library_etag
+    jobsEtag = snap.jobs_etag
     return snap
   },
   status: () => request<Status>('/api/status'),

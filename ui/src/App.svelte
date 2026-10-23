@@ -204,7 +204,7 @@
     try {
       const snap = await api.snapshot()
       status = snap.status
-      history = snap.jobs
+      if (snap.jobs !== null) history = snap.jobs // unchanged: keep the current array
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       rememberRss(snap.status?.rss_mib)
       error = null

@@ -41,6 +41,7 @@ metadata.db-wal
 # playwright verification artifacts (screenshots + throwaway shot scripts)
 ui/screens/
 ui/shots*.cjs
+ui/shots*.png
 
 # node (ui build artifacts are rebuilt from source)
 node_modules/

@@ -1001,14 +1001,36 @@ class TestDb(unittest.TestCase):
             # job history included
             self.assertIsInstance(body["jobs"], list)
 
-            # second call with the ETag: library null, rest fresh
-            second = client.get("/api/snapshot", headers={"If-None-Match": body["library_etag"]})
+            # second call with both ETags: library AND jobs null, status fresh
+            second = client.get(
+                "/api/snapshot",
+                headers={"If-None-Match": f"{body['library_etag']}, {body['jobs_etag']}"},
+            )
             self.assertEqual(second.status_code, 200)
             body2 = second.json()
             self.assertIsNone(body2["library"])
+            self.assertIsNone(body2["jobs"])
             self.assertEqual(body2["library_etag"], body["library_etag"])
+            self.assertEqual(body2["jobs_etag"], body["jobs_etag"])
             self.assertIn("status", body2)
-            self.assertIn("jobs", body2)
+            # only the status rides every tick
+            self.assertIn("queue", body2["status"])
+
+            # a state transition invalidates the jobs tag (a job row never
+            # mutates except on a state transition — (id, state) is the
+            # change signal). Enqueue through the app's own queue object:
+            # direct SQL would bypass its invariants.
+            from shrinkray.jobs import Job, JobKind
+
+            app_module.state.queue.enqueue(Job(kind=JobKind.SCAN, payload={"paths": ["D:/x"]}))
+            fourth = client.get(
+                "/api/snapshot",
+                headers={"If-None-Match": f"{body['library_etag']}, {body['jobs_etag']}"},
+            )
+            body4 = fourth.json()
+            self.assertIsNone(body4["library"])
+            self.assertIsInstance(body4["jobs"], list)
+            self.assertNotEqual(body4["jobs_etag"], body["jobs_etag"])
 
             # a change re-validates the library in the next snapshot
             db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1, 1, 0.0)

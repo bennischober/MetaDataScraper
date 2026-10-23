@@ -626,18 +626,22 @@ def snapshot(
 
     The poll endpoint: instead of three requests (status, jobs, library)
     per tick, the UI fetches everything with one round-trip and one lock
-    pass. The library part is ETag-cached — send the last ETag as
-    If-None-Match and an unchanged library comes back as `"library": null`
-    (client keeps its copy) while status and jobs stay fresh. The three
-    individual endpoints remain available (curl, scripts, tests).
+    pass. Library and job history are ETag-cached — the client sends its
+    known tags as If-None-Match (comma-separated, standard list syntax)
+    and unchanged collections come back as `null` (client keeps its copy)
+    while status stays fresh. The jobs fingerprint covers (id, state) of
+    the returned window: a job row never mutates except on a state
+    transition (result/error are written with the final state), so the
+    pair is a sound change signal. The three individual endpoints remain
+    available (curl, scripts, tests).
 
     Args:
         jobs_limit (int): Maximum number of jobs in the history.
-        if_none_match (str | None): The client's library ETag.
+        if_none_match (str | None): The client's known ETags.
 
     Returns:
-        dict: {"status": ..., "jobs": [...], "library": [...] | None,
-        "library_etag": str}
+        dict: {"status": ..., "jobs": [...] | None, "jobs_etag": str,
+        "library": [...] | None, "library_etag": str}
     """
     import hashlib
 
@@ -646,7 +650,7 @@ def snapshot(
     s = get_state()
 
     def read(c) -> dict:
-        """Reads jobs, status and the library fingerprint in one pass."""
+        """Reads jobs, status and both fingerprints in one pass."""
         jobs = s.queue.all_jobs(limit=jobs_limit)
         running = [j for j in jobs if j.state.value in ("running", "queued")]
         fingerprint = c.execute(
@@ -662,13 +666,23 @@ def snapshot(
             "jobs": jobs,
             "running": running,
             "fingerprint": tuple(fingerprint),
+            # a job row never mutates except on a state transition, so
+            # (id, state) over the window is a sound change signal
+            "jobs_fp": tuple((j.id, j.state.value) for j in jobs),
             "rss_mib": rss_mib(),
         }
 
     data = s.with_lock(read)
 
-    etag = '"lib-' + hashlib.md5(str(data["fingerprint"]).encode()).hexdigest()[:16] + '"'
-    library_unchanged = if_none_match == etag
+    def tag(prefix: str, value: object) -> str:
+        return '"' + prefix + hashlib.md5(str(value).encode()).hexdigest()[:16] + '"'
+
+    etag_lib = tag("lib-", data["fingerprint"])
+    etag_jobs = tag("jobs-", data["jobs_fp"])
+    # If-None-Match may carry a list: '"lib-x", "jobs-y"'
+    sent = {t.strip() for t in (if_none_match or "").split(",") if t.strip()}
+    library_unchanged = etag_lib in sent
+    jobs_unchanged = etag_jobs in sent
     library = None
     if not library_unchanged:
         library = s.with_lock(
@@ -728,9 +742,10 @@ def snapshot(
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
         },
-        "jobs": [j.to_dict() for j in data["jobs"]],
+        "jobs": None if jobs_unchanged else [j.to_dict() for j in data["jobs"]],
+        "jobs_etag": etag_jobs,
         "library": library,
-        "library_etag": etag,
+        "library_etag": etag_lib,
     }
 
 
