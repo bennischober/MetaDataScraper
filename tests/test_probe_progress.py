@@ -49,7 +49,7 @@ class TestProbeProgress(unittest.TestCase):
         event with the measured VMAF."""
         events: list[dict] = []
         with (
-            patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+            patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(quality, "probe_crf", side_effect=lambda *a, **k: 95.0),
         ):
             chosen, _achieved, probes = quality.find_optimal_crf(
@@ -88,10 +88,12 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(quality, "measure_vmaf", return_value=None),
             ):
                 factor = quality.estimate_size_factor(
-                    [sample],
+                    [(sample, 10.0)],
                     Path(tmp),
                     "hb",
                     32,
+                    sample,
+                    10.0,
                     "x265",
                     "medium",
                     progress=events.append,
@@ -113,7 +115,7 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(
                     quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
                 ) as fake_search,
-                patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
             ):
                 result = quality.plan_quality(src, progress=events.append)
@@ -174,7 +176,7 @@ class TestProbeProgress(unittest.TestCase):
             patch.object(
                 quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
             ) as fake_search,
-            patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+            patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
             tempfile.TemporaryDirectory() as tmp,
         ):
@@ -204,7 +206,7 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(quality, "measure_vmaf") as fake_measure,
             ):
                 factor = quality.estimate_size_factor(
-                    [sample], Path(tmp), "hb", 32, "x265", "medium"
+                    [(sample, 10.0)], Path(tmp), "hb", 32, sample, 10.0, "x265", "medium"
                 )
         self.assertEqual(factor, 0.5)
         fake_measure.assert_not_called()
@@ -230,6 +232,6 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(quality, "detect_vmaf_style", side_effect=RuntimeError("no libvmaf")),
             ):
                 factor = quality.estimate_size_factor(
-                    [sample], Path(tmp), "hb", 32, "x265", "medium"
+                    [(sample, 10.0)], Path(tmp), "hb", 32, sample, 10.0, "x265", "medium"
                 )
         self.assertEqual(factor, 0.5)

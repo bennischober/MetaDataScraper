@@ -1,6 +1,7 @@
 """Quality/CRF-search tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -393,6 +394,164 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(result.crf_source, "plan")
         self.assertEqual(result.chosen_crf, 18)
         self.assertEqual(result.encoder, "x265_10bit")
+
+
+class TestProbeCache(unittest.TestCase):
+    """The probe-encode cache (issue #24): per-sample measurements are
+    content-addressed, so a re-run with the same inputs reuses them and a
+    changed target VMAF reuses the probes it already measured."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp.name) / "work"
+        self.workdir.mkdir()
+        self.db_file = Path(self.tmp.name) / "test.db"
+        self.connection = db.connect(self.db_file)
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 8)
+        self.sample = Path(self.tmp.name) / "sample.mkv"
+        self.sample.write_bytes(b"y" * 8)
+
+    def tearDown(self):
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _probe(self, **kwargs):
+        """One probe_crf call with the encode/VMAF seams mocked."""
+        encodes: list = []
+
+        def fake_run(command, cancel=None):
+            # the probe encode writes its output file (the --output argument)
+            encodes.append(command)
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        defaults = {
+            "samples": [(self.sample, 10.0)],
+            "crf": 20,
+            "workdir": self.workdir,
+            "handbrake": "hb",
+            "movie": self.movie,
+            "sample_seconds": 10.0,
+            "encoder": "x265",
+            "encoder_preset": "medium",
+            "db_file": self.db_file,
+        }
+        with (
+            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(quality, "_run", side_effect=fake_run),
+            patch.object(quality, "measure_vmaf", return_value=95.5),
+        ):
+            score = quality.probe_crf(**{**defaults, **kwargs})
+        return score, encodes
+
+    def test_cache_hit_skips_encode_and_measurement(self):
+        score, encodes = self._probe()
+        self.assertEqual(score, 95.5)
+        self.assertEqual(len(encodes), 1)
+        # identical inputs again: no encode, no VMAF measurement, same score
+        score2, encodes2 = self._probe()
+        self.assertEqual(score2, 95.5)
+        self.assertEqual(len(encodes2), 0)
+
+    def test_cache_hit_yields_the_uncached_result(self):
+        """A cached run must produce the same per-CRF score as an uncached
+        one (the acceptance criterion: same chosen CRF)."""
+        with tempfile.TemporaryDirectory() as tmp2:
+            uncached_db = Path(tmp2) / "other.db"
+            db.connect(uncached_db).close()
+            score_cached, _ = self._probe()
+            score_uncached, encodes = self._probe(db_file=uncached_db)
+            self.assertEqual(score_cached, score_uncached)
+            self.assertEqual(len(encodes), 1)  # the uncached run encoded once
+
+    def test_changed_target_reuses_measured_probes(self):
+        """Changing ONLY the target VMAF keeps every probe-cache component
+        identical, so the probes already measured are reused (they are the
+        expensive part; the target is a decision threshold, not an input)."""
+        score, encodes_first = self._probe(crf=20)
+        self.assertEqual(len(encodes_first), 1)
+        # a second CRF round at a different CRF: encodes (new key), then a
+        # re-run of the SAME crf hits while the other stays cached
+        _score2, encodes_new_crf = self._probe(crf=24)
+        self.assertEqual(len(encodes_new_crf), 1)
+        score3, encodes_again = self._probe(crf=20)
+        self.assertEqual(len(encodes_again), 0)
+        self.assertEqual(score3, score)
+
+    def test_cache_invalidated_by_source_change(self):
+        self._probe()
+        # the source changed (mtime+size): the cached score is stale
+        self.movie.write_bytes(b"x" * 64)
+
+        stat = self.movie.stat()
+        os.utime(self.movie, (stat.st_mtime + 5, stat.st_mtime + 5))
+        _score, encodes = self._probe()
+        self.assertEqual(len(encodes), 1)  # re-encoded, not reused
+
+    def test_cache_key_changes_with_encoder_and_preset(self):
+        self._probe()
+        _score, encodes = self._probe(encoder="x265_10bit")
+        self.assertEqual(len(encodes), 1)  # different encoder => new key
+        _score2, encodes2 = self._probe(encoder_preset="slow")
+        self.assertEqual(len(encodes2), 1)  # different preset => new key
+
+    def test_force_reprobe_bypasses_cache(self):
+        self._probe()
+        _score, encodes = self._probe(use_probe_cache=False)
+        self.assertEqual(len(encodes), 1)  # measured fresh despite the cache
+
+    def test_no_db_file_probes_uncached(self):
+        """Without a database (CLI one-shot), probing still works and
+        re-encodes (nothing to cache into)."""
+        score, encodes = self._probe(db_file=None)
+        self.assertEqual(score, 95.5)
+        self.assertEqual(len(encodes), 1)
+        score2, encodes2 = self._probe(db_file=None)
+        self.assertEqual(score2, 95.5)
+        self.assertEqual(len(encodes2), 1)
+
+    def test_size_factor_is_cached(self):
+        factor, _ = self._size_factor()
+        self.assertEqual(factor, 0.5)
+        # second call: no encode
+        factor2, encodes2 = self._size_factor()
+        self.assertEqual(factor2, 0.5)
+        self.assertEqual(len(encodes2), 0)
+
+    def _size_factor(self, **kwargs):
+        encodes: list = []
+
+        def fake_run(command, cancel=None):
+            encodes.append(command)
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        defaults = {
+            "samples": [(self.sample, 10.0)],
+            "workdir": self.workdir,
+            "handbrake": "hb",
+            "crf": 32,
+            "movie": self.movie,
+            "sample_seconds": 10.0,
+            "encoder": "x265",
+            "encoder_preset": "medium",
+            "db_file": self.db_file,
+        }
+        with (
+            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(quality, "_run", side_effect=fake_run),
+        ):
+            factor = quality.estimate_size_factor(**{**defaults, **kwargs})
+        return factor, encodes
+
+    def test_size_and_vmaf_caches_do_not_collide(self):
+        """The same (sample, CRF) probed as size ratio and as VMAF score are
+        different measurements: the kind is part of the key."""
+        self._probe(crf=32)
+        factor, encodes = self._size_factor()
+        self.assertEqual(len(encodes), 1)  # not served from the vmaf entry
+        self.assertEqual(factor, 0.5)
 
 
 if __name__ == "__main__":

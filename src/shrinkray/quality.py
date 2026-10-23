@@ -16,6 +16,7 @@ bisect measures and decides with the same local toolchain, but absolute
 scores and chosen CRFs are only comparable between similar libvmaf builds.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -442,6 +443,106 @@ def _run(
             popen.stderr.close()
 
 
+# the sample extraction recipe, part of the probe cache key: a change to
+# how samples are extracted changes their encoded bytes (and thus every
+# probe's VMAF), so cached scores must not survive it (see #16)
+SAMPLE_EXTRACTION_TAG = "x264-crf12-veryfast"
+
+
+def probe_cache_key(
+    movie: Path,
+    offset: float,
+    seconds: float,
+    crf: int,
+    encoder: str,
+    encoder_preset: str,
+    crop: tuple[int, int, int, int] | None,
+    hdr: bool,
+    encoder_threads: int | None,
+    tool_versions: str,
+    kind: str = "vmaf",
+) -> str:
+    """Computes the content-addressed key of one probe measurement.
+
+    Every input that can change the probe's encoded bytes or its VMAF
+    score belongs in the key: the sample's content identity (source size
+    + mtime, window offset/length, extraction recipe), the encode
+    (encoder, preset, CRF, crop rect, thread cap) and the measurement
+    (HDR tone-mapping, tool versions). The source PATH is deliberately
+    not part of the key: a moved-but-unmodified file's probes stay valid
+    (a move preserves mtime and size).
+
+    Args:
+        movie (Path): The source movie file (identity via size + mtime).
+        offset (float): The sample window's start offset in seconds.
+        seconds (float): The sample window's length in seconds.
+        crf (int): The probed CRF.
+        encoder (str): The effective video encoder.
+        encoder_preset (str): The encoder speed preset.
+        crop (tuple | None): The crop rect applied to probes.
+        hdr (bool): Whether the VMAF measurement tone-maps both sides.
+        encoder_threads (int | None): The thread cap of the probe encode.
+        tool_versions (str): The tool version string (HandBrake, libvmaf).
+        kind (str): 'vmaf' (a VMAF score) or 'size' (an encoded-size ratio).
+
+    Returns:
+        str: The sha256 hex digest of the joined key inputs.
+    """
+    stat = movie.stat()
+    parts = [
+        kind,
+        str(stat.st_size),
+        f"{stat.st_mtime:.6f}",
+        f"{offset:.3f}",
+        f"{seconds:.3f}",
+        SAMPLE_EXTRACTION_TAG,
+        crf,
+        encoder,
+        encoder_preset,
+        "none" if crop is None else ",".join(str(v) for v in crop),
+        "hdr" if hdr else "sdr",
+        "threads:" + ("all" if encoder_threads is None else str(encoder_threads)),
+        tool_versions,
+    ]
+    return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
+
+
+def _cached_or_none(
+    db_file: Path | None, key: str
+) -> tuple[float | None, sqlite3.Connection | None]:
+    """Reads a probe-cache entry, returning the connection to keep it open on.
+
+    Opening one short-lived connection per probe is cheap (WAL, single
+    statements) and keeps probe_crf/estimate_size_factor connection-free
+    like the rest of the engine. Returns (None, None) without a db_file:
+    probing then runs uncached (CLI one-shots without a database).
+
+    Args:
+        db_file (Path | None): The database file (None => no caching).
+        key (str): The probe cache key.
+
+    Returns:
+        tuple: The cached value (None on miss) and the open connection
+            to hand to the cache write, or (None, None).
+    """
+    if db_file is None:
+        return None, None
+    from shrinkray import db as _db
+
+    connection = _db.connect(db_file)
+    return _db.get_probe_score(connection, key), connection
+
+
+def _store_probe(connection: sqlite3.Connection | None, key: str, value: float) -> None:
+    """Stores one probe measurement (best-effort commit via db layer)."""
+    if connection is None:
+        return
+    from shrinkray import db as _db
+
+    _db.save_probe_score(connection, key, value)
+    connection.close()
+
+
 def sample_offsets(duration: float, count: int) -> list[float]:
     """Computes the sample start offsets evenly spread over the duration.
 
@@ -471,7 +572,7 @@ def extract_samples(
     seconds: float,
     cancel: threading.Event | None = None,
     progress=None,
-) -> list[Path]:
+) -> list[tuple[Path, float]]:
     """Extracts short near-lossless sample clips for probing.
 
     Args:
@@ -484,7 +585,8 @@ def extract_samples(
             step updates (flow to the UI, never persisted).
 
     Returns:
-        list[Path]: The sample files.
+        list[tuple[Path, float]]: The sample files with their start offsets
+            in seconds (the offset is part of a probe's cache identity).
 
     Raises:
         RuntimeError: If a sample could not be extracted.
@@ -507,7 +609,7 @@ def extract_samples(
         raise RuntimeError(f"ffprobe failed for '{movie}'")
     duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
 
-    samples: list[Path] = []
+    samples: list[tuple[Path, float]] = []
     for index, offset in enumerate(sample_offsets(duration, count)):
         _check_cancel(cancel)
         if progress:
@@ -547,7 +649,7 @@ def extract_samples(
         )
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
-        samples.append(sample)
+        samples.append((sample, offset))
     return samples
 
 
@@ -965,10 +1067,12 @@ def bisect_crf(check, lo: int, hi: int) -> int:
 
 
 def probe_crf(
-    samples: list[Path],
+    samples: list[tuple[Path, float]],
     crf: int,
     workdir: Path,
     handbrake: str,
+    movie: Path,
+    sample_seconds: float,
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
@@ -976,26 +1080,38 @@ def probe_crf(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
+    use_probe_cache: bool = True,
 ) -> float:
     """Encodes all samples at one CRF and returns their worst VMAF score.
 
     The worst (minimum) per-sample mean governs the decision so that every
     probed segment meets the target quality.
 
+    Per-sample measurements are cached (probe_cache table, content-addressed
+    via probe_cache_key): a sample whose identity, encode settings and
+    measurement mode all match a previous run is reused instead of being
+    re-encoded. A cache hit IS a fresh measurement of unchanged inputs.
+
     Args:
-        samples (list[Path]): The sample files.
+        samples (list[tuple[Path, float]]): The sample files with their
+            start offsets in seconds.
         crf (int): The CRF quality value to probe.
         workdir (Path): Working directory for probe files.
         handbrake (str): Path to the HandBrakeCLI binary.
+        movie (Path): The source movie (cache identity: size + mtime).
+        sample_seconds (float): The sample window's length in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
-        db_file (Path | None): The database file for failure-evidence logs.
+        db_file (Path | None): The database file (caching and failure
+            evidence; None => uncached probing).
         encoder_threads (int | None): Thread limit for the probe encodes
             (None = no limit; must match the final encode's cap).
+        use_probe_cache (bool): False bypasses the cache entirely
+            (force_reprobe: the caller asked to measure everything fresh).
 
     Returns:
         float: The lowest per-sample VMAF mean at this CRF.
@@ -1004,9 +1120,31 @@ def probe_crf(
         RuntimeError: If a sample encode or VMAF measurement failed.
         Cancelled: When the cancel event fires.
     """
+    tool_versions = _tool_versions(handbrake)
     scores: list[float] = []
-    for index, sample in enumerate(samples):
+    for index, (sample, offset) in enumerate(samples):
         _check_cancel(cancel)
+        key = probe_cache_key(
+            movie,
+            offset,
+            sample_seconds,
+            crf,
+            encoder,
+            encoder_preset,
+            crop,
+            hdr,
+            encoder_threads,
+            tool_versions,
+        )
+        cached, connection = (None, None)
+        if use_probe_cache:
+            cached, connection = _cached_or_none(db_file, key)
+        if cached is not None:
+            log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
+            scores.append(cached)
+            if connection is not None:
+                connection.close()
+            continue
         encoded = workdir / f"probe_crf{crf}_{index}.mkv"
         command = build_encode_command(
             handbrake,
@@ -1020,30 +1158,38 @@ def probe_crf(
         )
         code, err = _run(command, cancel=cancel)
         if code == -1:
+            if connection is not None:
+                connection.close()
             raise Cancelled("cancelled during probe encode")
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
+            if connection is not None:
+                connection.close()
             raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
         _check_cancel(cancel)
-        scores.append(
-            measure_vmaf(
-                encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file
-            )
+        score = measure_vmaf(
+            encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file
         )
+        _store_probe(connection, key, score)
         encoded.unlink()
+        scores.append(score)
     return min(scores)
 
 
 def estimate_size_factor(
-    samples: list[Path],
+    samples: list[tuple[Path, float]],
     workdir: Path,
     handbrake: str,
     crf: int,
+    movie: Path,
+    sample_seconds: float,
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
+    use_probe_cache: bool = True,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
 
@@ -1058,17 +1204,22 @@ def estimate_size_factor(
     loudly in `probe_crf`.
 
     Args:
-        samples (list[Path]): The sample files.
+        samples (list[tuple[Path, float]]): The sample files with their
+            start offsets in seconds.
         workdir (Path): Working directory for probe files.
         handbrake (str): Path to the HandBrakeCLI binary.
         crf (int): The CRF quality value to probe.
+        movie (Path): The source movie (cache identity: size + mtime).
+        sample_seconds (float): The sample window's length in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars applied to the probe encode.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file (caching; None => uncached).
         encoder_threads (int | None): Thread limit for the probe encode.
         progress (callable | None): Callback progress(dict) for live
             step updates (flow to the UI, never persisted).
+        use_probe_cache (bool): False bypasses the probe cache.
 
     Returns:
         float: The size ratio of the probe encode (encoded / sample source).
@@ -1078,10 +1229,33 @@ def estimate_size_factor(
         Cancelled: When the cancel event fires.
     """
     _check_cancel(cancel)
-    sample = samples[0]
+    sample, offset = samples[0]
     encoded = workdir / f"size_probe_crf{crf}.mkv"
     if progress:
         progress({"stage": "probe", "detail": f"size probe (CRF {crf})"})
+    # the size ratio is measured without VMAF: the measurement inputs (hdr,
+    # libvmaf version) cannot change it and stay out of the key
+    key = probe_cache_key(
+        movie,
+        offset,
+        sample_seconds,
+        crf,
+        encoder,
+        encoder_preset,
+        crop,
+        hdr=False,
+        encoder_threads=encoder_threads,
+        tool_versions=_tool_versions(handbrake),
+        kind="size",
+    )
+    cached, connection = (None, None)
+    if use_probe_cache:
+        cached, connection = _cached_or_none(db_file, key)
+    if cached is not None:
+        log(f"probe cache hit (size probe, CRF {crf})")
+        if connection is not None:
+            connection.close()
+        return cached
     command = build_encode_command(
         handbrake,
         sample,
@@ -1094,13 +1268,18 @@ def estimate_size_factor(
     )
     code, err = _run(command, cancel=cancel)
     if code == -1:
+        if connection is not None:
+            connection.close()
         raise Cancelled("cancelled during size probe")
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
+        if connection is not None:
+            connection.close()
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
     try:
         factor = encoded.stat().st_size / sample.stat().st_size
     finally:
         encoded.unlink()
+    _store_probe(connection, key, factor)
     return factor
 
 
@@ -1120,6 +1299,7 @@ def find_optimal_crf(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
+    use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -1150,9 +1330,9 @@ def find_optimal_crf(
         RuntimeError: If sampling or probing failed.
         Cancelled: When the cancel event fires.
     """
-    samples = [
-        s.resolve()
-        for s in extract_samples(
+    samples: list[tuple[Path, float]] = [
+        (s.resolve(), offset)
+        for s, offset in extract_samples(
             movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
         )
     ]
@@ -1168,6 +1348,8 @@ def find_optimal_crf(
             crf,
             workdir,
             handbrake,
+            movie,
+            sample_seconds,
             encoder,
             encoder_preset,
             crop=crop,
@@ -1175,6 +1357,7 @@ def find_optimal_crf(
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,
+            use_probe_cache=use_probe_cache,
         )
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
         if progress:
@@ -1209,6 +1392,7 @@ def find_optimal_crf_and_skip(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
+    use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -1233,14 +1417,16 @@ def find_optimal_crf_and_skip(
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
             (None = no limit; must match the final encode's cap).
+        use_probe_cache (bool): False bypasses the probe-encode cache
+            (force_reprobe: the caller asked to measure everything fresh).
 
     Returns:
         tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
             that is True when the movie should NOT be re-encoded.
     """
-    samples = [
-        s.resolve()
-        for s in extract_samples(
+    samples: list[tuple[Path, float]] = [
+        (s.resolve(), offset)
+        for s, offset in extract_samples(
             movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
         )
     ]
@@ -1251,12 +1437,16 @@ def find_optimal_crf_and_skip(
         workdir,
         handbrake,
         crf_range[1],
+        movie,
+        sample_seconds,
         encoder,
         encoder_preset,
         crop=crop,
         cancel=cancel,
+        db_file=db_file,
         encoder_threads=encoder_threads,
         progress=progress,
+        use_probe_cache=use_probe_cache,
     )
     if factor >= 1.0:
         log(
@@ -1281,6 +1471,7 @@ def find_optimal_crf_and_skip(
         db_file=db_file,
         encoder_threads=encoder_threads,
         progress=progress,
+        use_probe_cache=use_probe_cache,
     )
     return chosen, achieved, probes, False
 
@@ -1298,6 +1489,7 @@ def plan_quality(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
+    use_probe_cache: bool = True,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1393,6 +1585,7 @@ def plan_quality(
             db_file=db_file,
             encoder_threads=encoder_threads,
             progress=progress,
+            use_probe_cache=use_probe_cache,
         )
 
         input_size = input_file.stat().st_size
@@ -1401,12 +1594,16 @@ def plan_quality(
             workdir,
             handbrake,
             crf,
+            input_file,
+            sample_seconds,
             effective_encoder,
             encoder_preset,
             crop=crop,
             cancel=cancel,
+            db_file=db_file,
             encoder_threads=encoder_threads,
             progress=progress,
+            use_probe_cache=use_probe_cache,
         )
 
         if skip:
@@ -1583,6 +1780,7 @@ def _probe_movie(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
+    use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -1645,6 +1843,7 @@ def _probe_movie(
             db_file=db_file,
             encoder_threads=encoder_threads,
             progress=progress,
+            use_probe_cache=use_probe_cache,
         )
         if skip:
             raise SkipEncode("re-encode would not shrink the file")
@@ -1700,6 +1899,7 @@ def encode_with_quality(
     encoder_threads: int | None = None,
     verify: bool = False,
     force_reprobe: bool = False,
+    use_probe_cache: bool = True,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1731,8 +1931,11 @@ def encode_with_quality(
             1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
         force_reprobe (bool): Bypass the plan lookup entirely and run the
             normal probing pipeline even when a valid plan exists (CLI:
-            --replan). Plans are only consulted for explicit encode runs;
-            watch mode passes True to stay independent of plan staleness.
+            --replan). It also bypasses the probe-encode cache: everything
+            is measured fresh, nothing is reused. Plans are only consulted
+            for explicit encode runs; watch mode passes True to stay
+            independent of plan staleness (and therefore also re-probes
+            fresh).
 
     Returns:
         QualityResult: The result of the encode.
@@ -1878,6 +2081,9 @@ def encode_with_quality(
                 db_file=db_file,
                 encoder_threads=encoder_threads,
                 progress=progress,
+                # force_reprobe means EVERYTHING is measured fresh: the plan
+                # cache above is bypassed, and so is the probe-encode cache
+                use_probe_cache=not force_reprobe,
             )
         except SkipEncode as e:
             return QualityResult(
