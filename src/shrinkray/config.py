@@ -13,6 +13,23 @@ DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
 DEFAULT_LANGUAGE = "en"
 DEFAULT_MAX_THREADS = 0  # 0 = use all cores
 DEFAULT_IDLE_PRIORITY = True
+# quality mode's encoder speed preset (x264/x265 ladder; see #21 for AV1)
+DEFAULT_ENCODER_PRESET = "medium"
+# the speed-preset vocabulary of the x264/x265 encoders (HandBrake passes the
+# value through to --encoder-preset; anything else is rejected at load, never
+# misparsed by HandBrake)
+ENCODER_PRESETS = (
+    "ultrafast",
+    "superfast",
+    "veryfast",
+    "faster",
+    "fast",
+    "medium",
+    "slow",
+    "slower",
+    "veryslow",
+    "placebo",
+)
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
 
@@ -54,6 +71,19 @@ class Conf:
         handbrake: dict[str, Any] = data.get("handbrake") or {}
         self.handbrake_preset: str = handbrake.get("preset", "Fast 1080p30")
         self.handbrake_encoder: str = handbrake.get("encoder", "x265")
+        # quality mode's encoder SPEED preset (x264/x265 ladder; the SVT-AV1
+        # numeric vocabulary replaces it when #21 lands). Distinct from
+        # handbrake.preset above: that one is the FIXED-mode HandBrake preset
+        # NAME (e.g. 'Fast 1080p30'); this one is the per-encode speed of the
+        # quality search's CRF runs — two keys named 'preset' with different
+        # meanings is a footgun, so the distinction is stated here (issue #31)
+        self.handbrake_encoder_preset: str = handbrake.get("encoder_preset", DEFAULT_ENCODER_PRESET)
+        if self.handbrake_encoder_preset not in ENCODER_PRESETS:
+            raise ValueError(
+                f"handbrake.encoder_preset: '{self.handbrake_encoder_preset}' is not a "
+                f"valid speed preset for encoder '{self.handbrake_encoder}' "
+                f"(valid: {', '.join(ENCODER_PRESETS)})"
+            )
         # thread cap for the encoder (0 = use all cores); keeps cores free
         # for a media server running next to the encode on a small machine
         self.handbrake_max_threads: int = int(handbrake.get("max_threads", DEFAULT_MAX_THREADS))

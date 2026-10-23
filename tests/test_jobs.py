@@ -154,6 +154,71 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(row["chosen_crf"], 21)
         self.assertEqual(row["path"], str(movie))
 
+    def test_plan_job_passes_encoder_preset(self):
+        """The plan job threads the preset: a payload override wins, the
+        config value is the fallback (issue #31: the preset was a constant
+        no entry point could override)."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Preset Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        fake_result = _NS(
+            input=movie,
+            output=movie,
+            success=True,
+            target_vmaf=95.0,
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            probes=[],
+            input_size=16,
+            output_size=8,
+            saved_percent=50.0,
+            error=None,
+            skipped_reason=None,
+            encoder_preset="slow",
+            remove_bars=False,
+            crop=None,
+            crf_range=(14, 32),
+            sample_count=3,
+            sample_seconds=10.0,
+            hdr=False,
+            encoder="x265",
+        )
+        # a payload override reaches the engine...
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.PLAN,
+                payload={"paths": [str(movie)], "encoder_preset": "slower"},
+            )
+        )
+        with (
+            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan,
+            _patch("shrinkray.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event())
+        self.assertEqual(fake_plan.call_args.kwargs.get("encoder_preset"), "slower")
+        # ...and without one, the config value does
+        job2 = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        with (
+            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan2,
+            _patch("shrinkray.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job2, self.connection, threading.Event())
+        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "medium")
+
     def test_encode_single_file_payload(self):
         """A per-movie encode payload (a FILE path, as the UI's detail page
         sends) resolves to exactly one movie — regression: execute_encode

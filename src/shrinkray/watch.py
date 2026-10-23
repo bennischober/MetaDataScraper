@@ -197,6 +197,7 @@ def watch(
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     remove_bars: bool = False,
     encoder: str = "x265",
+    encoder_preset: str = "medium",
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
     max_threads: int | None = None,
@@ -308,6 +309,7 @@ def watch(
                             target_vmaf=target_vmaf,
                             remove_bars=remove_bars,
                             encoder=encoder,
+                            encoder_preset=encoder_preset,
                             encoder_threads=cap_threads(max_threads),
                             db_file=db_file,
                             # inbox automation must not silently depend on
