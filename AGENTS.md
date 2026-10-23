@@ -51,11 +51,15 @@ is sacred — source files are never modified in place.
 - **Type hints are checked by mypy** with `check_untyped_defs` and
   `no_implicit_optional`. New public functions get full type hints and a
   docstring in Google style (see existing modules for the pattern).
-- **Tests live in `tests/test_shrinkray.py`**, plain `unittest`
-  classes run by pytest. New features need tests; bug fixes need a test
-  that would have caught the bug. Tests must not require ffmpeg/HandBrake
-  binaries or network access — mock or use `tmp_path` fixtures. Tests
-  that touch the filesystem or path scopes use **real `tempfile`
+- **Tests live in `tests/` as plain `unittest`** classes run by pytest,
+  one file per source module (`test_encode.py`, `test_quality.py`,
+  `test_watch.py`, `test_db.py`, `test_report.py`, `test_cli.py`,
+  `test_jobs.py`, `test_dedupe.py`, `test_resources.py`,
+  `test_media.py`, `test_misc.py`). New features need tests; bug fixes
+  need a test that would have caught the bug. Tests must not require
+  ffmpeg/HandBrake binaries or network access — mock or use `tmp_path`
+  fixtures. Tests that touch the filesystem or path scopes use **real
+  `tempfile`
   directories, never fictional paths** (`D:/Movies` is absolute on
   Windows but a relative path on Linux/CI — scope containment and
   `resolve()` behave differently and the local gate cannot see it).
