@@ -341,7 +341,7 @@ The chrome itself is themed per `[data-theme]`: `color-scheme: dark|light` (nati
 
 Two tiers, one discipline (the snapshot's own docstring is the contract):
 
-- **Tier 1 — the poll.** `/api/snapshot` is the only endpoint the UI polls (adaptive 1s/3s/10s): status + jobs + library in **one round-trip under one lock pass**, library ETag-cached (`"library": null` when unchanged). Nothing else ever polls.
+- **Tier 1 — the poll.** `/api/snapshot` is the only endpoint the UI polls (adaptive 1s/3s/10s): status + jobs + library in **one round-trip under one lock pass**, library and job history both ETag-cached (`null` when unchanged — the library fingerprint covers the files table, the jobs fingerprint covers the returned window's `(id, state)` **plus the running window's `result` column**, because `report_progress` mutates running rows in place; a fingerprint that only watched state froze every live progress bar mid-encode). Nothing else ever polls.
 - **Tier 2 — on-demand detail.** Data only one view needs, fetched once when that view opens, never polled, no ETag: `/api/duplicates` (duplicates page), `/api/movie` (provenance page — file facts + COMPLETE encode history), `/api/config`. `POST` verbs (`encode`, `plan`, `reveal`, delete) are commands, not retrieval.
 - **Discipline every retrieval endpoint follows:** one request = one lock pass (a write between two separate reads would return data that never coexisted), argument lists and allowlist validation for anything path-shaped, and **no refetching what the snapshot already delivered** — the provenance page filters the app's in-memory job list locally instead of re-hitting `/api/jobs`.
 
