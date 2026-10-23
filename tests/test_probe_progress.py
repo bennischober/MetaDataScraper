@@ -183,3 +183,53 @@ class TestProbeProgress(unittest.TestCase):
             quality.plan_quality(src, encoder_threads=4)
         self.assertEqual(fake_search.call_args.kwargs.get("encoder_threads"), 4)
         self.assertEqual(fake_estimate.call_args.kwargs.get("encoder_threads"), 4)
+
+    def test_size_probe_does_not_measure_vmaf(self):
+        """The size probe only needs a byte ratio; VMAF there is a full
+        decode of both sides and the value is discarded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "s0.mkv"
+            sample.write_bytes(b"x" * 8)
+            encoded = Path(tmp) / "size_probe_crf32.mkv"
+
+            def fake_run(command, cancel=None):
+                Path(command[-1]).write_bytes(b"y" * 4)
+                return 0, ""
+
+            with (
+                patch.object(
+                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                ),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "measure_vmaf") as fake_measure,
+            ):
+                factor = quality.estimate_size_factor(
+                    [sample], Path(tmp), "hb", 32, "x265", "medium"
+                )
+        self.assertEqual(factor, 0.5)
+        fake_measure.assert_not_called()
+
+    def test_size_probe_works_without_libvmaf(self):
+        """A size-probe skip decision must not require a working libvmaf:
+        the ratio is a byte count, and a missing VMAF build used to make the
+        whole probe fail."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "s0.mkv"
+            sample.write_bytes(b"x" * 8)
+            encoded = Path(tmp) / "size_probe_crf32.mkv"
+
+            def fake_run(command, cancel=None):
+                Path(command[-1]).write_bytes(b"y" * 4)
+                return 0, ""
+
+            with (
+                patch.object(
+                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                ),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "detect_vmaf_style", side_effect=RuntimeError("no libvmaf")),
+            ):
+                factor = quality.estimate_size_factor(
+                    [sample], Path(tmp), "hb", 32, "x265", "medium"
+                )
+        self.assertEqual(factor, 0.5)

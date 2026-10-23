@@ -1034,9 +1034,7 @@ def estimate_size_factor(
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
-    db_file: Path | None = None,
     encoder_threads: int | None = None,
     progress=None,
 ) -> float:
@@ -1046,6 +1044,12 @@ def estimate_size_factor(
     (encoded / source). Values >= 1 mean the re-encode would not shrink the
     file => the movie is a skip candidate.
 
+    The ratio is a byte count, so no VMAF measurement is made here: decoding
+    both sides through libvmaf is the most expensive step in the probe pipeline
+    and its result would be discarded. A missing or broken libvmaf must not stop
+    a size-probe skip decision; movies that reach the CRF search still fail
+    loudly in `probe_crf`.
+
     Args:
         samples (list[Path]): The sample files.
         workdir (Path): Working directory for probe files.
@@ -1054,9 +1058,7 @@ def estimate_size_factor(
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         crop (tuple | None): Crop bars applied to the probe encode.
-        hdr (bool): Tone-map for the measurement.
         cancel (threading.Event | None): Cooperative cancellation.
-        db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encode.
         progress (callable | None): Callback progress(dict) for live
             step updates (flow to the UI, never persisted).
@@ -1089,7 +1091,6 @@ def estimate_size_factor(
     if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
         raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
     try:
-        measure_vmaf(encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file)
         factor = encoded.stat().st_size / sample.stat().st_size
     finally:
         encoded.unlink()
@@ -1247,7 +1248,6 @@ def find_optimal_crf_and_skip(
         encoder_preset,
         crop=crop,
         cancel=cancel,
-        db_file=db_file,
         encoder_threads=encoder_threads,
         progress=progress,
     )
@@ -1391,7 +1391,6 @@ def plan_quality(
             encoder_preset,
             crop=crop,
             cancel=cancel,
-            db_file=db_file,
             encoder_threads=encoder_threads,
             progress=progress,
         )
