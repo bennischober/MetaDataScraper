@@ -1,6 +1,6 @@
-"""Helper and integration-token tests. Split from tests/test_shrinkray.py (2026-10-23)."""
+"""Helper and config-hygiene tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
-import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -67,78 +67,38 @@ class TestHelpers(unittest.TestCase):
         self.assertTrue(row.startswith(";Test;"))
 
 
-class TestIntegrations(unittest.TestCase):
-    """Jellyfin tap-on-the-shoulder: opt-in, env token, never raises."""
+class TestRemovedIntegrationsKey(unittest.TestCase):
+    """The Jellyfin integration was removed (issue #43): a config.json that
+    still carries its 'integrations' key must load, but the removal must be
+    visible - exactly one warning naming the key, never silence."""
 
-    def setUp(self):
-        from shrinkray import integrations
-
-        self.integrations = integrations
-
-    def _conf(self, data: dict):
-        return config_helper.Conf(data)
-
-    def test_unconfigured_is_noop(self):
-        self.assertIsNone(self.integrations.jellyfin_settings(self._conf({})))
-        # notify without configuration: False, never raises
-        self.assertFalse(self.integrations.notify_jellyfin(self._conf({})))
-        self.assertEqual(self.integrations.notify_after_encodes(self._conf({}), []), 0)
-
-    def test_url_without_token_is_skipped(self):
-        conf = self._conf({"integrations": {"jellyfin": {"url": "http://nas:8096"}}})
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(self.integrations.jellyfin_settings(conf))
-
-    def test_token_from_env_var(self):
-        conf = self._conf(
-            {"integrations": {"jellyfin": {"url": "http://nas:8096/", "token_env": "MY_TOKEN_VAR"}}}
-        )
-        with mock.patch.dict(os.environ, {"MY_TOKEN_VAR": " secret "}, clear=True):
-            settings = self.integrations.jellyfin_settings(conf)
-        self.assertEqual(settings, {"url": "http://nas:8096", "token": "secret"})
-
-    def test_notify_posts_to_refresh_endpoint(self):
-        """A configured integration POSTs to {url}/Library/Refresh with the token."""
-        conf = self._conf({"integrations": {"jellyfin": {"url": "http://nas:8096"}}})
-        captured: dict = {}
-
-        class FakeResponse:
-            status = 204
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-        def fake_urlopen(request, timeout):
-            captured["url"] = request.full_url
-            captured["method"] = request.get_method()
-            # urllib capitalizes header keys ("X-emby-token") => match loosely
-            captured["token"] = next(
-                (v for k, v in request.headers.items() if k.lower() == "x-emby-token"), None
+    def test_leftover_key_warns_once_and_still_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                '{"integrations": {"jellyfin": {"url": "http://nas:8096"}}}',
+                encoding="utf-8",
             )
-            return FakeResponse()
+            with (
+                mock.patch.object(config_helper, "_config", None),
+                mock.patch("shrinkray.config.log_warning") as warn,
+            ):
+                conf = config_helper.load_config(tmp)
+            # the config still loads; every other default is intact
+            self.assertEqual(conf.extensions, config_helper.DEFAULT_EXTENSIONS)
+            # exactly one warning, naming the removed key
+            self.assertEqual(warn.call_count, 1)
+            self.assertIn("integrations", warn.call_args.args[0])
 
-        with (
-            mock.patch.dict(os.environ, {"SHRINKRAY_JELLYFIN_TOKEN": "tok"}, clear=True),
-            mock.patch("urllib.request.urlopen", fake_urlopen),
-        ):
-            ok = self.integrations.notify_jellyfin(conf)
-        self.assertTrue(ok)
-        self.assertEqual(captured["url"], "http://nas:8096/Library/Refresh")
-        self.assertEqual(captured["token"], "tok")
-        self.assertEqual(captured["method"], "POST")
-
-    def test_notify_never_raises(self):
-        """Server down / bad response => False and a log, no exception."""
-        conf = self._conf({"integrations": {"jellyfin": {"url": "http://127.0.0.1:9"}}})
-        with mock.patch.dict(os.environ, {"SHRINKRAY_JELLYFIN_TOKEN": "tok"}, clear=True):
-            self.assertFalse(self.integrations.notify_jellyfin(conf, timeout=0.2))
-
-    def test_notify_after_encodes_counts(self):
-        conf = self._conf({})
-        self.assertEqual(self.integrations.notify_after_encodes(conf, [Path("a.mkv")]), 1)
+    def test_clean_config_does_not_warn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(config_helper, "_config", None),
+                mock.patch("shrinkray.config.log_warning") as warn,
+            ):
+                config_helper.load_config(tmp)
+            # the 'config file not found' warning is the only expected one
+            self.assertFalse(any("integrations" in str(call.args) for call in warn.call_args_list))
 
 
 if __name__ == "__main__":

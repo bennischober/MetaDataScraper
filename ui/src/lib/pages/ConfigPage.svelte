@@ -50,16 +50,6 @@
     if (!config) return
     config = { ...config, handbrake: { ...config.handbrake, max_threads: value } }
   }
-  function updateJellyfin(patch: { url?: string; token_env?: string }) {
-    if (!config) return
-    config = {
-      ...config,
-      integrations: {
-        ...config.integrations,
-        jellyfin: { ...config.integrations?.jellyfin, ...patch },
-      },
-    }
-  }
   let saveError = $state<string | null>(null)
   let saved = $state(false)
   let busy = $state(false)
@@ -307,45 +297,6 @@
           />
         </label>
         <p class="mono dim note">e.g. 8 on a 16-core mini PC leaves half the machine for a media server</p>
-      </div>
-    {/if}
-  </section>
-
-  <!-- ══ media-server integration (config.json; SAVE CONFIG model) ══ -->
-  <section class="panel">
-    <div class="panel-head">
-      <span class="legend">JELLYFIN — LIBRARY REFRESH AFTER ENCODES</span>
-      <span class="mono dim saved-note">applies on SAVE CONFIG</span>
-    </div>
-    {#if !config}
-      <div class="dim pad">loading…</div>
-    {:else}
-      <div class="pad groups">
-        <label class="field">
-          <span class="dim">server url</span>
-          <input
-            class="mono"
-            placeholder="http://nas:8096"
-            value={config.integrations?.jellyfin?.url ?? ''}
-            onchange={(e) => updateJellyfin({ url: e.currentTarget.value.trim() })}
-            aria-label="Jellyfin server URL"
-          />
-        </label>
-        <label class="field">
-          <span class="dim">token env variable</span>
-          <input
-            class="mono"
-            placeholder="SHRINKRAY_JELLYFIN_TOKEN"
-            value={config.integrations?.jellyfin?.token_env ?? ''}
-            onchange={(e) => updateJellyfin({ token_env: e.currentTarget.value.trim() })}
-            aria-label="Name of the environment variable holding the Jellyfin token"
-          />
-        </label>
-        <p class="mono dim note">
-          opt-in, off by default — one POST /Library/Refresh after a successful encode batch, nothing else.
-          empty url = integration off. the token itself never lives here: this field names the environment
-          variable that holds it (secrets discipline — config.json is a tracked file).
-        </p>
       </div>
     {/if}
   </section>

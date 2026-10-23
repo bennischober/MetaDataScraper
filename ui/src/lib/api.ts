@@ -151,9 +151,6 @@ export interface Config {
   ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number } }
   handbrake?: { preset?: string; encoder?: string; max_threads?: number }
   resources?: { idle_priority?: boolean }
-  integrations?: {
-    jellyfin?: { url?: string; token_env?: string }
-  }
   language?: string
 }
 

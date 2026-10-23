@@ -574,19 +574,16 @@ class TestDb(unittest.TestCase):
             self.assertIn("max_threads", body["handbrake"])
             self.assertIn("resources", body)
             self.assertIn("idle_priority", body["resources"])
-            self.assertIn("integrations", body)
+            # the removed integrations key (issue #43) is gone from the API
+            self.assertNotIn("integrations", body)
             # PUT round-trips the new sections (the app's contract is PUT)
             body["resources"]["idle_priority"] = False
             body["handbrake"]["max_threads"] = 8
-            body["integrations"] = {"jellyfin": {"url": "http://nas:8096", "token_env": "TOK"}}
             saved = client.put("/api/config", json=body)
             self.assertEqual(saved.status_code, 200)
             reread = client.get("/api/config").json()
             self.assertFalse(reread["resources"]["idle_priority"])
             self.assertEqual(reread["handbrake"]["max_threads"], 8)
-            self.assertEqual(reread["integrations"]["jellyfin"]["url"], "http://nas:8096")
-            # the token env NAME persists; no secret value ever does
-            self.assertEqual(reread["integrations"]["jellyfin"]["token_env"], "TOK")
         finally:
             app_module.state.shutdown()
             app_module.state = None
