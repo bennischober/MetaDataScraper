@@ -83,7 +83,7 @@ def derive_generation(connection, movie: Path) -> int:
     return 1
 
 
-def record_plan(connection, movie, result, config, target_vmaf: float) -> int | None:
+def record_plan(connection, movie, result, config) -> int | None:
     """Persists a plan decision for one movie (the encode-path "quicksave").
 
     Stores the LATEST decision per file (upsert): the chosen CRF with its
@@ -95,7 +95,6 @@ def record_plan(connection, movie, result, config, target_vmaf: float) -> int | 
         movie (Path): The input movie file.
         result (QualityResult): The plan's engine result.
         config (Conf): The config settings.
-        target_vmaf (float): The VMAF target of the run.
 
     Returns:
         int | None: The plan row id, or None when the movie has no file
@@ -303,7 +302,7 @@ def finished_movies(connection, movies: list, output_dir) -> set[str]:
     return finished
 
 
-def record_quality_results(connection, movie, result, config, target_vmaf: float) -> EncodeOutcome:
+def record_quality_results(connection, movie, result, config) -> EncodeOutcome:
     """Persists the result of one quality-mode encode (or skip).
 
     Args:
@@ -311,7 +310,6 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
         movie (Path): The input movie file.
         result (QualityResult): The engine result.
         config (Conf): The config settings.
-        target_vmaf (float): The VMAF quality floor of the run.
 
     Returns:
         EncodeOutcome: What happened (encoded / skipped / failed).
@@ -320,7 +318,10 @@ def record_quality_results(connection, movie, result, config, target_vmaf: float
         encode_id = save_encode(
             connection,
             movie,
-            f"VMAF>{target_vmaf}",
+            # the EFFECTIVE target, not the caller's: for HDR the engine
+            # overrides it (DEFAULT_HDR_TARGET_VMAF), and the row must record
+            # the target the encode was actually decided against
+            f"VMAF>{result.target_vmaf}",
             config.handbrake_encoder,
             result.input_size,
             result.output_size,

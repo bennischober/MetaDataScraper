@@ -116,7 +116,7 @@ class TestSmokePlanReuse(unittest.TestCase):
             f"plan skipped the movie: {plan_result.skipped_reason!r} "
             "(the smoke source must leave room for an x265 size gain)",
         )
-        service.record_plan(self.connection, self.clip, plan_result, self.config, 95.0)
+        service.record_plan(self.connection, self.clip, plan_result, self.config)
         plans = self.connection.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
         self.assertEqual(plans, 1, "the plan run must record its decision")
 
@@ -132,7 +132,7 @@ class TestSmokePlanReuse(unittest.TestCase):
         self.assertEqual(result.crf_source, "plan")
         self.assertEqual(result.chosen_crf, plan_result.chosen_crf)
         # persist like the job worker/CLI do, then check provenance lands
-        service.record_quality_results(self.connection, self.clip, result, self.config, 95.0)
+        service.record_quality_results(self.connection, self.clip, result, self.config)
         row = self.connection.execute(
             "SELECT crf_source FROM encodes ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -146,7 +146,7 @@ class TestSmokePlanReuse(unittest.TestCase):
 
         plan_result = plan_quality(self.clip, db_file=self.db_file)
         self.assertTrue(plan_result.success, plan_result.skipped_reason)
-        service.record_plan(self.connection, self.clip, plan_result, self.config, 95.0)
+        service.record_plan(self.connection, self.clip, plan_result, self.config)
 
         calls: list = []
         with mock.patch.object(quality, "_probe_movie", side_effect=self._plan_probe_spy(calls)):
@@ -159,7 +159,7 @@ class TestSmokePlanReuse(unittest.TestCase):
         self.assertEqual(len(calls), 1, "changed settings must trigger a real re-probe")
         self.assertTrue(result.success, f"encode failed: {result.error!r}")
         self.assertEqual(result.crf_source, "probe")
-        service.record_quality_results(self.connection, self.clip, result, self.config, 90.0)
+        service.record_quality_results(self.connection, self.clip, result, self.config)
         row = self.connection.execute(
             "SELECT crf_source FROM encodes ORDER BY id DESC LIMIT 1"
         ).fetchone()

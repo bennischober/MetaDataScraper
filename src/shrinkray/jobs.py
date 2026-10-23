@@ -677,7 +677,7 @@ def execute_plan(
         # file row, the plan is simply not reusable then.
         from shrinkray.service import record_plan
 
-        record_plan(connection, movie, result, config, payload.get("target_vmaf", 95.0))
+        record_plan(connection, movie, result, config)
         entry = {
             "movie": movie.name,
             "state": "skip" if result.skipped_reason else "encode",
@@ -765,9 +765,7 @@ def execute_encode(
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                 continue
-            outcome = record_quality_results(
-                connection, movie, result, config, payload.get("target_vmaf", 95.0)
-            )
+            outcome = record_quality_results(connection, movie, result, config)
             if outcome.encoded:
                 encoded_for_notify.append(movie)
             entry = {

@@ -228,7 +228,7 @@ class TestPlanReuse(unittest.TestCase):
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
         record_plan = overrides.pop("record_plan", service.record_plan)
-        record_plan(self.connection, movie, result, config, 95.0)
+        record_plan(self.connection, movie, result, config)
 
     def _encode(self, movie: Path, **kwargs):
         """Runs encode_with_quality with every external seam mocked."""
@@ -289,7 +289,7 @@ class TestPlanReuse(unittest.TestCase):
         # the caller (job worker / CLI) persists the result; the encodes row
         # carries the provenance
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
-        service.record_quality_results(self.connection, movie, result, config, 95.0)
+        service.record_quality_results(self.connection, movie, result, config)
         row = self.connection.execute(
             "SELECT crf_source, plan_created_at FROM encodes ORDER BY id DESC LIMIT 1"
         ).fetchone()
