@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at TEXT,
     finished_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS probe_cache (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -165,6 +171,19 @@ def plans_table_migration(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id);
+        """
+    )
+
+
+def probe_cache_table_migration(connection: sqlite3.Connection) -> None:
+    """Migration v9 -> v10: create the probe-encode cache table."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS probe_cache (
+            key TEXT PRIMARY KEY,
+            value REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
         """
     )
 
@@ -222,6 +241,14 @@ MIGRATIONS = {
         "ALTER TABLE encodes ADD COLUMN crf_source TEXT",
         "ALTER TABLE encodes ADD COLUMN plan_created_at TEXT",
     ],
+    10: [
+        # probe-encode cache (issue #24): individual probe measurements are
+        # content-addressed (source identity, sample window, encoder settings,
+        # crop, HDR measurement mode, tool versions), so a changed target
+        # VMAF reuses the probes already measured and a re-run of the same
+        # plan does not re-encode them. force_reprobe bypasses this cache.
+        "__probe_cache_table__",
+    ],
 }
 
 
@@ -269,6 +296,8 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 job_table_migration(connection)
             elif statement == "__plans_table__":
                 plans_table_migration(connection)
+            elif statement == "__probe_cache_table__":
+                probe_cache_table_migration(connection)
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")
@@ -565,6 +594,44 @@ def save_plan(
     )
     connection.commit()
     return int(cursor.lastrowid or 0)
+
+
+def save_probe_score(connection: sqlite3.Connection, key: str, value: float) -> None:
+    """Stores one probe measurement under its content-addressed key.
+
+    The cache is an optimization, never a decision input on its own: a row
+    is only read back when EVERY input that can change the measurement
+    matches (see probe_cache_key in quality.py). Upsert: a re-measured probe
+    overwrites its own entry.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        key (str): The sha256 cache key (probe_cache_key).
+        value (float): The measured VMAF score or size factor.
+    """
+    connection.execute(
+        """
+        INSERT INTO probe_cache (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                       created_at = datetime('now')
+        """,
+        (key, value),
+    )
+    connection.commit()
+
+
+def get_probe_score(connection: sqlite3.Connection, key: str) -> float | None:
+    """Returns the cached measurement for a cache key, or None.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        key (str): The sha256 cache key (probe_cache_key).
+
+    Returns:
+        float | None: The stored value, or None when not cached.
+    """
+    row = connection.execute("SELECT value FROM probe_cache WHERE key = ?", (key,)).fetchone()
+    return float(row["value"]) if row is not None else None
 
 
 def get_valid_plan(
