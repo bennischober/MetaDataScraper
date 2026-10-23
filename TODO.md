@@ -30,7 +30,14 @@
 - [x] Live job progress: SSE stream (/api/events, ProgressBus pub-sub) -
       percent glides during encodes (chunk pump fix 8e86d82 made the
       piped percent lines visible at all), probe steps stream since
-      75e4139; plan-cache reuse is the agreed next round
+      75e4139
+- [x] Plan-cache reuse ("quicksave", 34539b4): a plan run persists its
+      decision (CRF or skip verdict + fingerprint) per file; an encode
+      of an unchanged file with unchanged settings skips probing
+      entirely and encodes straight at the planned CRF (crf_source
+      provenance in the encodes row; --replan / force_reprobe escape
+      hatch; watch mode deliberately never consults plans). Spec:
+      docs/plan-reuse.md
 - [ ] Retry from job payload verbatim (current retry re-binds the form;
       critique P1) + history filter matching all job paths (multi-folder
       batches show "no jobs" per movie today)
