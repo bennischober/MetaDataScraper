@@ -95,11 +95,12 @@ Remaining liveness gap (out of scope here, deliberate):
       ceremony: explicit flag, per-file confirmation in the UI, dry-run
       mapping first. Nothing gets built before the user approves the design.
 
-### CI/testing hygiene (small)
-- [ ] Tests for `compare` and `report` commands (compare was live-smoked
-      only)
-- [ ] `uv lock --check` in CI (catch lockfile drift)
-- [ ] CI concurrency group (two quick pushes currently run parallel full
+### CI/testing hygiene (small) — done 2026-10-23
+- [x] Tests for `compare`, `report` and `doctor` CLI surfaces (compare was
+      live-smoked only). Report also gained the Verified column (B5
+      verification data) and creates a missing output directory now.
+- [x] `uv lock --check` in CI (catch lockfile drift)
+- [x] CI concurrency group (two quick pushes currently run parallel full
       runs)
 
 ### Decisions (2026-10-22)
