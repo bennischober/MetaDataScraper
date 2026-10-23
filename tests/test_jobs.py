@@ -191,23 +191,57 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertEqual(reloaded.error, "boom")
 
-    def test_terminal_states_clear_stale_progress(self):
-        """fail()/mark_cancelled() drop the last progress dict (regression:
-        terminated rows kept their live-state payload forever — invisible
-        to the UI, dead weight in every snapshot)."""
-        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
-        taken = self.queue.take_next()
-        self.queue.report_progress(taken, {"stage": "encode", "percent": 40})
-        self.queue.fail(taken, "boom")
-        reloaded = self.queue.get(taken.id)
-        self.assertIsNone(reloaded.result)
+    def test_progress_never_persists_and_fans_out(self):
+        """report_progress publishes to the bus only (regression for the
+        DB-as-bus era: the running row's result column stays NULL — the
+        database stores no live state — while the seed cache carries the
+        latest event for SSE subscribers)."""
+        bus = jobs.ProgressBus()
+        q = jobs.JobQueue(self.connection, bus=bus)
+        q.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = q.take_next()
+        q.report_progress(taken, {"stage": "encode", "percent": 40})
+        reloaded = q.get(taken.id)
+        self.assertIsNone(reloaded.result)  # nothing persisted
+        self.assertEqual(bus.latest().get(taken.id), {"stage": "encode", "percent": 40})
+        # a subscriber present BEFORE the publish receives the event
+        sid, box, seed = bus.subscribe()
+        self.assertEqual(seed, [(taken.id, {"stage": "encode", "percent": 40})])
+        q.report_progress(taken, {"stage": "encode", "percent": 60})
+        self.assertEqual(box.get_nowait(), (taken.id, {"stage": "encode", "percent": 60}))
+        bus.unsubscribe(sid)
 
-        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
-        taken2 = self.queue.take_next()
-        self.queue.report_progress(taken2, {"stage": "scan", "percent": 10})
-        self.queue.mark_cancelled(taken2)
-        reloaded2 = self.queue.get(taken2.id)
-        self.assertIsNone(reloaded2.result)
+    def test_bus_seed_cache_and_late_subscriber(self):
+        """The bus seeds late subscribers with the latest event per job and
+        forgets jobs on terminal writes (the cache must not grow forever)."""
+        bus = jobs.ProgressBus()
+        q = jobs.JobQueue(self.connection, bus=bus)
+        q.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = q.take_next()
+        q.report_progress(taken, {"percent": 10})
+        q.report_progress(taken, {"percent": 20})  # replaces, not accumulates
+        sid, _box, seed = bus.subscribe()  # late subscriber
+        self.assertEqual(seed, [(taken.id, {"percent": 20})])
+        # terminal write drops the job from the seed cache
+        q.finish(taken, {"movies": 1})
+        self.assertEqual(bus.latest(), {})
+        bus.unsubscribe(sid)
+
+    def test_bus_mailbox_bounded_drop_oldest(self):
+        """A slow consumer's mailbox drops the oldest event instead of
+        growing or stalling the producer (progress is replaceable)."""
+        bus = jobs.ProgressBus()
+        sid, box, _ = bus.subscribe()
+        self.addCleanup(bus.unsubscribe, sid)
+        for p in range(100):
+            bus.publish(1, {"percent": p})
+        events = []
+        while not box.empty():
+            events.append(box.get_nowait())
+        self.assertEqual(len(events), jobs.MAILBOX_SIZE)
+        # the surviving events are the NEWEST ones
+        self.assertEqual(events[-1], (1, {"percent": 99}))
+        self.assertEqual(events[0], (1, {"percent": 100 - jobs.MAILBOX_SIZE}))
 
     def test_cancelled_job_keeps_partial_result(self):
         """A graceful cancel carries the engine's partial result — the UI
@@ -215,7 +249,6 @@ class TestJobs(unittest.TestCase):
         outcomes from done OR cancelled rows)."""
         self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
         taken = self.queue.take_next()
-        self.queue.report_progress(taken, {"percent": 50})
         self.queue.mark_cancelled(taken, {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]})
         reloaded = self.queue.get(taken.id)
         self.assertEqual(reloaded.result["outcomes"][0]["movie"], "a.mkv")

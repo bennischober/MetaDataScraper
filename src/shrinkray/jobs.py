@@ -11,7 +11,9 @@ job runs; the queue itself is protected by a lock and both the API layer
 and the worker talk to it through JobQueue's methods only.
 """
 
+import contextlib
 import json
+import queue
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -26,6 +28,14 @@ from shrinkray.quality import Cancelled
 # anything beyond the cap is hard-deleted on the next terminal write. The
 # library's own history lives in files/encodes and is NOT affected.
 JOB_RETENTION = 100
+
+# live progress is FLOW, not state: it is never persisted (a running job's
+# row keeps result = NULL) and dies with the process. The bus fans each
+# engine callback out to every SSE subscriber; each subscriber gets a
+# bounded mailbox (drop-oldest — progress is replaceable, only the latest
+# percent matters) and a seed of the latest event per job on connect, so a
+# late-joining tab renders the running band instantly.
+MAILBOX_SIZE = 64
 
 
 class JobState(str, Enum):
@@ -111,6 +121,92 @@ def _row_to_job(row: sqlite3.Row) -> Job:
     )
 
 
+class ProgressBus:
+    """In-memory pub-sub for live job progress (flow, never persisted).
+
+    The worker thread publishes each engine callback; SSE handlers
+    subscribe with a bounded mailbox and drain it into the browser. The
+    latest event per job is kept as the seed for late subscribers (a newly
+    opened tab renders the running band without waiting for the next
+    engine tick). Thread discipline mirrors the JobQueue/cancel-event
+    registry: producers and consumers are arbitrary threads, all state
+    changes under one lock, mailboxes are bounded queue.Queue instances
+    (drop-oldest, because progress is replaceable — only the latest
+    percent matters).
+    """
+
+    def __init__(self):
+        """Initializes the bus (no subscribers, empty seed cache)."""
+        self._lock = threading.Lock()
+        self._subs: dict[int, queue.Queue] = {}
+        self._last: dict[int, dict] = {}
+        self._next_id = 0
+
+    def publish(self, job_id: int, data: dict):
+        """Fans a progress event out to every subscriber (worker thread).
+
+        Non-blocking by construction: a slow consumer's mailbox drops its
+        oldest event instead of stalling the engine.
+
+        Args:
+            job_id (int): The running job's id.
+            data (dict): The engine's progress data (JSON-able).
+        """
+        with self._lock:
+            self._last[job_id] = data
+            for box in self._subs.values():
+                if box.full():
+                    with contextlib.suppress(queue.Empty):
+                        box.get_nowait()  # drop-oldest
+                box.put_nowait((job_id, data))
+
+    def subscribe(self) -> tuple[int, "queue.Queue", list[tuple[int, dict]]]:
+        """Registers a subscriber and returns its mailbox and seed events.
+
+        Returns:
+            tuple[int, queue.Queue, list[tuple[int, dict]]]: The subscriber
+            id, its bounded mailbox, and the latest event per job (the
+            seed; may be empty).
+        """
+        with self._lock:
+            self._next_id += 1
+            sid = self._next_id
+            box: queue.Queue = queue.Queue(maxsize=MAILBOX_SIZE)
+            self._subs[sid] = box
+            return sid, box, list(self._last.items())
+
+    def unsubscribe(self, sid: int):
+        """Removes a subscriber (SSE handler's finally block).
+
+        Args:
+            sid (int): The subscriber id from subscribe().
+        """
+        with self._lock:
+            self._subs.pop(sid, None)
+
+    def forget(self, job_id: int):
+        """Drops a job from the seed cache (terminal state reached).
+
+        Called by the queue's terminal writes: a finished job's progress is
+        dead live state — without this the cache would grow with every job
+        id over the app's lifetime.
+
+        Args:
+            job_id (int): The job to drop from the cache.
+        """
+        with self._lock:
+            self._last.pop(job_id, None)
+
+    def latest(self) -> dict[int, dict]:
+        """Returns the latest event per job (seed-cache inspection, tests).
+
+        Returns:
+            dict[int, dict]: Job id -> latest progress data.
+        """
+        with self._lock:
+            return dict(self._last)
+
+
 class JobQueue:
     """A persistent job queue backed by the sqlite database.
 
@@ -119,13 +215,16 @@ class JobQueue:
     the UI and the CLI). The worker thread consumes one job at a time.
     """
 
-    def __init__(self, connection: sqlite3.Connection):
+    def __init__(self, connection: sqlite3.Connection, bus: "ProgressBus | None" = None):
         """Initializes the queue on an open database connection.
 
         Args:
             connection (sqlite3.Connection): The database connection.
+            bus (ProgressBus | None): The live-progress bus (None in
+                CLI/tests without a resident app — progress is dropped).
         """
         self._connection = connection
+        self._bus = bus
         self._lock = threading.Lock()
         self._pending: list[Job] = []
         self._cancel_events: dict[int, threading.Event] = {}
@@ -179,22 +278,20 @@ class JobQueue:
         return job
 
     def report_progress(self, job: Job, progress: dict):
-        """Updates a running job's live progress (visible to API consumers).
+        """Publishes a running job's live progress (flow, never persisted).
 
-        The progress dict is stored in the job's result column with a
-        'progress' wrapper so the UI can render live state without the job
-        being finished. Only the worker thread calls this.
+        The event goes to the bus (SSE subscribers + seed cache) only — the
+        job's row keeps ``result = NULL`` while running, so the database
+        stores no live state and every progress consumer is a subscriber.
+        Only the worker thread calls this.
 
         Args:
             job (Job): The running job.
             progress (dict): The current progress data (JSON-able).
         """
-        job.result = {"progress": progress}
-        self._connection.execute(
-            "UPDATE jobs SET result = ? WHERE id = ?",
-            (json.dumps(job.result), job.id),
-        )
-        self._connection.commit()
+        job.result = None
+        if self._bus is not None:
+            self._bus.publish(job.id or 0, progress)
 
     def finish(self, job: Job, result: dict):
         """Marks a job as done and stores its result.
@@ -210,6 +307,8 @@ class JobQueue:
             (JobState.DONE.value, json.dumps(result), job.id),
         )
         self._prune_history()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
         self._connection.commit()
 
     def _prune_history(self):
@@ -256,6 +355,8 @@ class JobQueue:
             (JobState.FAILED.value, error, job.id),
         )
         self._prune_history()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
         self._connection.commit()
 
     def mark_cancelled(self, job: Job, result: dict | None = None):
@@ -276,6 +377,8 @@ class JobQueue:
             (JobState.CANCELLED.value, json.dumps(result) if result is not None else None, job.id),
         )
         self._prune_history()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
         self._connection.commit()
 
     def cancel(self, job_id: int) -> bool:

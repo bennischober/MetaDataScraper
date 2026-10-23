@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fmtGb, fmtWhen, fmtSpan, humanizeError, type Job } from '../api'
+  import { progressFor } from '../progress.svelte'
 
   /** The run log as an event log: every job with its timestamps, wall
    * duration, and expandable payload/result — the tool's audit trail. */
@@ -14,16 +15,7 @@
     onretry: (job: Job) => void
   } = $props()
 
-  interface ProgressData {
-    stage?: string
-    detail?: string
-    done?: number
-    total?: number
-    movie?: string
-    percent?: number
-  }
-  const progress = (job: Job) =>
-    (job.result as { progress?: ProgressData } | null)?.progress ?? null
+  const progress = (job: Job) => progressFor(job.id)
 
   let now = $state(Date.now())
   $effect(() => {

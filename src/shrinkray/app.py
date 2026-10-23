@@ -10,20 +10,21 @@ Run with `shrinkray app`.
 import json
 import os
 import os.path
+import queue
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import load_config
 from shrinkray.dedupe import find_duplicates
 from shrinkray.encode import cap_threads
-from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker
+from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
 from shrinkray.watch import watch
@@ -182,7 +183,8 @@ class AppState:
         self.db_file = db_file
         self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
-        self.queue = JobQueue(self.connection)
+        self.bus = ProgressBus()
+        self.queue = JobQueue(self.connection, bus=self.bus)
         self.worker = JobWorker(self.connection, self.queue)
         with self.db_lock:
             self._recover_stale_jobs()
@@ -674,17 +676,11 @@ def snapshot(
             "jobs": jobs,
             "running": running,
             "fingerprint": tuple(fingerprint),
-            # a FINISHED job row never mutates, so (id, state) is a sound
-            # change signal — but a RUNNING job's result column is the live
-            # progress feed (report_progress writes it every few seconds
-            # while state stays 'running'). The fingerprint must cover the
-            # running window's result too, or the UI's progress bars freeze
-            # mid-encode (the round-6.10 miss: enqueue-only test never saw
-            # it — the sim plan/encode on the review copy caught it live).
-            "jobs_fp": tuple(
-                (j.id, j.state.value, j.result if j.state.value == "running" else None)
-                for j in jobs
-            ),
+            # (id, state) is a sound change signal: a running row never
+            # mutates (live progress is flow on /api/events, the row keeps
+            # result = NULL), and a terminated row is written exactly once
+            # by the state transition itself.
+            "jobs_fp": tuple((j.id, j.state.value) for j in jobs),
             "rss_mib": rss_mib(),
         }
 
@@ -763,6 +759,51 @@ def snapshot(
         "library": library,
         "library_etag": etag_lib,
     }
+
+
+@app.get("/api/events")
+def events() -> StreamingResponse:
+    """Streams live job progress as server-sent events.
+
+    The one flow channel (state stays on the ETag-cached poll): each
+    subscriber gets a bounded mailbox drained into SSE frames —
+    ``data: {"job_id": N, ...progress}`` per engine tick, a ``hello`` frame
+    seeding the latest known progress per job on connect (page load,
+    reconnect), and a ping comment every 15 s to keep intermediaries from
+    closing an idle connection and to detect dead tabs. The generator
+    blocks on its mailbox with a timeout so the ping interleaves; the bus
+    is unregistered in the finally block. No auth beyond localhost.
+
+    Returns:
+        StreamingResponse: text/event-stream; the generator runs until the
+        client disconnects.
+    """
+    s = get_state()
+    sid, box, seed = s.bus.subscribe()
+
+    def stream():
+        """Drains the mailbox into SSE frames until the client leaves."""
+        try:
+            yield "retry: 3000\n\n"
+            # always hello: authoritative seed on connect AND reconnect —
+            # carries the latest event of every live job (empty after a
+            # quiet stretch, which resets the client's map correctly)
+            yield "event: hello\n"
+            yield "data: " + json.dumps({"jobs": {str(jid): d for jid, d in seed}}) + "\n\n"
+            while True:
+                try:
+                    job_id, data = box.get(timeout=15.0)
+                    yield "data: " + json.dumps({"job_id": job_id, **data}) + "\n\n"
+                except queue.Empty:
+                    yield ": ping\n\n"
+        finally:
+            s.bus.unsubscribe(sid)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/library")

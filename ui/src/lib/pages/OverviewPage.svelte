@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job } from '../api'
+  import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
   function pathEq(a: string, b: string): boolean {
@@ -77,9 +78,7 @@
   )
 
   const runningJob = $derived(runningJobs.find((j) => j.state === 'running') ?? null)
-  const runningProgress = $derived(
-    (runningJob?.result as { progress?: { movie?: string; percent?: number; done?: number; total?: number; detail?: string } } | null)?.progress ?? null
-  )
+  const runningProgress = $derived(runningJob !== null ? progressFor(runningJob.id) : null)
 
   // ETA: measured throughput (schema v5: encode_seconds per GB across all
   // recorded encodes) where available, proportional fallback otherwise

@@ -7,6 +7,7 @@
   import JobsPage from './lib/pages/JobsPage.svelte'
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
+  import { connectEvents, progressFor } from './lib/progress.svelte'
 
   type Page = 'overview' | 'library' | 'duplicates' | 'jobs' | 'config'
 
@@ -520,14 +521,13 @@
     dismissed = new Set([...dismissed, id])
   }
   const runningJob = $derived(runningJobs.find((j) => j.state === 'running') ?? null)
-  const runningProgress = $derived(
-    (runningJob?.result as { progress?: { movie?: string; percent?: number; done?: number; total?: number } } | null)?.progress ?? null
-  )
+  const runningProgress = $derived(runningJob !== null ? progressFor(runningJob.id) : null)
 
   const missingMovies = $derived(movies.filter((m) => m.missing))
 
   onMount(() => {
     poll()
+    connectEvents()
     refreshDuplicates()
     return () => {
       if (pollTimer !== null) clearTimeout(pollTimer)

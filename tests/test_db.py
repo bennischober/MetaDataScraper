@@ -610,21 +610,37 @@ class TestDb(unittest.TestCase):
             self.assertIsInstance(body4["jobs"], list)
             self.assertNotEqual(body4["jobs_etag"], body["jobs_etag"])
 
-            # a RUNNING job's progress writes must invalidate the tag too:
-            # report_progress updates the result column while state stays
-            # 'running' — the fingerprint covers the running window's
-            # result, or the UI's progress bars freeze mid-encode
+            # a RUNNING job's progress must NOT touch the tag anymore:
+            # progress is flow on /api/events (SSE), never persisted — the
+            # row keeps result = NULL and (id, state) stays a sound signal.
+            # Regression for the DB-as-bus era, when every progress write
+            # re-sent the whole jobs array mid-encode. (The queued->running
+            # transition itself DOES invalidate — a real state change.)
             job = app_module.state.queue.take_next()
             self.assertIsNotNone(job)
-            app_module.state.queue.report_progress(job, {"stage": "scan", "percent": 42})
-            fifth = client.get(
+            sixth = client.get(
                 "/api/snapshot",
                 headers={"If-None-Match": f"{body4['library_etag']}, {body4['jobs_etag']}"},
             )
+            body6 = sixth.json()
+            self.assertIsInstance(body6["jobs"], list)  # transition counted
+
+            # now the pure-progress case: same (id, state), result written
+            app_module.state.queue.report_progress(job, {"stage": "scan", "percent": 42})
+            fifth = client.get(
+                "/api/snapshot",
+                headers={"If-None-Match": f"{body6['library_etag']}, {body6['jobs_etag']}"},
+            )
             body5 = fifth.json()
             self.assertIsNone(body5["library"])
-            self.assertIsInstance(body5["jobs"], list)
-            self.assertNotEqual(body5["jobs_etag"], body4["jobs_etag"])
+            self.assertIsNone(body5["jobs"])  # unchanged: progress did not count
+            self.assertEqual(body5["jobs_etag"], body6["jobs_etag"])
+            # the running row itself carries no live state on the wire
+            self.assertTrue(all(j["result"] is None for j in body5["status"]["queue"]))
+            # ...but the progress IS live on the bus (seed for SSE subs)
+            self.assertEqual(
+                app_module.state.bus.latest().get(job.id), {"stage": "scan", "percent": 42}
+            )
 
             # a change re-validates the library in the next snapshot
             db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1, 1, 0.0)
