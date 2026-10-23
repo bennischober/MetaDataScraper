@@ -2219,6 +2219,57 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertEqual(reloaded.error, "boom")
 
+    def test_terminal_states_clear_stale_progress(self):
+        """fail()/mark_cancelled() drop the last progress dict (regression:
+        terminated rows kept their live-state payload forever — invisible
+        to the UI, dead weight in every snapshot)."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = self.queue.take_next()
+        self.queue.report_progress(taken, {"stage": "encode", "percent": 40})
+        self.queue.fail(taken, "boom")
+        reloaded = self.queue.get(taken.id)
+        self.assertIsNone(reloaded.result)
+
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken2 = self.queue.take_next()
+        self.queue.report_progress(taken2, {"stage": "scan", "percent": 10})
+        self.queue.mark_cancelled(taken2)
+        reloaded2 = self.queue.get(taken2.id)
+        self.assertIsNone(reloaded2.result)
+
+    def test_cancelled_job_keeps_partial_result(self):
+        """A graceful cancel carries the engine's partial result — the UI
+        renders outcomes on cancelled encode rows (App.svelte reads
+        outcomes from done OR cancelled rows)."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = self.queue.take_next()
+        self.queue.report_progress(taken, {"percent": 50})
+        self.queue.mark_cancelled(taken, {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]})
+        reloaded = self.queue.get(taken.id)
+        self.assertEqual(reloaded.result["outcomes"][0]["movie"], "a.mkv")
+
+    def test_history_pruned_to_retention_cap(self):
+        """Terminal writes keep the newest JOB_RETENTION terminated rows and
+        hard-delete older ones (the jobs table never had any retention —
+        the library side did via prune_missing, this side grew forever).
+        Queued/running rows are never touched."""
+        from shrinkray.jobs import JOB_RETENTION
+
+        total = JOB_RETENTION + 10
+        for i in range(total):
+            self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"n": i}))
+            taken = self.queue.take_next()
+            self.queue.finish(taken, {"n": i})
+        # one more, left queued: live rows never prune
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"n": "keep"}))
+        count = self.connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        self.assertEqual(count, JOB_RETENTION + 1)
+        # the OLDEST terminated rows went: survivors are the newest ids
+        oldest = self.connection.execute(
+            "SELECT MIN(id) FROM jobs WHERE state = 'done'"
+        ).fetchone()[0]
+        self.assertEqual(oldest, total - JOB_RETENTION + 1)
+
     def test_cancel_queued_job(self):
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
         self.assertTrue(self.queue.cancel(job.id))

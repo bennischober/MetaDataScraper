@@ -21,6 +21,12 @@ from pathlib import Path
 from shrinkray.encode import cap_threads
 from shrinkray.quality import Cancelled
 
+# how many terminated (done/failed/cancelled) job rows the history keeps.
+# Terminated rows are the job trail (outcomes, errors, retry affordances);
+# anything beyond the cap is hard-deleted on the next terminal write. The
+# library's own history lives in files/encodes and is NOT affected.
+JOB_RETENTION = 100
+
 
 class JobState(str, Enum):
     """The lifecycle states of a job."""
@@ -203,10 +209,40 @@ class JobQueue:
             "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
             (JobState.DONE.value, json.dumps(result), job.id),
         )
+        self._prune_history()
         self._connection.commit()
+
+    def _prune_history(self):
+        """Hard-deletes terminated jobs beyond the retention cap.
+
+        Called on every terminal write, so the table stays bounded without
+        a background sweeper: the newest ``JOB_RETENTION`` rows survive,
+        older terminated ones go. The table's whole content is the UI's
+        job trail (the DETAIL expansions, retry affordances, run outcomes)
+        — nothing outside the app reads it, and the library's own history
+        lives in ``encodes``/``files``, not here.
+        """
+        self._connection.execute(
+            """
+            DELETE FROM jobs
+             WHERE state IN ('done', 'failed', 'cancelled')
+               AND id NOT IN (
+                   SELECT id FROM jobs
+                    WHERE state IN ('done', 'failed', 'cancelled')
+                    ORDER BY id DESC
+                    LIMIT ?
+               )
+            """,
+            (JOB_RETENTION,),
+        )
 
     def fail(self, job: Job, error: str):
         """Marks a job as failed and stores the error.
+
+        The result column is cleared: a failed job's only live payload was
+        its last progress dict (invisible once the state left 'running') —
+        keeping it wasted space and made rows look like they still carried
+        data.
 
         Args:
             job (Job): The failed job.
@@ -215,22 +251,31 @@ class JobQueue:
         job.state = JobState.FAILED
         job.error = error
         self._connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') WHERE id = ?",
+            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+            "finished_at = datetime('now') WHERE id = ?",
             (JobState.FAILED.value, error, job.id),
         )
+        self._prune_history()
         self._connection.commit()
 
-    def mark_cancelled(self, job: Job):
+    def mark_cancelled(self, job: Job, result: dict | None = None):
         """Marks a job as cancelled (user request, not a failure).
+
+        A graceful cancel carries the engine's partial result (e.g. the
+        outcomes completed before the cancel) — the UI renders those on
+        cancelled rows. Without one the result column is cleared, dropping
+        the stale progress dict the same way fail() does.
 
         Args:
             job (Job): The cancelled job.
+            result (dict | None): The engine's partial result, if any.
         """
         job.state = JobState.CANCELLED
         self._connection.execute(
-            "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
-            (JobState.CANCELLED.value, job.id),
+            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+            (JobState.CANCELLED.value, json.dumps(result) if result is not None else None, job.id),
         )
+        self._prune_history()
         self._connection.commit()
 
     def cancel(self, job_id: int) -> bool:
@@ -790,7 +835,9 @@ class JobWorker:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return
             if result.get("cancelled"):
-                self.queue.mark_cancelled(job)
+                # a graceful cancel carries the engine's partial result —
+                # the UI renders outcomes on cancelled encode rows
+                self.queue.mark_cancelled(job, result)
             else:
                 self.queue.finish(job, result)
         except Cancelled:

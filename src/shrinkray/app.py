@@ -200,9 +200,14 @@ class AppState:
             return fn(self.connection)
 
     def _recover_stale_jobs(self):
-        """Marks jobs left running by a previous app instance as failed."""
+        """Marks jobs left running by a previous app instance as failed.
+
+        Clears the result column too: a crashed job's last progress dict is
+        dead live state, not a result (mirrors fail()).
+        """
         self.connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') WHERE state = ?",
+            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+            "finished_at = datetime('now') WHERE state = ?",
             (
                 "failed",
                 "interrupted by app restart",
