@@ -11,17 +11,20 @@ import json
 import os
 import os.path
 import queue
+import sqlite3
 import subprocess
 import sys
 import threading
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
+from typing import TypeVar
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import load_config
+from shrinkray.config import Conf, load_config
 from shrinkray.dedupe import find_duplicates
 from shrinkray.encode import cap_threads
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
@@ -31,9 +34,13 @@ from shrinkray.watch import watch
 
 app = FastAPI(title="ShrinkRay", version=__version__)
 
+_T = TypeVar("_T")
+
 
 @app.middleware("http")
-async def log_requests(request, call_next):
+async def log_requests(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Logs every request with duration and status (the app's access log).
 
     Args:
@@ -68,7 +75,7 @@ async def log_requests(request, call_next):
 _allowed_roots: list[Path] = []
 
 
-def allow_roots(roots: list[Path]):
+def allow_roots(roots: list[Path]) -> None:
     """Sets the folder roots the API may operate on.
 
     Args:
@@ -170,7 +177,7 @@ class AppState:
     blocking each other across processes.
     """
 
-    def __init__(self, db_file: Path):
+    def __init__(self, db_file: Path) -> None:
         """Initializes the app state.
 
         Jobs left 'running' by a previous app instance are marked failed
@@ -191,7 +198,7 @@ class AppState:
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
 
-    def with_lock(self, fn):
+    def with_lock(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Runs fn(connection) under the database lock.
 
         Args:
@@ -203,7 +210,7 @@ class AppState:
         with self.db_lock:
             return fn(self.connection)
 
-    def _recover_stale_jobs(self):
+    def _recover_stale_jobs(self) -> None:
         """Marks jobs left running by a previous app instance as failed.
 
         The result column stays NULL (live progress was never persisted):
@@ -220,7 +227,7 @@ class AppState:
         )
         self.connection.commit()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Stops the worker and closes the database."""
         self.worker.stop()
         self.watch_stop.set()
@@ -246,7 +253,7 @@ def get_state() -> AppState:
     return state
 
 
-def db_access():
+def db_access() -> Iterator[sqlite3.Connection]:
     """FastAPI dependency providing the app's database connection.
 
     Locking happens in the handlers (s.with_lock) so that acquire, work and
@@ -262,7 +269,7 @@ def db_access():
 
 
 @app.get("/")
-def index():
+def index() -> Response:
     """Serves the built web UI.
 
     Returns:
@@ -297,7 +304,7 @@ def _ui_dist() -> Path:
 
 
 @app.get("/assets/{asset_path:path}")
-def ui_asset(asset_path: str):
+def ui_asset(asset_path: str) -> Response:
     """Serves the built UI's static assets.
 
     The asset path is contained to the build output: traversal attempts
@@ -328,7 +335,7 @@ def ui_asset(asset_path: str):
 
 
 @app.get("/api/duplicates")
-def duplicates():
+def duplicates() -> list[dict]:
     """Returns duplicate groups across the whole scanned library.
 
     Grouping: byte-identical files (content hash) and same-title files
@@ -378,7 +385,7 @@ def duplicates():
     return [g.to_dict() for g in groups]
 
 
-def get_config():
+def get_config() -> dict:
     """Returns the current configuration (as stored in config.json).
 
     Returns:
@@ -408,7 +415,7 @@ def _config_path(s: AppState) -> Path:
     return s.db_file.parent / "config.json"
 
 
-def _conf_to_dict(conf) -> dict:
+def _conf_to_dict(conf: Conf) -> dict:
     """Converts a Conf object into the config.json dict shape.
 
     Args:
@@ -448,7 +455,7 @@ def _conf_to_dict(conf) -> dict:
 
 
 @app.get("/api/config")
-def read_config():
+def read_config() -> dict:
     """Returns the current configuration (as stored in config.json).
 
     Returns:
@@ -458,7 +465,7 @@ def read_config():
 
 
 @app.put("/api/config")
-def update_config(data: dict):
+def update_config(data: dict) -> dict:
     """Updates the configuration (writes config.json).
 
     The config is validated by loading it through Conf after writing;
@@ -493,7 +500,7 @@ def update_config(data: dict):
 
 
 @app.get("/api/status")
-def status(conn=Depends(db_access)):
+def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     """Returns the app status: queue depth, running job, watcher state.
 
     Args:
@@ -518,7 +525,7 @@ def status(conn=Depends(db_access)):
 
 
 @app.get("/api/jobs")
-def list_jobs(limit: int = 50, conn=Depends(db_access)):
+def list_jobs(limit: int = 50, conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
     """Returns the recent job history, newest first.
 
     Args:
@@ -533,7 +540,7 @@ def list_jobs(limit: int = 50, conn=Depends(db_access)):
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: int, conn=Depends(db_access)):
+def get_job(job_id: int, conn: sqlite3.Connection = Depends(db_access)) -> dict:
     """Returns one job by id.
 
     Args:
@@ -551,7 +558,7 @@ def get_job(job_id: int, conn=Depends(db_access)):
 
 
 @app.post("/api/jobs")
-def create_job(request: JobRequest):
+def create_job(request: JobRequest) -> dict:
     """Enqueues a new job.
 
     Args:
@@ -612,7 +619,7 @@ def create_job(request: JobRequest):
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: int):
+def cancel_job(job_id: int) -> dict:
     """Cancels a queued or running job.
 
     Args:
@@ -627,11 +634,14 @@ def cancel_job(job_id: int):
     return {"cancelled": job_id}
 
 
-@app.get("/api/snapshot")
+# response_model=None: the handler returns either a dict payload or a 304
+# Response, which is not a valid Pydantic field type. FastAPI would otherwise
+# try to infer a model from the annotation and refuse to start.
+@app.get("/api/snapshot", response_model=None)
 def snapshot(
     jobs_limit: int = 100,
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
-):
+) -> dict | Response:
     """Returns the full UI state in one request: status, jobs and library.
 
     The poll endpoint: instead of three requests (status, jobs, library)
@@ -659,7 +669,7 @@ def snapshot(
 
     s = get_state()
 
-    def read(c) -> dict:
+    def read(c: sqlite3.Connection) -> dict:
         """Reads jobs, status and both fingerprints in one pass."""
         jobs = s.queue.all_jobs(limit=jobs_limit)
         running = [j for j in jobs if j.state.value in ("running", "queued")]
@@ -781,7 +791,7 @@ def events() -> StreamingResponse:
     s = get_state()
     sid, box, seed = s.bus.subscribe()
 
-    def stream():
+    def stream() -> Iterator[str]:
         """Drains the mailbox into SSE frames until the client leaves."""
         yield from _sse_stream(s.bus, sid, box, seed)
 
@@ -793,8 +803,8 @@ def events() -> StreamingResponse:
 
 
 def _sse_stream(
-    bus: ProgressBus, sid: int, box: "queue.Queue", seed: list, ping_after: float = 15.0
-):
+    bus: ProgressBus, sid: int, box: "queue.Queue[dict]", seed: list, ping_after: float = 15.0
+) -> Iterator[str]:
     """Builds the SSE frame generator for one subscriber.
 
     Extracted from the endpoint so tests can drive the generator directly
@@ -828,11 +838,13 @@ def _sse_stream(
         bus.unsubscribe(sid)
 
 
-@app.get("/api/library")
+# response_model=None: the handler returns either the library payload or a 304
+# Response, which is not a valid Pydantic field type.
+@app.get("/api/library", response_model=None)
 def library(
-    conn=Depends(db_access),
+    conn: sqlite3.Connection = Depends(db_access),
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
-):
+) -> dict | Response:
     """Returns the scanned library from the database.
 
     Supports ETag-based conditional requests: the ETag is a fingerprint
@@ -914,7 +926,7 @@ def library(
 
 
 @app.get("/api/movie")
-def movie_detail(path: str, conn=Depends(db_access)):
+def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> dict:
     """Returns one movie's full record: file facts plus its COMPLETE encode
     history (the library list only carries the latest encode per title)
     and the stored plan (the prediction display's data, with a file-level
@@ -1057,7 +1069,7 @@ def movie_detail(path: str, conn=Depends(db_access)):
 
 
 @app.post("/api/reveal")
-def reveal(request: RevealRequest):
+def reveal(request: RevealRequest) -> dict:
     """Reveals a file's containing folder in the system file manager.
 
     The path must be a file inside the allowed roots (the same allowlist
@@ -1090,7 +1102,7 @@ def reveal(request: RevealRequest):
 
 
 @app.post("/api/duplicates/delete")
-def duplicates_delete(request: RevealRequest):
+def duplicates_delete(request: RevealRequest) -> dict:
     """Moves a duplicate file to the OS trash (recycle bin).
 
     This is the product's first destructive endpoint, deliberately scoped
@@ -1139,7 +1151,7 @@ def duplicates_delete(request: RevealRequest):
 
 
 @app.get("/report")
-def report_page():
+def report_page() -> Response:
     """Serves the generated HTML report (regenerating it first).
 
     The report path is contained to the database folder (an app-controlled
@@ -1169,7 +1181,7 @@ def watch_control(
     inbox: str | None = None,
     output_dir: str | None = None,
     body: dict | None = None,
-):
+) -> dict:
     """Starts or stops the watch loop inside the app.
 
     Accepts inbox/output_dir either as query parameters or as a JSON body
@@ -1201,7 +1213,7 @@ def watch_control(
         inbox_path = validate_path(inbox, "inbox")
         output_path = validate_path(output_dir, "output_dir")
 
-        def run_watch():
+        def run_watch() -> None:
             try:
                 watch(
                     inbox_path,
@@ -1248,7 +1260,7 @@ def run_app(
     host: str = "127.0.0.1",
     port: int = 8420,
     allowed_roots: list[Path] | None = None,
-):
+) -> None:
     """Boots the resident app (blocking; the server owns the process).
 
     Args:
@@ -1264,7 +1276,7 @@ def run_app(
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
 
-    def monitor_memory():
+    def monitor_memory() -> None:
         """Logs the app's own RSS every 5 minutes (self-monitoring honesty).
 
         "We stay lean" is a claim only a number can back up: this thread

@@ -73,6 +73,13 @@ warn_redundant_casts = true
 no_implicit_optional = true
 known-first-party = ["shrinkray"]
 
+# disallow_untyped_defs is rolled out one module at a time (issue #40): each
+# module gets its entry only once every function is annotated, so a partially
+# annotated module cannot regress while the rest are still being converted.
+[[tool.mypy.overrides]]
+module = ["shrinkray.app"]
+disallow_untyped_defs = true
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
