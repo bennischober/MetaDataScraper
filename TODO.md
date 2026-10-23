@@ -25,6 +25,15 @@
 - [x] A4 CLI quality progress (`32c0b15`): rich Progress per quality run -
       "Probing..." until the first percent event, then a live bar;
       `_quality_progress_callback` maps the engine's percent events.
+- [x] A2 follow-up, disk watchdog (`41fe9aa`): the preflight answers "will
+      it fit?" at run start; the streamed encode loop now also watches
+      DURING the encode (one statvfs per percent line). Free space below
+      1 GiB => cancel, remove the partial output (our product from this
+      run), report the reason - never fill a shared drive. Trade-off
+      accepted: a near-the-end false cancel is possible. Both encode paths
+      always stream now (watch mode previously encoded unwatched; fixed
+      mode had a latent TypeError: the rich Progress object was passed as
+      the callback and is not callable).
 
 ### Verification & health (after the reliability wave)
 - [ ] Verify-after-encode hook: optional `--verify` flag running a short
