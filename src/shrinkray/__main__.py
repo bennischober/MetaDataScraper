@@ -498,7 +498,6 @@ def _record_encodes(
         replan (bool): Ignore stored plans and re-probe (quality mode).
     """
     from shrinkray.encode import encode_movies
-    from shrinkray.integrations import notify_after_encodes
     from shrinkray.quality import encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
@@ -507,7 +506,6 @@ def _record_encodes(
     if not overwrite and not dry_run:
         encoded_paths = finished_movies(connection, movies, output_dir)
 
-    encoded_for_notify: list[Path] = []
     if not dry_run and quality:
         try:
             # the whole quality run holds the encode slot once (probes and
@@ -571,7 +569,6 @@ def _record_encodes(
                             f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                         )
                         record_quality_results(connection, movie, result, config)
-                        encoded_for_notify.append(movie)
                     elif result.skipped_reason is not None:
                         # guardrail skip => record it so future runs do not re-probe
                         console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
@@ -602,16 +599,12 @@ def _record_encodes(
             max_threads=cap_threads(threads or config.handbrake_max_threads),
             db_file=db_file,
         )
-        encoded_for_notify = [r.input for r in results if r.success]
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
         raise typer.Exit(1) from e
 
     # record the encodes of this run in the database
     record_fixed_results(connection, results, config)
-
-    # one polite tap on the media server's shoulder after the whole batch
-    notify_after_encodes(config, encoded_for_notify)
 
 
 @app.command()

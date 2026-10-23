@@ -12,7 +12,6 @@ import threading
 import time
 from pathlib import Path
 
-from shrinkray.config import load_config
 from shrinkray.encode import (
     DISK_FREE_FLOOR_BYTES,
     HANDBRAKE_BINARY,
@@ -334,10 +333,6 @@ def watch(
                         f"(VMAF {result.achieved_vmaf}), "
                         f"{result.saved_percent:.1f}% saved (source left untouched)."
                     )
-                    # opt-in tap on the media server's shoulder (fire-and-forget)
-                    from shrinkray.integrations import notify_after_encodes
-
-                    notify_after_encodes(load_config(), [movie])
                 else:
                     log_error(f"Encoding '{movie.name}' failed: {result.error}")
 

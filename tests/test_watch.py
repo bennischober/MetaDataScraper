@@ -264,8 +264,6 @@ class TestWatch(unittest.TestCase):
 
             with (
                 mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.integrations.notify_after_encodes") as notify,
-                mock.patch("shrinkray.watch.load_config"),
                 mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 watch_mod.watch(inbox, out, once=True)
@@ -273,7 +271,6 @@ class TestWatch(unittest.TestCase):
             # into the watch output dir
             self.assertEqual(captured["output"], out / "movie.mkv")
             self.assertIn("encoder_threads", captured["kwargs"])
-            notify.assert_called_once()
 
     def test_watch_pass_reports_quality_skip(self):
         """A quality skip (no size gain / unreachable) is surfaced as a
@@ -303,12 +300,9 @@ class TestWatch(unittest.TestCase):
 
             with (
                 mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.integrations.notify_after_encodes") as notify,
-                mock.patch("shrinkray.watch.load_config"),
                 mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 watch_mod.watch(inbox, out, once=True)
-            notify.assert_not_called()
 
     def test_watch_pass_retries_when_busy(self):
         """A busy encode slot (CLI/job running) retries the movie on the

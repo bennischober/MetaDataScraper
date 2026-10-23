@@ -449,7 +449,6 @@ def _conf_to_dict(conf: Conf) -> dict:
         "resources": {
             "idle_priority": conf.idle_priority,
         },
-        "integrations": conf.integrations,
         "language": conf.language,
     }
 

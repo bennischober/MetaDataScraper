@@ -33,11 +33,6 @@ is tracked as a GitHub issue and none of it is implemented yet.
       the design is reviewed.
 
 ### Small, well-specified
-- [ ] Jellyfin library refresh after successful encodes (opt-in, off by
-      default): POST {url}/Library/Refresh with the token from the env var
-      named in config; fire-and-forget with a 5s timeout - a notification
-      failure must never fail an encode. Plex deliberately not implemented
-      until a real Plex server exists to test against.
 - [ ] HDR size-estimate correction: HDR 4K estimates need a systematic bias
       factor or bitrate-based math (probe samples hit easy content; measured
       19.1% real vs 78% predicted on The Mandalorian). Document the

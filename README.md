@@ -163,7 +163,7 @@ For a headless box that should run the app at boot there is a systemd unit
 in [`deploy/shrinkray.service`](deploy/shrinkray.service) (with install
 notes in its header). The app is a polite guest on such a machine: encodes
 and probes run below normal priority and each encode can be thread-capped
-(`handbrake.max_threads`) so Plex/Jellyfin keep their cores.
+(`handbrake.max_threads`) so other services keep their cores.
 
 ## How it works
 
@@ -317,12 +317,6 @@ Optional [config.json](config.json) (defaults are used when missing):
     "resources": {
         "idle_priority": true       // encodes run below normal priority
     },
-    "integrations": {
-        "jellyfin": {
-            "url": "http://nas:8096",
-            "token_env": "SHRINKRAY_JELLYFIN_TOKEN"  // token lives in the env, never here
-        }
-    },
     "codec": { "hdr": { "color_space": [], "color_transfer": [] } },
     "language": "en"
 }
@@ -334,18 +328,14 @@ whatever else the machine is doing (a movie night on the same box, the
 media server you will eventually run next to this). Set
 `resources.idle_priority: false` to give encodes full priority again.
 `handbrake.max_threads` caps each encode's threads (e.g. `8` on a 16-core
-mini PC leaves half the machine for Jellyfin). The resident app also logs
-its own memory every 5 minutes (`memory: resident 42.0 MiB`) — staying
+mini PC leaves half the machine for a media server). The resident app also
+logs its own memory every 5 minutes (`memory: resident 42.0 MiB`) — staying
 lean is a measured fact here, not an aspiration.
 
-**Media-server integration** (opt-in, off by default): after a batch of
-successful encodes, ShrinkRay sends one `POST /Library/Refresh` to your
-Jellyfin server so swapped files show up with fresh metadata. It never
-serves media and never touches the server's databases — one polite tap on
-the butler's shoulder. The API token never goes into config.json (it is a
-tracked file): put the token in an environment variable and name that
-variable via `token_env`. Notification failures are logged and never fail
-an encode.
+ShrinkRay does not talk to media servers: telling another application that
+a file changed is that application's job (it can watch the folder itself).
+The opt-in Jellyfin refresh integration was removed (a config.json that
+still carries its `integrations` key loads fine and logs one warning).
 
 ## Development
 

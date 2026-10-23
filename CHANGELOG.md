@@ -3,6 +3,20 @@
 All notable changes to ShrinkRay are documented here. Releases are
 tagged in git; the GitHub release for each tag carries the same notes.
 
+## [Unreleased]
+
+### Removed
+
+- **Jellyfin integration**: the opt-in library-refresh notification after
+  encode batches is gone (issue #43). ShrinkRay changes a file's bytes;
+  telling another application about it is that application's job — and the
+  integration was the only outbound network call in the codebase and an
+  unauthenticated path to the process environment (any dashboard visitor
+  could point `integrations.jellyfin.url` at their own host and exfiltrate
+  any environment variable's value as a request header). A `config.json`
+  that still carries the `integrations` key loads normally and logs one
+  warning naming the removed key.
+
 ## [0.3.0] - 2026-10-22
 
 The MetaDataScrapper era ends with this release: the tool is renamed to

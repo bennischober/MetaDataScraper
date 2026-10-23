@@ -67,9 +67,15 @@ class Conf:
         resources: dict[str, Any] = data.get("resources") or {}
         self.idle_priority: bool = bool(resources.get("idle_priority", DEFAULT_IDLE_PRIORITY))
 
-        # integrations => opt-in media-server hooks (secrets via env vars!)
-        integrations: dict[str, Any] = data.get("integrations") or {}
-        self.integrations: dict[str, Any] = integrations
+        # the integrations key (opt-in media-server hooks) was REMOVED with the
+        # Jellyfin integration (issue #43): an operator who relied on the
+        # refresh must see that it is gone, so a leftover key is named - once,
+        # honestly, and without failing the load
+        if "integrations" in data:
+            log_warning(
+                "config.json contains 'integrations' - the media-server "
+                "integration was removed (issue #43); the key is ignored."
+            )
 
 
 _config: Conf | None = None
