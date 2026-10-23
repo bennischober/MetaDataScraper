@@ -667,6 +667,7 @@ def execute_plan(
                 cancel=cancel,
                 db_file=_db_file_of(connection),
                 encoder_threads=cap_threads(config.handbrake_max_threads),
+                progress=progress,
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})

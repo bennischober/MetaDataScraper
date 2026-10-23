@@ -539,7 +539,9 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_quality_progress_callback_maps_percent(self):
         """The CLI progress callback maps engine percent events onto the
-        rich task (encoding description + completed percent)."""
+        rich task (encoding description + completed percent); probe step
+        events update the description only (the task's total is the movie
+        count, so a probe must not move the bar)."""
         from shrinkray.__main__ import _quality_progress_callback
 
         updates: list[dict] = []
@@ -549,11 +551,14 @@ class TestEncodeLock(unittest.TestCase):
                 updates.append(kwargs)
 
         callback = _quality_progress_callback(FakeProgress(), "task1")
-        callback({"stage": "probe", "movie": "m.mkv"})  # must be ignored
+        callback({"stage": "probe", "detail": "probe encode (CRF 22)"})
         callback({"stage": "encode", "percent": 42.31, "movie": "m.mkv"})
         self.assertEqual(
             updates,
-            [{"description": "Encoding 'm.mkv'", "completed": 42.31}],
+            [
+                {"description": "Probing: probe encode (CRF 22)"},
+                {"description": "Encoding 'm.mkv'", "completed": 42.31},
+            ],
         )
 
     def test_encode_quality_cli_passes_progress(self):

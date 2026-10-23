@@ -1,0 +1,144 @@
+"""Probe-progress streaming: the web and console consumers of step events."""
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from shrinkray import quality
+
+
+class TestProbeProgress(unittest.TestCase):
+    """Step events flow from the probing pipeline to the progress callback."""
+
+    def test_extract_samples_reports_per_sample(self):
+        """Each extracted sample emits one step event (n/count)."""
+        events: list[dict] = []
+
+        def fake_run(command, cancel=None):
+            Path(command[-1]).write_bytes(b"x" * 8)  # the sample file
+            return 0, ""
+
+        with (
+            patch(
+                "shrinkray.quality.subprocess.run",
+                return_value=type(
+                    "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
+                )(),
+            ),
+            patch("shrinkray.quality._run", side_effect=fake_run),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            quality.extract_samples(
+                Path("movie.mkv"),
+                Path(tmp),
+                3,
+                10.0,
+                cancel=None,
+                progress=events.append,
+            )
+        self.assertEqual(
+            [e["detail"] for e in events],
+            ["extracting sample 1/3", "extracting sample 2/3", "extracting sample 3/3"],
+        )
+        self.assertEqual([e["done"] for e in events], [0, 1, 2])
+        self.assertEqual(events[0]["total"], 3)
+
+    def test_find_optimal_crf_reports_probe_steps(self):
+        """The CRF bisect emits a start event per probe encode and a result
+        event with the measured VMAF."""
+        events: list[dict] = []
+        with (
+            patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+            patch.object(quality, "probe_crf", side_effect=lambda *a, **k: 95.0),
+        ):
+            chosen, _achieved, probes = quality.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=95.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertEqual(chosen, 31)
+        details = [e["detail"] for e in events]
+        self.assertTrue(any("probe encode" in d for d in details))
+        self.assertTrue(all("VMAF" in d for d in details[1::2]))  # result events
+        self.assertEqual(events[-1]["probes_done"], len(probes))
+
+    def test_estimate_size_factor_reports_size_probe(self):
+        """The skip-check size probe emits its step event."""
+        events: list[dict] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "s0.mkv"
+            sample.write_bytes(b"x" * 8)
+            encoded = Path(tmp) / "size_probe_crf32.mkv"
+
+            def fake_run(command, cancel=None):
+                Path(command[-1]).write_bytes(b"y" * 4)  # the probe encode
+                return 0, ""
+
+            with (
+                patch.object(
+                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                ),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "measure_vmaf", return_value=None),
+            ):
+                factor = quality.estimate_size_factor(
+                    [sample],
+                    Path(tmp),
+                    "hb",
+                    32,
+                    "x265",
+                    "medium",
+                    progress=events.append,
+                )
+        self.assertEqual(factor, 0.5)  # 4 bytes / 8 bytes
+        self.assertEqual([e["detail"] for e in events], ["size probe (CRF 32)"])
+
+    def test_plan_quality_threads_progress_to_pipeline(self):
+        """plan_quality passes its progress callback into the probe pipeline
+        (regression: plan jobs emitted one event per movie and then went
+        silent for the whole probe run)."""
+        events: list[dict] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(
+                    quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
+                ) as fake_search,
+                patch.object(quality, "extract_samples", return_value=[Path("s0.mkv")]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+            ):
+                result = quality.plan_quality(src, progress=events.append)
+        self.assertTrue(result.success)
+        fake_search.assert_called_once()
+        self.assertIsNotNone(fake_search.call_args.kwargs.get("progress"))
+        fake_estimate.assert_called_once()
+        self.assertIsNotNone(fake_estimate.call_args.kwargs.get("progress"))
+
+    def test_encode_with_quality_threads_progress_to_probes(self):
+        """The encode's PROBE phase streams steps too (before HandBrake's
+        own percent lines take over) — same shared pipeline as plan."""
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(quality, "_source_snapshot", return_value=None),
+            patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            src = Path(tmp) / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            quality.encode_with_quality(
+                src,
+                Path(tmp) / "out.mkv",
+                progress=lambda data: None,
+            )
+        self.assertIsNotNone(fake_probe.call_args.kwargs.get("progress"))

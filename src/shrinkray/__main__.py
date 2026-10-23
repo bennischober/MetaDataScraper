@@ -433,6 +433,11 @@ def _quality_progress_callback(progress, task):
                 description=f"Encoding '{data.get('movie', 'movie')}'",
                 completed=float(data["percent"]),
             )
+        elif data.get("stage") == "probe":
+            # probing now streams its steps (samples, size probe, CRF
+            # bisect) — the bar's description tracks them; its total is
+            # the movie count, so only the description moves here
+            progress.update(task, description=f"Probing: {data.get('detail', '...')}")
 
     return callback
 
