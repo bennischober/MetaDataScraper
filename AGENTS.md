@@ -139,8 +139,8 @@ existing video collection" and nothing more specific.
 - **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`,
   `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*
-  when the *what* is not obvious. Never push directly to `main` without
-  the gate passing.
+  when the *what* is not obvious. One logical change per commit — see the
+  issue workflow above for how a change reaches `main`.
 - **The sqlite database (`metadata.db`) is user data, not source.** Schema
   changes go through a migration in `db.py` (bump `SCHEMA_VERSION`, see the
   v3 migration for the pattern). Never commit a `.db` file.
@@ -155,6 +155,48 @@ feature needs one of them:
 - treat a zero exit code as *not sufficient* success — verify the expected
   artifact exists (see the encode truncation fix for why),
 - degrade gracefully when the binary is missing (see `find_handbrake()`).
+
+## Issue workflow (every change, no exceptions)
+
+Working on an issue always means the same five steps, in this order. There is no
+"small enough to skip the branch" exception — a one-line fix goes through the same
+path, because the point is that `main` only ever receives reviewed work.
+
+1. **Claim it.** `gh issue edit <N> --add-assignee @me` (see Multi-agent etiquette
+   below). An assigned issue is work in progress; an unassigned one is free to take.
+2. **Branch from an up-to-date `main`.** Never work on `main` directly:
+
+   ```sh
+   git switch main && git pull --ff-only
+   git switch -c <type>/<issue>-<slug>      # e.g. fix/38-test-pollutes-tree
+   ```
+
+   The issue number belongs in the branch name, so `git branch --list` answers "what
+   is in flight" without consulting GitHub.
+3. **Do the work, then pass the gate.** The five commands in Non-negotiable rule 3
+   must pass locally before anything is pushed. Commit in reviewable units, not one
+   dump — see the commit rules below.
+4. **Push the branch and open a pull request.** Reference the issue so it links and
+   closes on merge:
+
+   ```sh
+   git push -u origin <branch>
+   gh pr create --fill --body "Closes #<N>"
+   ```
+
+   The PR body says what changed and what was verified, not just what was intended.
+   A PR that cannot state how it was verified is not ready.
+5. **Merge only when CI is green.** Merge to `main`, delete the branch, and let
+   the `Closes #<N>` reference close the issue. If the work is handed off instead,
+   see Multi-agent etiquette — do not open a half-finished PR as a way to park it.
+
+**Never push directly to `main`.** Not for a typo, not for a doc line, not "just this
+once". `main` is what a stranger clones; it must be green at every commit, and the only
+way to guarantee that is to make every change arrive through a checked PR.
+
+Branch protection is not currently enabled on `main` (verified 2026-10-23: the protection
+API returns 404), so this rule is enforced by discipline alone. If you have admin rights and
+notice it is still unprotected, enabling it is a genuine improvement, not scope creep.
 
 ## Multi-agent etiquette
 
@@ -172,8 +214,9 @@ Multiple agents (and humans) work in this repository concurrently.
   sessions and separate humans — a local branch name is invisible to everyone else.
   Pick an unassigned issue, or one already assigned to you. If it is assigned to
   somebody else, do not start: leave it, and pick a different one.
-- **When you stop, say where it stands.** If the issue is finished and merged,
-  close it. If you are handing off mid-way, leave the assignment in place and write
+- **When you stop, say where it stands.** A merged PR closes its issue through
+  the `Closes #<N>` reference — verify it closed, and close it yourself if it did
+  not. If you are handing off mid-way, leave the assignment in place and write
   a comment on the issue saying what is done and what is left, so the next agent
   resumes instead of restarting. Unassign only if you are abandoning it.
 - **One issue, one agent.** Do not assign yourself a second issue while one is still
@@ -182,8 +225,9 @@ Multiple agents (and humans) work in this repository concurrently.
   have read them first. Uncommitted changes in the working tree belong to
   whoever is working — check `git status` before any `git add -A` or
   `git stash`, and only stage files from your own task.
-- Prefer short-lived feature branches and worktrees over long-lived
-  uncommitted WIP in the shared checkout. `main` should always be green.
+- Prefer short-lived branches over long-lived
+  uncommitted WIP in the shared checkout. `main` should always be green — see the
+  issue workflow above for the exact branch/PR sequence.
 - If you must switch branches in the shared checkout, check for uncommitted
   changes first and stash them with a descriptive message.
 - After pulling, run the gate again before you continue — someone may have
