@@ -254,6 +254,23 @@ def rss_mib() -> float | None:
         return None
 
 
+def apply_config(config: Conf) -> None:
+    """Applies the process-level policy of a loaded config (one hook).
+
+    The one call an ENTRY POINT makes after loading its config: process
+    priority (apply) and the stall watchdog (configure_stall). Lives here
+    so config.py stays side-effect free (issue #97 phase 2: loading config
+    must not import engine modules or mutate process state as a
+    side effect).
+
+    Args:
+        config: The loaded config (reads idle_priority,
+            handbrake_stall_minutes).
+    """
+    apply(config)
+    configure_stall(config.handbrake_stall_minutes)
+
+
 def cpu_count() -> int:
     """Returns the CPUs this process may actually use (at least 1).
 

@@ -427,15 +427,4 @@ def load_config(
     config_file_used = path
 
     _config = Conf(data)
-    # the resource policy rides along: every entry point loads the config
-    # once, so every entry point also inherits the same politeness
-    from shrinkray.resources import apply as apply_resources
-
-    apply_resources(_config)
-    # the stall watchdog rides along the same way (encode.py imports config
-    # nowhere else; a single hook keeps the knob effective for CLI, app and
-    # watch alike)
-    from shrinkray.encode import configure_stall
-
-    configure_stall(_config.handbrake_stall_minutes)
     return _config

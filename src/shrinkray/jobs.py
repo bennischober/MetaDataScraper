@@ -24,6 +24,7 @@ from pathlib import Path
 from shrinkray.config import Conf
 from shrinkray.encode import cap_threads
 from shrinkray.quality import Cancelled
+from shrinkray.tools.process import apply_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
 # Terminated rows are the job trail (outcomes, errors, retry affordances);
@@ -629,6 +630,7 @@ def execute_scan(
         progress({"stage": "scan", "detail": "scanning library"})
 
     config = load_config()
+    apply_config(config)
     movies: list = []
     errors: list = []
     by_category: dict = {}
@@ -704,6 +706,7 @@ def execute_plan(
 
     payload = job.payload
     config = load_config()
+    apply_config(config)
     movies = resolve_movies(payload, config, connection=connection)
 
     plans: list[dict] = []
@@ -795,6 +798,7 @@ def execute_encode(
 
     payload = job.payload
     config = load_config()
+    apply_config(config)
     output_dir = Path(payload["output_dir"])
     # resolve_movies (not a bare scan_movies): a payload path may be a
     # single movie FILE (per-movie action from the UI) — scanning it as a
