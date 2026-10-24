@@ -985,6 +985,33 @@ def measure_vmaf(
         raise RuntimeError(f"libvmaf log could not be parsed: {e}") from e
 
 
+def source_height(movie: Path) -> int | None:
+    """Reads the source video height for the resolution gate.
+
+    Returns None when the height cannot be determined, so the caller can treat
+    "unknown" as "do not skip": an unreadable height must never silently
+    exclude a file the operator expected to be considered.
+
+    Args:
+        movie (Path): The movie file.
+
+    Returns:
+        int | None: The video stream's height in pixels, or None.
+    """
+    from shrinkray.config import load_config
+    from shrinkray.media import get_data
+
+    try:
+        data = get_data(movie, load_config())
+    except (RuntimeError, OSError, ValueError):
+        return None
+    dimensions = data.get("dimensions") or {}
+    height = dimensions.get("height")
+    if height is None:
+        return None
+    return int(height)
+
+
 def is_hdr_file(movie: Path) -> bool:
     """Checks whether a movie file is HDR.
 
@@ -1612,6 +1639,7 @@ def plan_quality(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
+    min_source_height: int = 0,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1672,6 +1700,26 @@ def plan_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            remove_bars=remove_bars,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
+    height = source_height(input_file)
+    if height is not None and height < min_source_height:
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"height {height}p is below the {min_source_height}p minimum "
+                "(a lower-resolution source saves too little to be worth the probe)"
+            ),
+            skipped_reason="resolution too low",
             remove_bars=remove_bars,
             crf_range=crf_range,
             sample_count=sample_count,
@@ -2032,6 +2080,7 @@ def encode_with_quality(
     verify: bool = False,
     force_reprobe: bool = False,
     use_probe_cache: bool = True,
+    min_source_height: int = 0,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -2102,6 +2151,24 @@ def encode_with_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
+    # the resolution gate decides from cached metadata, before the size probe
+    # and the CRF search spend minutes on a source whose pixels bound the saving
+    height = (snapshot or {}).get("height")
+    if height is not None and height < min_source_height:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"height {height}p is below the {min_source_height}p minimum "
+                "(a lower-resolution source saves too little to be worth the probe)"
+            ),
+            skipped_reason="resolution too low",
             hdr=hdr,
             encoder=effective_encoder,
         )

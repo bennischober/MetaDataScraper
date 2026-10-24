@@ -32,6 +32,10 @@ ENCODER_PRESETS = (
 )
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
+# eligibility: sources below this height are never re-encoded (0 = gate off).
+# PRODUCT.md makes 1080p the floor: a lower-resolution source has too few
+# pixels to save meaningfully, so the probe cost is spent for nothing
+DEFAULT_MIN_SOURCE_HEIGHT = 1080
 
 
 class Conf:
@@ -96,6 +100,19 @@ class Conf:
         # resources => how politely the engine behaves on a shared machine
         resources: dict[str, Any] = data.get("resources") or {}
         self.idle_priority: bool = bool(resources.get("idle_priority", DEFAULT_IDLE_PRIORITY))
+
+        # eligibility => sources below this height are never re-encoded
+        # (0 = gate off). A lower-resolution source has too few pixels to
+        # save meaningfully, so the probe cost is spent for nothing.
+        eligibility: dict[str, Any] = data.get("eligibility") or {}
+        self.min_source_height: int = int(
+            eligibility.get("min_source_height", DEFAULT_MIN_SOURCE_HEIGHT)
+        )
+        if self.min_source_height < 0:
+            raise ValueError(
+                f"eligibility.min_source_height: {self.min_source_height} is negative "
+                "(0 disables the gate)"
+            )
 
         # the integrations key (opt-in media-server hooks) was REMOVED with the
         # Jellyfin integration (issue #43): an operator who relied on the

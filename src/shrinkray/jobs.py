@@ -719,6 +719,7 @@ def execute_plan(
                 db_file=_db_file_of(connection),
                 encoder_threads=cap_threads(config.handbrake_max_threads),
                 progress=progress,
+                min_source_height=config.min_source_height,
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -816,6 +817,7 @@ def execute_encode(
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),
                     verify=payload.get("verify", False),
+                    min_source_height=config.min_source_height,
                 )
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})

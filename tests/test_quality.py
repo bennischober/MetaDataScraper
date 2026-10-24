@@ -665,6 +665,72 @@ class TestSubprocessTimeouts(unittest.TestCase):
         finally:
             movie.parent.rmdir()
 
+    def test_min_source_height_gate_skips_before_probing(self):
+        """A source below the height floor is skipped before any probe runs.
+
+        The gate exists to avoid spending the size probe and the CRF search on
+        a source whose pixel count bounds the saving; it must decide from the
+        height alone and reach neither extraction nor HandBrake.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=720),
+                patch.object(quality, "extract_samples") as fake_extract,
+                patch.object(quality, "find_handbrake") as fake_hb,
+            ):
+                result = quality.plan_quality(src, min_source_height=1080)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "resolution too low")
+        self.assertIn("720p", result.error or "")
+        self.assertIn("1080p", result.error or "")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_min_source_height_gate_is_off_by_default(self):
+        """A 720p source is a normal candidate when no floor is configured.
+
+        The gate must be opt-in: a source that would previously be probed must
+        still be probed when the operator has not asked for a resolution floor.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=720),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
+    def test_min_source_height_gate_unknown_height_is_not_skipped(self):
+        """An unreadable height must not silently exclude a file.
+
+        A gate that treats "unknown" as "too low" would drop titles the
+        operator expected to be considered; the honest answer is to probe.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=None),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src, min_source_height=1080)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
     def test_extract_samples_stream_copies_the_source(self):
         """Samples are stream-copied, never re-encoded.
 

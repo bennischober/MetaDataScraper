@@ -5,6 +5,18 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
 
+### Added
+
+- **A minimum-resolution gate**: `eligibility.min_source_height` (default
+  1080, matching the floor PRODUCT.md states) skips a source whose height is
+  below it with the reason `resolution too low`, before any sample extraction
+  or probe encode (issue #18). A lower-resolution source has too few pixels
+  to save meaningfully, so the probe cost buys nothing, and the gate decides
+  from cached metadata instead of a new probe. The gate is off when set to 0,
+  and an unreadable height is probed rather than excluded: an unknown
+  resolution must never silently drop a file the operator expected to be
+  considered.
+
 ### Changed
 
 - **`plan` extracts each probe window once instead of three times**: the
