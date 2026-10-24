@@ -103,8 +103,9 @@ anti-patterns are the sections further down — this block does not restate them
   a function between modules silently breaks patch targets — a #63 move must update
   the patch strings in the same commit.
 - **The gate is not the whole gate.** The six commands cover Python only; CI also runs
-  a separate `ui` job (`npm ci`, `npm run check`, `npm run build` in `ui/`). A change
-  under `ui/` is unverified until those three pass too, and there is no UI test suite.
+  a separate `ui` job (`npm ci`, `npm run check`, `npm run test`, `npm run build` in
+  `ui/` — vitest covers the api contract helpers, the SSE progress store and the jobs
+  page render). A change under `ui/` is unverified until those four pass too.
 - **The API contract is duplicated by hand.** A new FastAPI field that is not added to
   `ui/src/lib/api.ts` is invisible to the dashboard; add both in one change.
 - **`ui/dist` is served by `app.py`** (`/` no-cache, `/assets/*` immutable, realpath
