@@ -45,7 +45,8 @@ class TestResources(unittest.TestCase):
             self.assertLess(rss, 4096.0)
 
     def test_config_applies_resource_policy(self):
-        """load_config honors resources.idle_priority (and resets cleanly)."""
+        """apply_config (the entry-point hook) honors resources.idle_priority
+        and resets cleanly."""
         from shrinkray.tools import process as resources
 
         old = config_helper._config
@@ -70,6 +71,29 @@ class TestResources(unittest.TestCase):
         conf = config_helper.Conf({})
         self.assertEqual(conf.handbrake_max_threads, 0)
         self.assertTrue(conf.idle_priority)
+
+    def test_load_config_has_no_process_side_effects(self):
+        """Loading the config is PURE (issue #97 phase 2): it must not touch
+        the process priority or the stall watchdog - the entry points do
+        that explicitly via apply_config."""
+        import shrinkray.tools.process as process
+
+        old_priority = process._IDLE_PRIORITY
+        old_stall = process._stall_minutes
+        try:
+            config_helper._config = None
+            conf = config_helper.Conf({"resources": {"idle_priority": False}})
+            config_helper._config = conf
+            process._IDLE_PRIORITY = True
+            process._stall_minutes = 42.0
+            config_helper.load_config()
+            # nothing changed: the load applied neither politeness nor stall
+            self.assertTrue(process._IDLE_PRIORITY)
+            self.assertEqual(process._stall_minutes, 42.0)
+        finally:
+            config_helper._config = None
+            process._IDLE_PRIORITY = old_priority
+            process._stall_minutes = old_stall
 
 
 if __name__ == "__main__":

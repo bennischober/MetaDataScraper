@@ -34,6 +34,7 @@ from shrinkray.quality import (
 )
 from shrinkray.report import generate_report
 from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
+from shrinkray.tools.process import apply_config
 
 if TYPE_CHECKING:
     import sqlite3
@@ -316,6 +317,7 @@ def scan(
 ) -> None:
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config(config_file=config_file)
+    apply_config(config)
     connection = db.connect(db_file)
     try:
         movies_by_category, movies, error_messages = scan_movies(
@@ -487,6 +489,7 @@ def encode(
     """Re-encodes the found movies with HandBrake to reduce their file size."""
 
     config = load_config(config_file=config_file)
+    apply_config(config)
     connection = db.connect(db_file)
     try:
         # the output directory must never be a scan target (previous outputs
@@ -861,6 +864,7 @@ def plan(
     from shrinkray.quality import plan_quality
 
     config = load_config(config_file=config_file)
+    apply_config(config)
     connection = db.connect(db_file)
     try:
         _, movies, _ = scan_movies(path, config, connection=connection)
@@ -1189,6 +1193,7 @@ def watch_mode(
     from shrinkray.watch import watch
 
     config = load_config(config_file=config_file)
+    apply_config(config)
     try:
         watch(
             inbox,

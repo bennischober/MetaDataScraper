@@ -33,6 +33,7 @@ from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
 from shrinkray.quality import HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
+from shrinkray.tools.process import apply_config
 from shrinkray.watch import watch
 
 app = FastAPI(title="ShrinkRay", version=__version__)
@@ -1424,6 +1425,10 @@ def run_app(
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
     state.config_file = config_file
+    # the process policy is applied EXPLICITLY at the entry point (issue #97
+    # phase 2): loading config.py no longer mutates process state as a side
+    # effect
+    apply_config(load_config(config_file=config_file))
     _recover_interrupted_swaps()
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
