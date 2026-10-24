@@ -383,7 +383,7 @@ class QualityResult:
     crf_source: str | None = None
     plan_created_at: str | None = None
     # the encoder the decision was made against: the requested one, or the
-    # HDR override ('x265_10bit') — one source of truth for the record and
+    # HDR override (svt_av1_10bit) - one source of truth for the record and
     # the plan cache (a plan of an HDR movie is only valid under 10-bit)
     encoder: str = DEFAULT_ENCODER
 
