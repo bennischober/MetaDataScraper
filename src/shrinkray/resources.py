@@ -18,6 +18,10 @@ import os
 import signal
 import subprocess
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from shrinkray.config import Conf
 
 # module state: politeness is on by default; apply() can disable it
 _IDLE_PRIORITY = True
@@ -117,7 +121,7 @@ def terminate_tree(popen: subprocess.Popen) -> None:
         popen.wait(timeout=5)
 
 
-def apply(config) -> None:
+def apply(config: Conf) -> None:
     """Applies the resource policy from a config (Conf) object.
 
     Called once from load_config() so every entry point (CLI commands,
@@ -218,7 +222,7 @@ def rss_mib() -> float | None:
             counters = PROCESS_MEMORY_COUNTERS()
             counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
             if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-                return counters.WorkingSetSize / (1024 * 1024)
+                return float(counters.WorkingSetSize) / (1024 * 1024)
             return None
         # POSIX: VmRSS from /proc is the honest current number (Linux)
         try:

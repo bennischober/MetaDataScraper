@@ -3,6 +3,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 SCHEMA_VERSION = 10
 
@@ -433,7 +434,7 @@ def is_unchanged(row: sqlite3.Row, path: Path) -> bool:
         bool: True if the file did not change since the last scan.
     """
     stat = path.stat()
-    return row["mtime"] == stat.st_mtime and row["size"] == stat.st_size
+    return bool(row["mtime"] == stat.st_mtime and row["size"] == stat.st_size)
 
 
 def upsert_file(connection: sqlite3.Connection, record: MovieRecord) -> int:
@@ -510,7 +511,10 @@ def get_file_by_path(connection: sqlite3.Connection, path: Path) -> sqlite3.Row 
     Returns:
         sqlite3.Row | None: The row, or None if not stored.
     """
-    return connection.execute("SELECT * FROM files WHERE path = ?", (str(path),)).fetchone()
+    return cast(
+        "sqlite3.Row | None",
+        connection.execute("SELECT * FROM files WHERE path = ?", (str(path),)).fetchone(),
+    )
 
 
 def save_plan(
@@ -693,7 +697,7 @@ def get_valid_plan(
         or bool(row["remove_bars"]) != remove_bars
     ):
         return None
-    return row
+    return cast("sqlite3.Row", row)
 
 
 def get_cached_records(connection: sqlite3.Connection) -> dict[str, sqlite3.Row]:
@@ -853,7 +857,7 @@ def get_verification(
         "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes WHERE id = ?",
         (encode_id,),
     ).fetchone()
-    return row
+    return cast("sqlite3.Row | None", row)
 
 
 def add_skip(

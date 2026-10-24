@@ -26,8 +26,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
 
 from shrinkray import resources
 from shrinkray.encode import (
@@ -43,6 +45,9 @@ from shrinkray.media import FFPROBE_TIMEOUT
 from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
+
+# the engine's live-progress callback: stage detail and counters, never persisted
+ProgressCallback = Callable[[dict], None]
 
 # Netflix's reference model (https://github.com/Netflix/vmaf), shipped with the
 # package because old ffmpeg/libvmaf builds cannot load embedded models.
@@ -398,7 +403,7 @@ def _run(
     stderr_chunks: list[bytes] = []
     last_output_cell = [time.monotonic()]  # drain threads report progress
 
-    def _drain(pipe, chunks: list[bytes]) -> None:
+    def _drain(pipe: "IO[bytes]", chunks: list[bytes]) -> None:
         """Reads a pipe to its EOF into chunks (runs in a daemon thread).
 
         Every chunk read also refreshes the shared last-output timestamp:
@@ -587,7 +592,7 @@ def extract_samples(
     count: int,
     seconds: float,
     cancel: threading.Event | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
 ) -> list[tuple[Path, float]]:
     """Extracts short near-lossless sample clips for probing.
 
@@ -1064,7 +1069,7 @@ def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
     return round(output_file.stat().st_size * 8 / duration / 1_000_000, 2)
 
 
-def bisect_crf(score, lo: int, hi: int, target_vmaf: float) -> int:
+def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: float) -> int:
     """Finds the largest CRF whose probe still meets the quality target.
 
     The search is a bracketing interpolation (issue #23, the shape ab-av1's
@@ -1251,7 +1256,7 @@ def estimate_size_factor(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
 ) -> float:
     """Estimates the full-encode size relative to the source from one sample.
@@ -1361,7 +1366,7 @@ def find_optimal_crf(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
@@ -1454,7 +1459,7 @@ def find_optimal_crf_and_skip(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
@@ -1553,7 +1558,7 @@ def plan_quality(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
@@ -1844,7 +1849,7 @@ def _probe_movie(
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
@@ -1958,7 +1963,7 @@ def encode_with_quality(
     encoder: str = "x265",
     encoder_preset: str = "medium",
     remove_bars: bool = False,
-    progress=None,
+    progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,

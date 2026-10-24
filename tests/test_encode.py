@@ -579,6 +579,31 @@ class TestEncodeLock(unittest.TestCase):
         self.assertEqual(acquired, lock)
         lock.unlink()
 
+    def test_encode_movies_forwards_caller_progress(self):
+        """The caller's progress callback receives every encode percent event.
+
+        Regression: the loop shadowed its `progress` parameter with its own rich
+        bar, so a job's live progress (the SSE channel) fell silent for the
+        whole run and the dashboard showed no percent.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "movie.mkv"
+            source.write_bytes(b"x")
+            events: list[dict] = []
+
+            def fake_encode(i, o, cmd, progress=None, db_file=None):
+                if progress is not None:
+                    progress({"stage": "encode", "percent": 42.0})
+                return encode.EncodeResult(input=i, output=o, success=True)
+
+            with (
+                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.encode._encode_with_command", side_effect=fake_encode),
+            ):
+                encode.encode_movies([source], Path(tmp) / "enc", progress=events.append)
+            self.assertEqual([e.get("percent") for e in events], [42.0])
+
     def test_encode_movies_busy_raises(self):
         """encode_movies propagates EncodeBusyError (no clobber, no swallow)."""
         import tempfile

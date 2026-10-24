@@ -5,6 +5,23 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The typing, lint and coverage bar is enforced, not aspirational**: every
+  module under `src/shrinkray/` is now fully annotated and mypy runs with
+  `disallow_untyped_defs`, `disallow_incomplete_defs`, `warn_return_any`,
+  `no_implicit_reexport` and `strict_equality` (issue #40). `py.typed` ships
+  in the wheel, ruff runs the `S` (bandit) rules with each exception carrying
+  its reason, and coverage has a floor so a regression fails instead of sliding.
+  The per-module mypy rollout list is gone: one config applies to all of it.
+
+### Fixed
+
+- **A batch encode's live progress was silently dropped**: `encode_movies`
+  rebound its `progress` parameter with its own rich progress bar, so a resident
+  app job never streamed a percent for a fixed-preset batch. The caller's
+  callback now receives every event alongside the bar.
+
 ### Removed
 
 - **Duplicate detection and the only destructive route**: `dedupe.py`, the

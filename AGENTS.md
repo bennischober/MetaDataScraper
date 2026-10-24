@@ -140,9 +140,13 @@ existing video collection" and nothing more specific.
 - **Formatting is ruff's job, not yours.** After writing or restructuring
   code, run `uv run ruff format` on the touched files before committing.
   The CI format check is strict.
-- **Type hints are checked by mypy** with `check_untyped_defs` and
-  `no_implicit_optional`. New public functions get full type hints and a
-  docstring in Google style (see existing modules for the pattern).
+- **Type hints are checked by mypy** with `check_untyped_defs`,
+  `no_implicit_optional`, `disallow_untyped_defs`, `disallow_incomplete_defs`,
+  `warn_return_any`, `no_implicit_reexport` and `strict_equality` — every
+  module under `src/shrinkray/` is fully annotated, so the strict flags apply
+  everywhere, not module by module (issue #40). New public functions get full
+  type hints and a docstring in Google style (see existing modules for the
+  pattern).
 - **Tests live in `tests/` as plain `unittest`** classes run by pytest,
   one file per source module (`test_encode.py`, `test_quality.py`,
   `test_watch.py`, `test_db.py`, `test_report.py`, `test_cli.py`,

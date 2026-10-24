@@ -3,6 +3,7 @@ import math
 import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any, cast
 
 from shrinkray.config import Conf, load_config
 
@@ -44,7 +45,7 @@ def run_ffprobe(path: Path) -> dict:
         raise RuntimeError(f"ffprobe error for '{path}': {stderr}")
 
     try:
-        return json.loads(proc.stdout)
+        return cast("dict[str, Any]", json.loads(proc.stdout))
     except json.JSONDecodeError as e:
         raise RuntimeError(f"ffprobe returned invalid json for '{path}'") from e
 
@@ -129,7 +130,7 @@ def get_duration(video: dict, language: str = "en") -> str | None:
         keys = [f"DURATION-{language}", "DURATION-eng", "DURATION-de", "DURATION"]
         for key in keys:
             if key in tags:
-                duration = tags[key].split(".")[0]
+                duration = str(tags[key].split(".")[0])
                 break
         else:
             # no duration tag => fallback to the format duration
@@ -183,7 +184,7 @@ def get_video_stream(streams: list) -> dict | None:
     """
     for stream in streams:
         if stream.get("codec_type") == "video":
-            return stream
+            return cast("dict[str, Any]", stream)
     return None
 
 
