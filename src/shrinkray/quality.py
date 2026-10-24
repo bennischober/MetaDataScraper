@@ -1640,6 +1640,7 @@ def plan_quality(
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
     min_source_height: int = 0,
+    min_source_size_gb: float = 0.0,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1666,6 +1667,13 @@ def plan_quality(
         progress (callable | None): Callback progress(dict) for live step
             updates of the probing pipeline (flow to the UI, never
             persisted — the same events the console prints as log lines).
+        min_source_height (int): Skip sources below this height (0 = gate
+            off). A lower-resolution source has too few pixels to save
+            meaningfully, so the probe cost buys nothing.
+        min_source_size_gb (float): Skip sources below this size (0 = gate
+            off). Probe cost is roughly constant per file while the payoff
+            scales with size, so the smallest files have the worst
+            cost/benefit ratio.
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -1720,6 +1728,29 @@ def plan_quality(
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
+            remove_bars=remove_bars,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
+    # the size gate is the cheapest of the remaining checks: it reads one
+    # stat, and probe cost is roughly constant while the payoff scales with
+    # the file's size
+    size_gb = input_file.stat().st_size / (1024**3)
+    if min_source_size_gb > 0 and size_gb < min_source_size_gb:
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"size {size_gb:.2f} GB is below the {min_source_size_gb:.2f} GB "
+                "minimum (too little to save for the probe cost)"
+            ),
+            skipped_reason="below min size",
             remove_bars=remove_bars,
             crf_range=crf_range,
             sample_count=sample_count,
@@ -2081,6 +2112,7 @@ def encode_with_quality(
     force_reprobe: bool = False,
     use_probe_cache: bool = True,
     min_source_height: int = 0,
+    min_source_size_gb: float = 0.0,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -2107,6 +2139,10 @@ def encode_with_quality(
             directory for failure evidence (None => cwd metadata.db).
         encoder_threads (int | None): Thread limit for the probe encodes
             AND the final encode (None = no limit).
+        min_source_height (int): Skip sources below this height (0 = gate
+            off).
+        min_source_size_gb (float): Skip sources below this size (0 = gate
+            off).
         verify (bool): Run a full-file VMAF verification after a successful
             encode (opt-in: hours of decode for a large movie; sub-sampled
             1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).

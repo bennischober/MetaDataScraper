@@ -665,6 +665,50 @@ class TestSubprocessTimeouts(unittest.TestCase):
         finally:
             movie.parent.rmdir()
 
+    def test_min_source_size_gate_skips_before_probing(self):
+        """A source below the size floor is skipped before any probe runs.
+
+        Probe cost is roughly constant per file while the payoff scales with
+        size, so the smallest files have the worst cost/benefit ratio. The gate
+        must decide from one stat and reach neither extraction nor HandBrake.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)  # a few bytes: far below 5 GB
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "extract_samples") as fake_extract,
+                patch.object(quality, "find_handbrake") as fake_hb,
+            ):
+                result = quality.plan_quality(src, min_source_size_gb=5.0)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "below min size")
+        self.assertIn("5.00 GB", result.error or "")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_min_source_size_gate_is_off_by_default(self):
+        """A small file is a normal candidate when no floor is configured.
+
+        The gate must be opt-in: a file that would previously be probed must
+        still be probed when the operator has not asked for a size floor.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
     def test_min_source_height_gate_skips_before_probing(self):
         """A source below the height floor is skipped before any probe runs.
 

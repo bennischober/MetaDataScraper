@@ -204,6 +204,7 @@ def watch(
     stop_event: threading.Event | None = None,
     db_file: Path | None = None,
     min_source_height: int = 0,
+    min_source_size_gb: float = 0.0,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -317,6 +318,7 @@ def watch(
                             # plan staleness: watch always measures fresh
                             force_reprobe=True,
                             min_source_height=min_source_height,
+                            min_source_size_gb=min_source_size_gb,
                         )
                 except EncodeBusyError as e:
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")

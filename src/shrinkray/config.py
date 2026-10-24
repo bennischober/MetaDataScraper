@@ -36,6 +36,10 @@ DEFAULT_STALL_MINUTES = 10.0
 # PRODUCT.md makes 1080p the floor: a lower-resolution source has too few
 # pixels to save meaningfully, so the probe cost is spent for nothing
 DEFAULT_MIN_SOURCE_HEIGHT = 1080
+# eligibility: sources below this size are never re-encoded (0 = gate off).
+# Probe cost is roughly constant per file while the payoff scales with size,
+# so the smallest files have the worst cost/benefit ratio
+DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
 
 
 class Conf:
@@ -111,6 +115,14 @@ class Conf:
         if self.min_source_height < 0:
             raise ValueError(
                 f"eligibility.min_source_height: {self.min_source_height} is negative "
+                "(0 disables the gate)"
+            )
+        self.min_source_size_gb: float = float(
+            eligibility.get("min_source_size_gb", DEFAULT_MIN_SOURCE_SIZE_GB)
+        )
+        if self.min_source_size_gb < 0:
+            raise ValueError(
+                f"eligibility.min_source_size_gb: {self.min_source_size_gb} is negative "
                 "(0 disables the gate)"
             )
 

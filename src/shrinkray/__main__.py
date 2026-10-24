@@ -567,6 +567,7 @@ def _record_encodes(
                             force_reprobe=replan,
                             encoder_preset=encoder_preset,
                             min_source_height=config.min_source_height,
+                            min_source_size_gb=config.min_source_size_gb,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
