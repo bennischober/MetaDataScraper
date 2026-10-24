@@ -285,7 +285,7 @@ def build_command(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file.
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         encoder_threads (int | None): Thread limit for the encoder
             (for parallel encoding across multiple movies). None = no limit.
 
@@ -310,8 +310,12 @@ def build_command(
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
     if encoder_threads is not None:
-        # HandBrakeCLI has no thread flag; x264/x265 take it via --encopts
-        command += ["--encopts", f"threads={encoder_threads}"]
+        # HandBrakeCLI has no thread flag, and SVT-AV1 has no `threads`
+        # option: --encopts pairs go to svt_av1_enc_parse_parameter, which
+        # would silently ignore `threads=N` (issue #21). SVT-AV1's `pin`
+        # restricts execution to the first N cores, which is what the cap
+        # means here.
+        command += ["--encopts", f"pin={encoder_threads}"]
     return command
 
 
@@ -743,7 +747,7 @@ def encode_file(
     input_file: Path,
     output_file: Path,
     preset: str = "Fast 1080p30",
-    encoder: str = "x265",
+    encoder: str = "svt_av1",
     overwrite: bool = False,
     progress: ProgressCallback | None = None,
 ) -> EncodeResult:
@@ -755,7 +759,7 @@ def encode_file(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file (must not exist, or overwrite=True).
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (e.g. str): The video encoder, e.g. 'x265'.
+        encoder (e.g. str): The video encoder, e.g. 'svt_av1'.
         overwrite (bool): Whether an existing output file may be replaced.
         progress (callable | None): Callback progress(dict) for live updates.
 
@@ -780,7 +784,7 @@ def encode_movies(
     movies: list[Path],
     output_dir: Path,
     preset: str = "Fast 1080p30",
-    encoder: str = "x265",
+    encoder: str = "svt_av1",
     dry_run: bool = False,
     overwrite: bool = False,
     workers: int | None = None,
@@ -798,11 +802,11 @@ def encode_movies(
         movies (list[Path]): The movie files to re-encode.
         output_dir (Path): Directory for the encoded files (created if missing).
         preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         dry_run (bool): If True, only show what would be encoded.
         overwrite (bool): Whether existing output files may be replaced.
         workers (int | None): Number of concurrent encodes (1 = sequential,
-            None = automatic: 1, since a single x265 encode already scales
+            None = automatic: 1, since a single SVT-AV1 encode already scales
             across all cores).
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
             With workers > 1 the cap only applies when it is tighter than
@@ -828,7 +832,7 @@ def encode_movies(
         return results
 
     if workers is None:
-        # a single x265 encode already uses all cores efficiently; parallel
+        # a single SVT-AV1 encode already uses all cores efficiently; parallel
         # encodes only help when the per-encode thread count is capped lower
         workers = 1
     workers = max(1, workers)

@@ -21,7 +21,7 @@ class TestEncode(unittest.TestCase):
             Path("in.mkv"),
             Path("out.mkv"),
             "Fast 1080p30",
-            "x265",
+            "svt_av1",
         )
         self.assertEqual(command[0], "C:/HandBrake/HandBrakeCLI.exe")
         self.assertIn("--input", command)
@@ -29,7 +29,7 @@ class TestEncode(unittest.TestCase):
         self.assertIn("--output", command)
         self.assertIn("out.mkv", command)
         self.assertIn("Fast 1080p30", command)
-        self.assertIn("x265", command)
+        self.assertIn("svt_av1", command)
         # audio passthrough without conflicting options
         self.assertIn("--aencoder", command)
         self.assertNotIn("--audio", command)
@@ -42,19 +42,67 @@ class TestEncode(unittest.TestCase):
         self.assertIsNone(encode.cap_threads(-3))
         self.assertEqual(encode.cap_threads(8), 8)
 
+    def test_encoder_for_is_the_single_source_of_the_codec(self):
+        """encoder_for is the only place the output codec is chosen.
+
+        PRODUCT.md makes AV1 the single output codec (issue #21): SDR uses
+        svt_av1 and HDR svt_av1_10bit. The six HDR ternaries that used to
+        be written per call site had already drifted once (#26), so the choice
+        lives in one function and every caller reads it from there.
+        """
+        self.assertEqual(quality.encoder_for(False), "svt_av1")
+        self.assertEqual(quality.encoder_for(True), "svt_av1_10bit")
+
+    def test_no_handbrake_command_emits_h264_or_h265(self):
+        """No code path emits H.264 or H.265 any more (issue #21).
+
+        x265 is gone from every path - not demoted to a fallback, not kept
+        as an option. The check is on the HandBrake commands only: the
+        ffmpeg sample extraction uses libx264 for intermediate clips, which
+        is not an output codec.
+        """
+        fixed = encode.build_command(
+            "hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", quality.encoder_for(False)
+        )
+        for command in (
+            fixed,
+            quality.build_encode_command(
+                "hb",
+                Path("in.mkv"),
+                Path("out.mkv"),
+                30,
+                quality.encoder_for(False),
+                "3",
+            ),
+            quality.build_encode_command(
+                "hb",
+                Path("in.mkv"),
+                Path("out.mkv"),
+                30,
+                quality.encoder_for(True),
+                "3",
+            ),
+        ):
+            joined = " ".join(command)
+            for gone in ("x265", "x264", "x265_10bit", "h265", "h264"):
+                self.assertNotIn(gone, joined)
+            self.assertIn("svt_av1", joined)
+
     def test_build_command_with_thread_cap(self):
         command = encode.build_command(
             "hb",
             Path("in.mkv"),
             Path("out.mkv"),
             "Fast 1080p30",
-            "x265",
+            "svt_av1",
             encoder_threads=8,
         )
         self.assertIn("--encopts", command)
-        self.assertIn("threads=8", command)
+        self.assertIn("pin=8", command)
         # uncapped: no encopts at all
-        plain = encode.build_command("hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", "x265")
+        plain = encode.build_command(
+            "hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", "svt_av1"
+        )
         self.assertNotIn("--encopts", plain)
 
     def test_encode_movies_max_threads_tightens_share(self):
@@ -76,13 +124,13 @@ class TestEncode(unittest.TestCase):
                     [source],
                     Path(out),
                     preset="Fast 1080p30",
-                    encoder="x265",
+                    encoder="svt_av1",
                     workers=2,
                     max_threads=4,
                 )
                 command = enc.call_args[0][2]
         self.assertIn("--encopts", command)
-        self.assertIn("threads=4", command)
+        self.assertIn("pin=4", command)
 
     def test_saved_percent(self):
         result = encode.EncodeResult(
@@ -777,13 +825,13 @@ class TestEncodeLock(unittest.TestCase):
                         workers=1,
                         threads=None,
                         db_file=db_file,
-                        encoder_preset="slow",
+                        encoder_preset="6",
                     )
                 # the CLI passed a callable, and calling it does not crash
                 self.assertTrue(callable(captured["progress"]))
                 # the CLI's --encoder-preset reaches the engine (issue #31:
                 # the preset was a constant no caller could override)
-                self.assertEqual(captured["encoder_preset"], "slow")
+                self.assertEqual(captured["encoder_preset"], "6")
                 captured["progress"]({"stage": "encode", "percent": 10.0, "movie": "movie.mkv"})
             finally:
                 connection.close()

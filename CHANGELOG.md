@@ -7,6 +7,19 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Changed
 
+- **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
+  `svt_av1_10bit` (issue #21). x265 is gone from every path - not
+  demoted to a fallback, not kept as an option. `encoder_for(hdr)` is the
+  single source of the choice; the six HDR ternaries that used to be written
+  per call site are replaced by it, and `handbrake.encoder` is a two-value
+  assertion that rejects a config still naming x265 at load rather than
+  silently producing H.265.
+
+- **The thread cap reaches SVT-AV1 as `--encopts pin=N`**: `threads=N` is
+  an x264/x265 option, and SVT-AV1's parameter parser silently ignores an
+  unknown key. `pin` restricts execution to the first N cores, which is what
+  the cap means here.
+
 - **The decision statistic is the mean, not the minimum**: `probe_crf`
   aggregates the per-sample VMAF means with the mean instead of the
   minimum (issue #15). A minimum over samples is monotone non-increasing

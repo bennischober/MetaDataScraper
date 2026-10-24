@@ -118,17 +118,24 @@ def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
 # top-tier floor); VMAF falls monotonically with rising CRF.
 DEFAULT_TARGET_VMAF = 95.0
-# the default video encoder (the HDR engine override is 'x265_10bit')
-DEFAULT_ENCODER = "x265"
+# AV1 is the only output codec (issue #21): SVT-AV1 on the CPU, 10-bit for
+# HDR. x265 is gone from every path - not demoted to a fallback, not kept
+# as an option. encoder_for() is the single source of this choice.
+DEFAULT_ENCODER = "svt_av1"
+HDR_ENCODER = "svt_av1_10bit"
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
 # 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
 DEFAULT_HDR_TARGET_VMAF = 94.5
-# CRF 14 is near-transparent for x265, 32 is clearly lossy for live action.
-DEFAULT_CRF_RANGE = (14, 32)
-# HDR needs deeper quality headroom (4K + tone-map scale): CRF 10 was
-# measured at VMAF 96.5 on real HDR10 content
-DEFAULT_HDR_CRF_RANGE = (10, 32)
+# SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
+# hb_video_quality_get_limits), a wider and finer scale than x265's.
+# These bounds are NOT calibrated for SVT-AV1 yet: they are the
+# x265-era ranges carried over, and the issue requires a measured
+# SVT-AV1 CRF-to-VMAF curve on 3-5 titles before they can be
+# trusted. The search clamps to this band, so an over-wide range only
+# costs probes - it cannot make the decision wrong in the safe direction.
+DEFAULT_CRF_RANGE = (14, 45)
+DEFAULT_HDR_CRF_RANGE = (10, 45)
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
 # probe density as a duration: one window per N seconds of runtime, so
@@ -810,7 +817,7 @@ def build_encode_command(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file.
         crf (int): The CRF quality value.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         encoder_preset (str): The encoder speed preset to encode at.
         crop (tuple | None): Crop bars (top, bottom, left, right) to remove
             baked-in black bars. None keeps the source resolution.
@@ -834,8 +841,12 @@ def build_encode_command(
         str(crf),
     ]
     if encoder_threads is not None:
-        # HandBrakeCLI has no thread flag; x264/x265 take it via --encopts
-        command += ["--encopts", f"threads={encoder_threads}"]
+        # HandBrakeCLI has no thread flag, and SVT-AV1 has no `threads`
+        # option: --encopts pairs go to svt_av1_enc_parse_parameter, which
+        # would silently ignore `threads=N` (issue #21). SVT-AV1's `pin`
+        # restricts execution to the first N cores, which is what the cap
+        # means here.
+        command += ["--encopts", f"pin={encoder_threads}"]
     if crop is not None:
         top, bottom, left, right = crop
         # HandBrake crop order is top:bottom:left:right
@@ -1105,6 +1116,24 @@ def source_height(movie: Path) -> int | None:
     return int(height)
 
 
+def encoder_for(hdr: bool) -> str:
+    """Returns the only output encoder this product emits.
+
+    PRODUCT.md makes AV1 the single output codec, encoded on the CPU: SDR
+    encodes with ``svt_av1`` and HDR encodes with ``svt_av1_10bit``. H.264
+    and H.265 are not demoted to fallbacks - they are gone. Keeping the
+    choice in one function is what stops the six HDR ternaries that used to
+    be written out per call site from drifting apart again.
+
+    Args:
+        hdr (bool): True when the source is HDR.
+
+    Returns:
+        str: The HandBrake encoder name.
+    """
+    return HDR_ENCODER if hdr else DEFAULT_ENCODER
+
+
 def is_hdr_file(movie: Path) -> bool:
     """Checks whether a movie file is HDR.
 
@@ -1342,7 +1371,7 @@ def probe_crf(
         handbrake (str): Path to the HandBrakeCLI binary.
         movie (Path): The source movie (cache identity: size + mtime).
         sample_seconds (float): The sample window's length in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting; the final encode's preset is a separate
             value, issue #22).
@@ -1455,7 +1484,7 @@ def estimate_size_factor(
         crf (int): The CRF quality value to probe.
         movie (Path): The source movie (cache identity: size + mtime).
         sample_seconds (float): The sample window's length in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         crop (tuple | None): Crop bars applied to the probe encode.
@@ -1537,8 +1566,8 @@ def find_optimal_crf(
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "x265",
-    probe_encoder_preset: str = "medium",
+    encoder: str = "svt_av1",
+    probe_encoder_preset: str = "5",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -1558,7 +1587,7 @@ def find_optimal_crf(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
@@ -1639,8 +1668,8 @@ def find_optimal_crf_and_skip(
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "x265",
-    probe_encoder_preset: str = "medium",
+    encoder: str = "svt_av1",
+    probe_encoder_preset: str = "5",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -1664,7 +1693,7 @@ def find_optimal_crf_and_skip(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
@@ -1749,9 +1778,9 @@ def plan_quality(
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "x265",
-    probe_encoder_preset: str = "medium",
-    encoder_preset: str = "slow",
+    encoder: str = "svt_av1",
+    probe_encoder_preset: str = "5",
+    encoder_preset: str = "3",
     remove_bars: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
@@ -1777,7 +1806,7 @@ def plan_quality(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'; for HDR the engine
+        encoder (str): The video encoder, e.g. 'svt_av1'. for HDR the engine
             switches to the 10-bit variant and the result carries it.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22); the plan's fingerprint keys
@@ -1827,7 +1856,7 @@ def plan_quality(
     # the effective decision inputs: for HDR the engine overrides the
     # target/range and switches to the 10-bit encoder — every downstream
     # call and the result's fingerprint fields carry these OVERRIDDEN values
-    effective_encoder = "x265_10bit" if hdr else encoder
+    effective_encoder = encoder_for(hdr)
     if hdr:
         # the tone-mapped measurement scale sits slightly lower; use the
         # calibrated target and the deeper CRF range for 4K headroom
@@ -2228,7 +2257,7 @@ def _probe_movie(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         remove_bars (bool): Detect and crop stable black bars.
@@ -2375,9 +2404,9 @@ def encode_with_quality(
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "x265",
-    probe_encoder_preset: str = "medium",
-    encoder_preset: str = "slow",
+    encoder: str = "svt_av1",
+    probe_encoder_preset: str = "5",
+    encoder_preset: str = "3",
     remove_bars: bool = False,
     progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
@@ -2404,7 +2433,7 @@ def encode_with_quality(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'x265'.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
             setting, issue #22); the probes and the plan fingerprint use it.
         encoder_preset (str): The FINAL encode's speed preset (an output
@@ -2456,7 +2485,7 @@ def encode_with_quality(
     # the effective decision inputs: for HDR the engine overrides the
     # target/range and switches to the 10-bit encoder (same rule as
     # plan_quality, so a stored HDR plan is found under its real encoder)
-    effective_encoder = "x265_10bit" if hdr else encoder
+    effective_encoder = encoder_for(hdr)
     if hdr:
         target_vmaf = DEFAULT_HDR_TARGET_VMAF
         crf_range = DEFAULT_HDR_CRF_RANGE
@@ -2602,6 +2631,7 @@ def encode_with_quality(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             remove_bars=remove_bars,
+            crop_sample_count=crop_sample_count,
         )
     crf_source: str | None = None
     plan_created_at: str | None = None

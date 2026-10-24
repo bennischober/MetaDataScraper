@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from shrinkray import db
+from shrinkray.config import DEFAULT_PROBE_ENCODER_PRESET
 from shrinkray.db import MovieRecord
 from shrinkray.encode import probe_duration_seconds as probe_duration
 
@@ -130,7 +131,9 @@ def record_plan(
     # the plan fingerprint keys on the PROBE preset (issue #22 decision): a
     # stored plan is a probe result, its CRF depends on the probe preset
     # only - the plans.encoder_preset column holds the probe preset
-    probe_preset = result.probe_encoder_preset or result.encoder_preset or "medium"
+    probe_preset = (
+        result.probe_encoder_preset or result.encoder_preset or DEFAULT_PROBE_ENCODER_PRESET
+    )
     return db.save_plan(
         connection,
         row["id"],

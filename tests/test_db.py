@@ -322,7 +322,7 @@ class TestDb(unittest.TestCase):
             70.0,
             chosen_crf=22,
             achieved_vmaf=95.4,
-            encoder_preset="slow",
+            encoder_preset="6",
             encode_seconds=1234.5,
             probe_count=3,
             probe_seconds=30.0,
@@ -340,7 +340,7 @@ class TestDb(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             movie = next(m for m in response.json() if m["name"] == "metrics")
             encode = movie["encode"]
-            self.assertEqual(encode["encoder_preset"], "slow")
+            self.assertEqual(encode["encoder_preset"], "6")
             self.assertAlmostEqual(encode["encode_seconds"], 1234.5)
             self.assertEqual(encode["probe_count"], 3)
             self.assertAlmostEqual(encode["probe_seconds"], 30.0)
@@ -502,7 +502,7 @@ class TestDb(unittest.TestCase):
                     input_mtime=Path(movie_path).stat().st_mtime,
                     input_size=Path(movie_path).stat().st_size,
                     encoder="x265",
-                    encoder_preset="medium",
+                    encoder_preset="5",
                     target_vmaf=95.0,
                     crf_low=14,
                     crf_high=32,
@@ -537,7 +537,7 @@ class TestDb(unittest.TestCase):
                     input_mtime=Path(movie_path).stat().st_mtime,
                     input_size=Path(movie_path).stat().st_size,
                     encoder="x265",
-                    encoder_preset="medium",
+                    encoder_preset="5",
                     target_vmaf=95.0,
                     crf_low=14,
                     crf_high=32,
@@ -1091,7 +1091,7 @@ class TestDb(unittest.TestCase):
             )
             self.assertTrue(outcome.encoded)
             row = self.connection.execute("SELECT encoder FROM encodes").fetchone()
-            self.assertEqual(row["encoder"], "x265")  # config_helper.Conf() default
+            self.assertEqual(row["encoder"], "svt_av1")  # config_helper.Conf() default
 
     def test_doctor_healthy_library(self):
         """A library whose rows all exist on disk and whose outputs are
