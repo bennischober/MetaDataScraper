@@ -140,6 +140,7 @@ class TestJobs(unittest.TestCase):
             sample_count=3,
             sample_seconds=10.0,
             crop_sample_count=10,
+            vmaf_statistic="mean",
             hdr=False,
             encoder="x265",
         )
@@ -198,6 +199,7 @@ class TestJobs(unittest.TestCase):
             sample_count=3,
             sample_seconds=10.0,
             crop_sample_count=10,
+            vmaf_statistic="mean",
             hdr=False,
             encoder="x265",
         )
