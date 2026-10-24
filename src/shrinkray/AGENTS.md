@@ -23,7 +23,7 @@ Root AGENTS.md covers the product rules and the gate; this file is the module ma
 | ffprobe parse | `media.py` (327 L) | `run_ffprobe`, `get_data` |
 | Scan -> DB rows | `scanner.py` (404 L) | `scan_movies`, thread pool `min(8, cpu)` |
 | HTML report | `report.py` (259 L) | self-contained, reads sqlite directly |
-| Priority / nice / RSS | `resources.py` (245 L) | `apply`, `spawn_kwargs` |
+| Priority / nice / RSS | `tools/process.py` (moved from `resources.py`, #97 phase 2; transitional shim in `resources.py`) | `apply`, `spawn_kwargs` |
 | Failure bundles | `telemetry.py` (99 L) | `save_failure` -> `logs/`, best-effort by design |
 | Logging | `logger.py` (23 L) | loguru; `log`/`log_warning`/`log_error` |
 | Grab bag (dissolving, #63) | `helpers.py` (257 L) | imported only by `__main__.py` and `scanner.py` |
