@@ -1064,28 +1064,68 @@ def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
     return round(output_file.stat().st_size * 8 / duration / 1_000_000, 2)
 
 
-def bisect_crf(check, lo: int, hi: int) -> int:
-    """Finds the largest CRF whose probe still passes the quality check.
+def bisect_crf(score, lo: int, hi: int, target_vmaf: float) -> int:
+    """Finds the largest CRF whose probe still meets the quality target.
+
+    The search is a bracketing interpolation (issue #23, the shape ab-av1's
+    crf_search uses): each round measures a CRF between the current passing
+    and failing brackets, guessed by linear interpolation in VMAF space
+    (a typical VMAF curve reaches the target in fewer probes than a plain
+    midpoint bisect). Two safeguards keep the worst case at the bisect's:
+
+    - the guess is clamped strictly inside the bracket (interpolation can
+      point outside on near-flat curves),
+    - the guess must shrink the bracket by at least half — a strongly
+      convex/step-like curve would make regula falsi crawl, so the search
+      falls back to the midpoint when interpolation would not.
 
     Args:
-        check (callable): Predicate check(crf) => bool, True if the quality
-            target is met. Must be monotonic: True for low CRF, False for
-            high CRF.
-        lo (int): The lowest CRF to consider.
-        hi (int): The highest CRF to consider.
+        score (callable): Measurement score(crf) => float, the probe's VMAF
+            at that CRF. Must be monotonic: high at low CRF, low at high
+            CRF. Every CRF is measured at most once (cacheable inside the
+            callable).
+        lo (int): The lowest CRF to consider. Failing here is the "target
+            unreachable" signal (callers skip the movie on it).
+        hi (int): The highest CRF to consider (exclusive, never probed).
 
     Returns:
-        int: The largest passing CRF (or lo if even lo fails; the caller
-            should use it anyway as the best available quality).
+        int: The largest passing CRF in [lo, hi), or lo if even lo fails
+            (the caller should use it anyway as the best available quality).
     """
-    if not check(lo):
+    vmaf_lo = score(lo)
+    if vmaf_lo < target_vmaf:
         return lo
+
+    vmaf_hi: float | None = None  # measured at the current failing bound
     while hi - lo > 1:
-        mid = (lo + hi) // 2
-        if check(mid):
-            lo = mid
+        if vmaf_hi is None:
+            # first round: no failing measurement yet — bisect (ab-av1's
+            # first guess is the midpoint for the same reason)
+            guess = (lo + hi) // 2
         else:
-            hi = mid
+            # linear interpolation between the passing (vmaf_lo at lo) and
+            # failing (vmaf_hi at hi) ends, in VMAF space; a flat segment
+            # (equal scores) gives no direction => midpoint
+            span = vmaf_lo - vmaf_hi
+            if span > 0:
+                frac = (vmaf_lo - target_vmaf) / span
+                guess = round(lo + (hi - lo) * frac)
+            else:
+                guess = (lo + hi) // 2
+            # safeguard: strictly inside the bracket, and the surviving
+            # side after this probe must be no larger than bisection's
+            # (ceil(w/2)) — on a convex or step-like curve regula falsi
+            # crawls (its guesses hug the passing edge), so fall back to
+            # the midpoint whenever interpolation would shrink the bracket
+            # more slowly than the plain bisect would from here
+            guess = max(lo + 1, min(hi - 1, guess))
+            if max(guess - lo, hi - guess) > (hi - lo + 1) // 2:
+                guess = (lo + hi) // 2
+        value = score(guess)
+        if value >= target_vmaf:
+            lo, vmaf_lo = guess, value
+        else:
+            hi, vmaf_hi = guess, value
     return lo
 
 
@@ -1362,7 +1402,7 @@ def find_optimal_crf(
 
     probes: list[SampleProbe] = []
 
-    def check(crf: int) -> bool:
+    def check(crf: int) -> float:
         _check_cancel(cancel)
         if progress:
             progress({"stage": "probe", "detail": f"probe encode (CRF {crf})"})
@@ -1391,10 +1431,10 @@ def find_optimal_crf(
                     "probes_done": len(probes),
                 }
             )
-        return vmaf >= target_vmaf
+        return vmaf
 
     lo, hi = crf_range
-    chosen = bisect_crf(check, lo, hi)
+    chosen = bisect_crf(check, lo, hi, target_vmaf)
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
     return chosen, achieved, probes
 

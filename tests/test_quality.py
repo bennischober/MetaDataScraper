@@ -68,13 +68,80 @@ class TestQuality(unittest.TestCase):
 
     def test_bisect_crf(self):
         # monotonic: low crf passes, high crf fails => largest passing crf wins
-        passing = {14, 15, 16, 17, 18, 19, 20, 21}
-        chosen = quality.bisect_crf(lambda c: c in passing, 14, 32)
-        self.assertEqual(chosen, 21)
+        scores = {c: 99.0 - (c - 14) * 0.5 for c in range(14, 32)}
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return scores[c]
+
+        chosen = quality.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertEqual(chosen, 22)  # 99 - (c-14)*0.5 >= 95 up to c=22
+        # every CRF measured at most once
+        self.assertEqual(len(calls), len(set(calls)))
         # even the lowest crf fails => fall back to the lowest
-        self.assertEqual(quality.bisect_crf(lambda c: False, 14, 32), 14)
-        # everything passes => hi - 1... no, the largest measured pass
-        self.assertEqual(quality.bisect_crf(lambda c: True, 14, 32), 31)
+        self.assertEqual(quality.bisect_crf(lambda c: 80.0, 14, 32, target_vmaf=95.0), 14)
+        # everything passes => the largest measured pass (hi is exclusive)
+        self.assertEqual(quality.bisect_crf(lambda c: 99.0, 14, 32, target_vmaf=95.0), 31)
+
+    def _interpolated_search(self, curve, lo: int, hi: int, target: float) -> tuple[int, int]:
+        """Runs bisect_crf over a synthetic curve; returns (chosen, probes)."""
+        calls: list[int] = []
+        cache: dict[int, float] = {}
+
+        def score(c: int) -> float:
+            calls.append(c)
+            if c not in cache:
+                cache[c] = curve(c)
+            return cache[c]
+
+        chosen = quality.bisect_crf(score, lo, hi, target_vmaf=target)
+        assert len(calls) == len(set(calls))  # each CRF measured once
+        return chosen, len(calls)
+
+    def _plain_bisect(self, curve, lo: int, hi: int, target: float) -> tuple[int, int]:
+        calls: list[int] = []
+
+        def check(c: int) -> bool:
+            calls.append(c)
+            return curve(c) >= target
+
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if check(mid):
+                lo = mid
+            else:
+                hi = mid
+        assert len(calls) == len(set(calls))
+        return lo, len(calls)
+
+    def test_interpolation_matches_bisect_on_curve_family(self):
+        """Issue #23's acceptance property: on stated monotonic curve
+        families (linear, concave, convex, step), the interpolated search
+        returns the same CRF as the plain bisect, and never needs more
+        probes than that bisect's worst case."""
+        lo, hi, target = 14, 32, 95.0
+        curves = {
+            # linear fall from VMAF 99 at CRF 14 to 80 at CRF 32
+            "linear": lambda c: 99.0 - (99.0 - 80.0) * (c - lo) / (hi - lo - 1),
+            # concave: steep drop first, then flattens
+            "concave": lambda c: 99.0 - 19.0 * ((c - lo) / (hi - lo - 1)) ** 0.5,
+            # convex: flat first, then steep — the regula-falsi trap
+            "convex": lambda c: 99.0 - 19.0 * ((c - lo) / (hi - lo - 1)) ** 2.0,
+            # step: perfect until a cliff, then worthless
+            "step": lambda c: 97.0 if c <= 21 else 60.0,
+        }
+        for name, curve in curves.items():
+            with self.subTest(curve=name):
+                chosen_interp, probes_interp = self._interpolated_search(curve, lo, hi, target)
+                chosen_plain, probes_plain = self._plain_bisect(curve, lo, hi, target)
+                self.assertEqual(chosen_interp, chosen_plain, f"CRF mismatch on {name}")
+                self.assertLessEqual(
+                    probes_interp,
+                    probes_plain + 1,
+                    f"{name}: interpolation used more probes ({probes_interp}) "
+                    f"than bisect ({probes_plain})",
+                )
 
     def test_build_vmaf_command(self):
         for style in (quality.VMAF_STYLE_LEGACY, quality.VMAF_STYLE_MODERN):
