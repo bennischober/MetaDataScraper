@@ -566,6 +566,7 @@ def _record_encodes(
                             verify=verify,
                             force_reprobe=replan,
                             encoder_preset=encoder_preset,
+                            min_source_height=config.min_source_height,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -916,6 +917,7 @@ def watch_mode(
             poll_interval=float(poll),
             max_threads=cap_threads(config.handbrake_max_threads),
             db_file=DB_FILE,
+            min_source_height=config.min_source_height,
         )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))

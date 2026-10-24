@@ -400,6 +400,9 @@ def _conf_to_dict(conf: Conf) -> dict:
         "resources": {
             "idle_priority": conf.idle_priority,
         },
+        "eligibility": {
+            "min_source_height": conf.min_source_height,
+        },
         "language": conf.language,
     }
 
@@ -1136,6 +1139,7 @@ def watch_control(
                     max_threads=cap_threads(load_config().handbrake_max_threads),
                     stop_event=s.watch_stop,
                     db_file=s.db_file,
+                    min_source_height=load_config().min_source_height,
                 )
             except Exception as e:  # the thread must never die silently
                 log_error(f"watch loop crashed: {e}")
