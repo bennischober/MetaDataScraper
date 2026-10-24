@@ -160,14 +160,51 @@ export interface Config {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(init?.headers ?? {}) },
   })
   if (!response.ok) {
     const detail = await response.text().catch(() => response.statusText)
     throw new Error(humanizeError(response.status, detail))
   }
   return response.json() as Promise<T>
+}
+
+/** The dashboard's bearer token (issue #36).
+ *
+ * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every route
+ * requires the token, and the operator pastes it once — it is kept in
+ * localStorage so the prompt appears once per browser, not per request.
+ * With no token stored the header is omitted entirely, which is the
+ * loopback development flow (the server does not ask for one). */
+const TOKEN_KEY = 'shrinkray.token'
+
+export function storedToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null // private mode / storage disabled: fall back to no auth
+  }
+}
+
+export function storeToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    // storage unavailable: the token lives for this page view only
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = storedToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/** True when a 401 came back: the UI shows the token prompt instead of an
+ * error strip, because a missing token is not a failure to report as one. */
+export function isAuthFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('401')
 }
 
 /** Raw error text → operator language. The audit trail keeps the raw
@@ -268,7 +305,7 @@ export const api = {
   snapshot: async (): Promise<Snapshot> => {
     const tags = [libraryEtag, jobsEtag].filter((t) => t != null).join(', ')
     const response = await fetch('/api/snapshot', {
-      headers: tags ? { 'If-None-Match': tags } : {},
+      headers: { ...authHeaders(), ...(tags ? { 'If-None-Match': tags } : {}) },
     })
     if (!response.ok) throw new Error(`API ${response.status}: snapshot`)
     const snap = (await response.json()) as Snapshot
@@ -280,7 +317,7 @@ export const api = {
   /** Fetches the library with ETag caching: returns null on 304 (unchanged). */
   libraryChanged: async (): Promise<Movie[] | null> => {
     const response = await fetch('/api/library', {
-      headers: libraryEtag ? { 'If-None-Match': libraryEtag } : {},
+      headers: { ...authHeaders(), ...(libraryEtag ? { 'If-None-Match': libraryEtag } : {}) },
     })
     if (response.status === 304) return null
     if (!response.ok) throw new Error(`API ${response.status}: library`)

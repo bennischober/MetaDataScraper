@@ -1,6 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { api, fmtGb, jobPaths, type Movie, type Status, type Job } from './lib/api'
+  import {
+    api,
+    fmtGb,
+    isAuthFailure,
+    jobPaths,
+    storeToken,
+    type Movie,
+    type Status,
+    type Job,
+  } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
   import JobsPage from './lib/pages/JobsPage.svelte'
@@ -14,6 +23,10 @@
   let movies: Movie[] = $state([])
   let history: Job[] = $state([])
   let error = $state<string | null>(null)
+  /** The server requires a bearer token and none is stored (issue #36):
+   * the UI asks for it instead of showing a red error strip. */
+  let needsToken = $state(false)
+  let tokenInput = $state('')
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
   let notice = $state<string | null>(null)
@@ -190,9 +203,24 @@
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       rememberRss(snap.status?.rss_mib)
       error = null
+      needsToken = false
     } catch (e) {
+      // a 401 is not an error to report: the server requires a token, so
+      // the UI asks for one instead of showing a red strip (issue #36)
+      if (isAuthFailure(e)) {
+        needsToken = true
+        return
+      }
       error = e instanceof Error ? e.message : String(e)
     }
+  }
+
+  /** Stores the pasted token and retries immediately (issue #36). */
+  function submitToken() {
+    storeToken(tokenInput.trim())
+    tokenInput = ''
+    needsToken = false
+    void refresh()
   }
 
   // deep-link restore: a reload on #/movie re-opens the detail as soon as
@@ -578,6 +606,25 @@
 
   <!-- ══ main column ══ -->
   <main class="main" id="main-content" tabindex="-1">
+    {#if needsToken}
+      <div class="api-error mono" role="alert">
+        <form
+          onsubmit={(e) => {
+            e.preventDefault()
+            submitToken()
+          }}>
+          <label for="token-input">this dashboard requires a token (SHRINKRAY_TOKEN):</label>
+          <input
+            id="token-input"
+            type="password"
+            bind:value={tokenInput}
+            autocomplete="current-password"
+            placeholder="paste the token"
+          />
+          <button type="submit">unlock</button>
+        </form>
+      </div>
+    {/if}
     {#if error}
       <div class="api-error mono" role="alert">
         {error}

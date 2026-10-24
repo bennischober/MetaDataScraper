@@ -5,6 +5,21 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
 
+### Added
+
+- **Optional bearer-token authentication for the dashboard** (issue #36).
+  `SHRINKRAY_TOKEN` turns auth on; every route then requires
+  `Authorization: Bearer <token>`, the SSE stream also accepts `?token=`
+  (an `EventSource` cannot send a header), and the UI asks for the token
+  once and keeps it in the browser. The guard is a middleware, not a
+  per-route dependency, so a route added later cannot be left
+  unauthenticated by forgetting a decorator.
+
+- **A non-loopback bind without a token is now a startup failure**, not a
+  silently open dashboard. Binding `0.0.0.0` with no `SHRINKRAY_TOKEN`
+  raises with the variable named in the message. The loopback development
+  flow is unchanged: no token, no prompt.
+
 ### Changed
 
 - **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
