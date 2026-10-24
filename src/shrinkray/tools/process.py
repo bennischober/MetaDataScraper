@@ -24,8 +24,12 @@ import os
 import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
+
+from shrinkray.logger import log_error
 
 if TYPE_CHECKING:
     from shrinkray.config import Conf
@@ -329,3 +333,123 @@ def stall_timeout_seconds() -> float | None:
         float | None: Seconds of tolerated child silence, None when off.
     """
     return _stall_minutes * 60.0 if _stall_minutes is not None else None
+
+
+# The streaming subprocess runner and the cancellation exception
+# (moved verbatim from quality.py, issue #97 phase 2: the tools/
+# package owns every subprocess run).
+
+
+def _run(
+    command: list[str],
+    cwd: Path | None = None,
+    cancel: threading.Event | None = None,
+) -> tuple[int, str]:
+    """Runs a subprocess and returns (returncode, stderr as text).
+
+    With a cancel event, the process is polled and terminated when the
+    event fires; the returncode -1 signals the cancellation to the caller.
+    Both pipes are drained by daemon threads while the process runs: a
+    child writing more than the ~64K pipe buffer (HandBrake progress on
+    stdout, libvmaf/ffmpeg warnings on stderr) would otherwise block
+    forever while this loop only polls for exit — a silent deadlock.
+
+    Args:
+        command (list[str]): The command to run.
+        cwd (Path | None): Working directory.
+        cancel (threading.Event | None): Cooperative cancellation.
+
+    Returns:
+        tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
+    """
+    if cancel is None and stall_timeout_seconds() is None:
+        # Neither cancellation nor stall watching is possible: the simple
+        # blocking run (used when both protections are explicitly off).
+        # Fallback decision (issue #62): no timeout here on purpose — the
+        # probes this runs are minutes-long encodes, a fixed timeout would
+        # kill healthy work, and the operator has explicitly disabled stall
+        # protection. "Watchdog off" means no protection; the streaming
+        # Popen path below is the protected shape.
+        proc = subprocess.run(command, capture_output=True, cwd=cwd, **spawn_kwargs())
+        return proc.returncode, proc.stderr.decode(errors="replace").strip()
+    popen = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=cwd,
+        **session_kwargs(),
+        **spawn_kwargs(),
+    )
+    assert popen.stdout is not None and popen.stderr is not None
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    last_output_cell = [time.monotonic()]  # drain threads report progress
+
+    def _drain(pipe: IO[bytes], chunks: list[bytes]) -> None:
+        """Reads a pipe to its EOF into chunks (runs in a daemon thread).
+
+        Every chunk read also refreshes the shared last-output timestamp:
+        the stall watchdog in the poll loop cannot see the pipes itself,
+        and a healthy child must never be mistaken for a hung one.
+        """
+        try:
+            for chunk in iter(lambda: pipe.read(4096), b""):
+                chunks.append(chunk)
+                last_output_cell[0] = time.monotonic()
+        except (ValueError, OSError):
+            pass  # pipe closed during shutdown (cancellation race)
+
+    drainers = [
+        threading.Thread(target=_drain, args=(popen.stdout, stdout_chunks), daemon=True),
+        threading.Thread(target=_drain, args=(popen.stderr, stderr_chunks), daemon=True),
+    ]
+    for drainer in drainers:
+        drainer.start()
+    cancelled = False
+    stalled = False
+    stall_seconds = stall_timeout_seconds()
+    try:
+        while popen.poll() is None:
+            if cancel is not None and cancel.is_set():
+                terminate_tree(popen)
+                cancelled = True
+                break
+            # stall watchdog: probes/measurements must make progress too
+            # (ffmpeg can hang on odd streams); same semantics as the final
+            # encode - terminate the hung child, report it as a failure
+            if stall_seconds is not None and time.monotonic() - last_output_cell[0] > stall_seconds:
+                log_error(
+                    f"Stall watchdog: no output from the probe/measure child for "
+                    f"{stall_seconds / 60:.0f} min => terminating it (hung child)."
+                )
+                terminate_tree(popen)
+                cancelled = False
+                stalled = True
+                break
+            time.sleep(0.2)
+        for drainer in drainers:
+            drainer.join(timeout=5)
+        if cancelled:
+            return -1, "cancelled by user"
+        if stalled:
+            assert stall_seconds is not None  # stalled=True implies it was set
+            return -2, (f"stalled: no output for {stall_seconds / 60:.0f} min (terminated)")
+        stderr = b"".join(stderr_chunks).decode(errors="replace").strip()
+        return popen.returncode, stderr
+    finally:
+        # close OUR read ends first: a drainer blocked in read() (orphan
+        # still holding the write end) must not deadlock close() itself -
+        # closing breaks the read, the bounded join above cleans up
+        if popen.stdout:
+            popen.stdout.close()
+        if popen.stderr:
+            popen.stderr.close()
+
+
+class Cancelled(Exception):
+    """Raised inside the engine when the job's cancel event fires.
+
+    The worker turns this into a proper CANCELLED job state; partial
+    artifacts (probe files, half-written output) are the caller's to
+    clean up (the sample workdir is removed by its own finally).
+    """

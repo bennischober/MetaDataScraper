@@ -438,7 +438,9 @@ class TestEncode(unittest.TestCase):
 
         # a SILENT child (ping's own replies would count as progress)
         command = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
-        with mock.patch("shrinkray.quality.stall_timeout_seconds", return_value=1.0):
+        # _run lives in tools.process now (phase 2): the stall lookup happens
+        # in ITS namespace, so patch there (patch where the name is looked up)
+        with mock.patch("shrinkray.tools.process.stall_timeout_seconds", return_value=1.0):
             code, err = _run(command)
         self.assertEqual(code, -2)
         self.assertIn("stalled", err)

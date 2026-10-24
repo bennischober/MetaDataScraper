@@ -25,24 +25,49 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
 
-from shrinkray import resources
 from shrinkray.encode import (
     HANDBRAKE_BINARY,
     MIN_ENCODE_SECONDS,
     _encode_with_command,
     find_handbrake,
     probe_duration_seconds,
-    stall_timeout_seconds,
 )
 from shrinkray.logger import log, log_error, log_warning
 from shrinkray.media import FFPROBE_TIMEOUT
-from shrinkray.telemetry import save_failure
+from shrinkray.tools.process import (
+    Cancelled as Cancelled,
+)
+from shrinkray.tools.process import (
+    _run as _run,
+)
+from shrinkray.tools.vmaf import (
+    MAX_VMAF_THREADS as MAX_VMAF_THREADS,
+)
+from shrinkray.tools.vmaf import (
+    VMAF_MODEL as VMAF_MODEL,
+)
+from shrinkray.tools.vmaf import (
+    VMAF_STYLE_LEGACY as VMAF_STYLE_LEGACY,
+)
+from shrinkray.tools.vmaf import (
+    VMAF_STYLE_MODERN as VMAF_STYLE_MODERN,
+)
+from shrinkray.tools.vmaf import (
+    build_vmaf_command as build_vmaf_command,
+)
+from shrinkray.tools.vmaf import (
+    detect_vmaf_style as detect_vmaf_style,
+)
+from shrinkray.tools.vmaf import (
+    measure_vmaf as measure_vmaf,
+)
+from shrinkray.tools.vmaf import (
+    parse_vmaf_log as parse_vmaf_log,
+)
 
 FFMPEG_BINARY = "ffmpeg"
 
@@ -67,51 +92,6 @@ MIN_SOURCE_CODEC = "h264"
 
 # the engine's live-progress callback: stage detail and counters, never persisted
 ProgressCallback = Callable[[dict], None]
-
-# Netflix's reference model (https://github.com/Netflix/vmaf), shipped with the
-# package because old ffmpeg/libvmaf builds cannot load embedded models.
-VMAF_MODEL = Path(__file__).parent / "models" / "vmaf_v0.6.1.json"
-
-# libvmaf filter API changed with modern ffmpeg: old builds (ffmpeg < 6) take
-# an explicit 'model_path', new builds take 'model=path=...' and ship embedded
-# models. Detected once via the filter's option list.
-_vmaf_style: str | None = None
-VMAF_STYLE_LEGACY = "legacy"  # model_path=...
-VMAF_STYLE_MODERN = "modern"  # model=path=...
-
-
-def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
-    """Detects which libvmaf filter API the local ffmpeg supports.
-
-    Args:
-        binary (str): The ffmpeg binary to probe.
-
-    Returns:
-        str: VMAF_STYLE_LEGACY or VMAF_STYLE_MODERN.
-
-    Raises:
-        RuntimeError: If ffmpeg is not installed or has no libvmaf filter.
-    """
-    global _vmaf_style
-    if _vmaf_style is not None and binary == FFMPEG_BINARY:
-        return _vmaf_style
-
-    try:
-        proc = subprocess.run(
-            [binary, "-hide_banner", "-h", "filter=libvmaf"],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        raise RuntimeError(
-            f"ffmpeg ('{binary}') not found or did not answer within "
-            f"{FFPROBE_TIMEOUT}s! Install a build with libvmaf support. ({e})"
-        ) from e
-    options = proc.stdout.decode(errors="replace")
-    if "libvmaf" not in options and "libvmaf" not in proc.stderr.decode(errors="replace"):
-        raise RuntimeError("ffmpeg has no libvmaf filter! Install a build with libvmaf support.")
-    _vmaf_style = VMAF_STYLE_MODERN if "model_path" not in options else VMAF_STYLE_LEGACY
-    return _vmaf_style
 
 
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
@@ -153,10 +133,6 @@ DEFAULT_SAMPLE_SECONDS = 10.0
 # coverage is a fixed fraction (sample_seconds / sample_every) instead of
 # shrinking as the movie gets longer. None keeps the count-based default.
 DEFAULT_SAMPLE_EVERY = 600.0
-
-# libvmaf v3 thread cap: values above ~8 crash the filter with EINVAL on
-# some builds (frame queue limit), so stay on the safe side
-MAX_VMAF_THREADS = 8
 
 # full-file verification sub-samples above this output size (n_subsample=10:
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
@@ -405,112 +381,6 @@ class QualityResult:
         if self.input_size <= 0 or self.output_size <= 0:
             return 0.0
         return round((1 - self.output_size / self.input_size) * 100, 2)
-
-
-def _run(
-    command: list[str],
-    cwd: Path | None = None,
-    cancel: threading.Event | None = None,
-) -> tuple[int, str]:
-    """Runs a subprocess and returns (returncode, stderr as text).
-
-    With a cancel event, the process is polled and terminated when the
-    event fires; the returncode -1 signals the cancellation to the caller.
-    Both pipes are drained by daemon threads while the process runs: a
-    child writing more than the ~64K pipe buffer (HandBrake progress on
-    stdout, libvmaf/ffmpeg warnings on stderr) would otherwise block
-    forever while this loop only polls for exit — a silent deadlock.
-
-    Args:
-        command (list[str]): The command to run.
-        cwd (Path | None): Working directory.
-        cancel (threading.Event | None): Cooperative cancellation.
-
-    Returns:
-        tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
-    """
-    if cancel is None and stall_timeout_seconds() is None:
-        # Neither cancellation nor stall watching is possible: the simple
-        # blocking run (used when both protections are explicitly off).
-        # Fallback decision (issue #62): no timeout here on purpose — the
-        # probes this runs are minutes-long encodes, a fixed timeout would
-        # kill healthy work, and the operator has explicitly disabled stall
-        # protection. "Watchdog off" means no protection; the streaming
-        # Popen path below is the protected shape.
-        proc = subprocess.run(command, capture_output=True, cwd=cwd, **resources.spawn_kwargs())
-        return proc.returncode, proc.stderr.decode(errors="replace").strip()
-    popen = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=cwd,
-        **resources.session_kwargs(),
-        **resources.spawn_kwargs(),
-    )
-    assert popen.stdout is not None and popen.stderr is not None
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
-    last_output_cell = [time.monotonic()]  # drain threads report progress
-
-    def _drain(pipe: "IO[bytes]", chunks: list[bytes]) -> None:
-        """Reads a pipe to its EOF into chunks (runs in a daemon thread).
-
-        Every chunk read also refreshes the shared last-output timestamp:
-        the stall watchdog in the poll loop cannot see the pipes itself,
-        and a healthy child must never be mistaken for a hung one.
-        """
-        try:
-            for chunk in iter(lambda: pipe.read(4096), b""):
-                chunks.append(chunk)
-                last_output_cell[0] = time.monotonic()
-        except (ValueError, OSError):
-            pass  # pipe closed during shutdown (cancellation race)
-
-    drainers = [
-        threading.Thread(target=_drain, args=(popen.stdout, stdout_chunks), daemon=True),
-        threading.Thread(target=_drain, args=(popen.stderr, stderr_chunks), daemon=True),
-    ]
-    for drainer in drainers:
-        drainer.start()
-    cancelled = False
-    stalled = False
-    stall_seconds = stall_timeout_seconds()
-    try:
-        while popen.poll() is None:
-            if cancel is not None and cancel.is_set():
-                resources.terminate_tree(popen)
-                cancelled = True
-                break
-            # stall watchdog: probes/measurements must make progress too
-            # (ffmpeg can hang on odd streams); same semantics as the final
-            # encode - terminate the hung child, report it as a failure
-            if stall_seconds is not None and time.monotonic() - last_output_cell[0] > stall_seconds:
-                log_error(
-                    f"Stall watchdog: no output from the probe/measure child for "
-                    f"{stall_seconds / 60:.0f} min => terminating it (hung child)."
-                )
-                resources.terminate_tree(popen)
-                cancelled = False
-                stalled = True
-                break
-            time.sleep(0.2)
-        for drainer in drainers:
-            drainer.join(timeout=5)
-        if cancelled:
-            return -1, "cancelled by user"
-        if stalled:
-            assert stall_seconds is not None  # stalled=True implies it was set
-            return -2, (f"stalled: no output for {stall_seconds / 60:.0f} min (terminated)")
-        stderr = b"".join(stderr_chunks).decode(errors="replace").strip()
-        return popen.returncode, stderr
-    finally:
-        # close OUR read ends first: a drainer blocked in read() (orphan
-        # still holding the write end) must not deadlock close() itself -
-        # closing breaks the read, the bounded join above cleans up
-        if popen.stdout:
-            popen.stdout.close()
-        if popen.stderr:
-            popen.stderr.close()
 
 
 # the sample extraction recipe, part of the probe cache key: a change to
@@ -876,198 +746,6 @@ def build_encode_command(
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
     return command
-
-
-def build_vmaf_command(
-    distorted: Path,
-    reference: Path,
-    threads: int = 0,
-    style: str | None = None,
-    crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
-    subsample: int | None = None,
-) -> list[str]:
-    """Builds the ffmpeg command measuring the VMAF of an encode.
-
-    The model file is copied to the working directory by measure_vmaf and
-    referenced by bare filename => no Windows path escaping in the
-    filtergraph (colons in drive letters break filter parsing). Works with
-    both the legacy (<6) and modern libvmaf filter API.
-
-    With a crop, the reference is cropped to the same geometry as the
-    distorted input, otherwise libvmaf fails on the dimension/SAR mismatch
-    (e.g. PAL DVD content with uneven side bars).
-
-    With HDR, both inputs are tone-mapped to SDR inside the filtergraph
-    before the comparison: the VMAF model is SDR-trained and PQ content
-    would score misleadingly. Both sides get the identical chain, so the
-    relative quality measurement stays honest.
-
-    Args:
-        distorted (Path): The encoded file (libvmaf 'main' input).
-        reference (Path): The pristine source file (libvmaf 'reference').
-        threads (int): libvmaf worker threads (0 = automatic). Meaningful
-            only on modern libvmaf (v3+); legacy builds score single-threaded.
-        style (str | None): Force a filter API style (legacy/modern); used by
-            tests. None detects the local ffmpeg.
-        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
-            the reference input to match the distorted geometry.
-        hdr (bool): Tone-map both inputs to SDR (PQ/bt2020 sources).
-        subsample (int | None): libvmaf n_subsample divisor: measure only
-            every Nth frame (None/0/1 = every frame). Full-file verification
-            of a 2-hour movie decodes EVERYTHING (hours); a sub-sampled pass
-            (e.g. 10) cuts it to minutes while keeping the score honest
-            (the sampled frames stay the SAME ones the probes never saw).
-
-    Returns:
-        list[str]: The command as argument list (run with cwd=workdir).
-    """
-    if style is None:
-        style = detect_vmaf_style()
-    if style == VMAF_STYLE_MODERN:
-        model_option = "model=path=vmaf_v0.6.1.json"
-    else:
-        model_option = "model_path=vmaf_v0.6.1.json"
-
-    vmaf = f"libvmaf=log_path=vmaf.json:log_fmt=json:{model_option}:n_threads={threads}"
-    if subsample and subsample > 1:
-        vmaf += f":n_subsample={int(subsample)}"
-
-    # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
-    # -> back to video levels (validated on real HDR10 content)
-    tonemap = (
-        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-        "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
-        "format=yuv420p10le"
-    )
-
-    if hdr:
-        # tone-map both sides to their SDR twins before comparing
-        filtergraph = f"[0:v]{tonemap}[d];[1:v]{tonemap}[r];[d][r]{vmaf}"
-    elif crop is not None:
-        top, bottom, left, right = crop
-        filtergraph = (
-            f"[1:v]crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}[r];[0:v][r]{vmaf}"
-        )
-    else:
-        filtergraph = f"[0:v][1:v]{vmaf}"
-    return [
-        FFMPEG_BINARY,
-        "-y",
-        "-v",
-        "error",
-        "-i",
-        str(distorted),
-        "-i",
-        str(reference),
-        "-lavfi",
-        filtergraph,
-        "-f",
-        "null",
-        "-",
-    ]
-
-
-def parse_vmaf_log(text: str) -> float:
-    """Extracts the pooled mean VMAF score from a libvmaf json log.
-
-    Args:
-        text (str): The content of the libvmaf json log file.
-
-    Returns:
-        float: The mean VMAF score.
-
-    Raises:
-        ValueError: If the log has no pooled vmaf score.
-    """
-    pooled = json.loads(text).get("pooled_metrics", {}).get("vmaf")
-    if pooled is None or "mean" not in pooled:
-        raise ValueError("libvmaf log has no pooled vmaf score")
-    return float(pooled["mean"])
-
-
-def measure_vmaf(
-    distorted: Path,
-    reference: Path,
-    workdir: Path,
-    crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
-    cancel: threading.Event | None = None,
-    db_file: Path | None = None,
-    subsample: int | None = None,
-) -> float:
-    """Measures the mean VMAF of an encode against its source.
-
-    The main/reference input order matters: the distorted stream must be the
-    first input, otherwise scores are inflated. Both input paths are resolved
-    to absolute form because ffmpeg runs with cwd=workdir.
-
-    Args:
-        distorted (Path): The encoded file.
-        reference (Path): The pristine source file.
-        workdir (Path): Working directory for the model and log files.
-        crop (tuple | None): Crop bars (top, bottom, left, right) applied to
-            the reference so it matches the distorted geometry.
-        hdr (bool): Tone-map both sides for the measurement.
-        cancel (threading.Event | None): Cooperative cancellation.
-        db_file (Path | None): The database file, used to locate the logs
-            directory for failure evidence (None => cwd metadata.db).
-        subsample (int | None): libvmaf n_subsample divisor (None = every
-            frame). Used by the post-encode verification for large files.
-
-    Returns:
-        float: The mean VMAF score.
-
-    Raises:
-        RuntimeError: If ffmpeg/libvmaf failed or produced no score.
-        Cancelled: When the cancel event fires.
-    """
-    distorted = distorted.resolve()
-    reference = reference.resolve()
-    model = workdir / VMAF_MODEL.name
-    shutil.copyfile(VMAF_MODEL, model)
-
-    threads = min(resources.cpu_count(), MAX_VMAF_THREADS)
-    if detect_vmaf_style() != VMAF_STYLE_MODERN:
-        # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
-        threads = 0
-    command = build_vmaf_command(
-        distorted, reference, threads, crop=crop, hdr=hdr, subsample=subsample
-    )
-    code, err = _run(
-        command,
-        cwd=workdir,
-        cancel=cancel,
-    )
-    if code == -1:
-        raise Cancelled("cancelled during vmaf measurement")
-    log_file = workdir / "vmaf.json"
-    if code != 0 or not log_file.is_file():
-        # preserve the evidence (a failure with an EMPTY stderr is the
-        # worst case: the bundle keeps stderr, command and any partial
-        # vmaf.json alive for diagnosis)
-        save_failure(
-            db_file=db_file or Path("metadata.db"),
-            kind="vmaf-measure",
-            command=command,
-            stderr=err,
-            workdir=workdir,
-            artifacts=["vmaf.json"],
-            context={
-                "distorted": str(distorted),
-                "reference": str(reference),
-                "hdr": hdr,
-                "crop": crop,
-                "subsample": subsample,
-                "returncode": code,
-            },
-        )
-        raise RuntimeError(f"libvmaf failed: {err[-400:]}")
-
-    try:
-        return parse_vmaf_log(log_file.read_text(encoding="utf-8"))
-    except (ValueError, json.JSONDecodeError) as e:
-        raise RuntimeError(f"libvmaf log could not be parsed: {e}") from e
 
 
 def source_codec(movie: Path) -> str | None:
@@ -2382,15 +2060,6 @@ class SkipEncode(Exception):
         self.chosen_crf = chosen_crf
         self.achieved_vmaf = achieved_vmaf
         self.probe_count = probe_count
-
-
-class Cancelled(Exception):
-    """Raised inside the engine when the job's cancel event fires.
-
-    The worker turns this into a proper CANCELLED job state; partial
-    artifacts (probe files, half-written output) are the caller's to
-    clean up (the sample workdir is removed by its own finally).
-    """
 
 
 def _check_cancel(cancel: threading.Event | None) -> None:

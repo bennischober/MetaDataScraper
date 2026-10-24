@@ -13,6 +13,7 @@ from shrinkray import db, encode, quality, service
 class TestQuality(unittest.TestCase):
     def test_telemetry_saves_failure_bundle(self):
         """A failure bundle keeps stderr, command, context and artifacts."""
+        from shrinkray.telemetry import save_failure
 
         with tempfile.TemporaryDirectory() as tmp:
             db_file = Path(tmp) / "test.db"
@@ -20,7 +21,7 @@ class TestQuality(unittest.TestCase):
             workdir.mkdir()
             (workdir / "vmaf.json").write_text('{"pooled_metrics": {}}', encoding="utf-8")
 
-            bundle = quality.save_failure(
+            bundle = save_failure(
                 db_file=db_file,
                 kind="vmaf-measure",
                 command=["ffmpeg", "-i", "x.mkv"],
@@ -45,12 +46,13 @@ class TestQuality(unittest.TestCase):
 
     def test_telemetry_never_raises(self):
         """Telemetry must not break the error path it reports on."""
+        from shrinkray.telemetry import save_failure
 
         with tempfile.TemporaryDirectory() as tmp:
             # a file where the logs dir should be => mkdir fails => None
             blocker = Path(tmp) / "logs"
             blocker.write_text("not a directory", encoding="utf-8")
-            bundle = quality.save_failure(
+            bundle = save_failure(
                 db_file=Path(tmp) / "test.db",
                 kind="encode",
             )
@@ -871,16 +873,19 @@ class TestSubprocessTimeouts(unittest.TestCase):
     def test_detect_vmaf_style_timeout_raises_documented_error(self):
         import subprocess
 
-        # the style is detected once and cached module-wide; other tests in
-        # the suite may have populated the cache, so reset it around this
-        # test (and restore it — the real value stays valid)
-        saved = quality._vmaf_style
-        quality._vmaf_style = None
+        # the style is detected once and cached module-wide (in tools.vmaf
+        # since the phase-2 move); other tests in the suite may have
+        # populated the cache, so reset it around this test (and restore it
+        # - the real value stays valid)
+        import shrinkray.tools.vmaf as vmaf_tools
+
+        saved = vmaf_tools._vmaf_style
+        vmaf_tools._vmaf_style = None
         try:
             with (
                 patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
-                    "shrinkray.quality.subprocess.run",
+                    "shrinkray.tools.vmaf.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
                 ),
                 self.assertRaises(RuntimeError) as ctx,
@@ -888,9 +893,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 quality.detect_vmaf_style()
             self.assertIn("60s", str(ctx.exception))
             # a failed detection must not be cached: the next call probes again
-            self.assertIsNone(quality._vmaf_style)
+            self.assertIsNone(vmaf_tools._vmaf_style)
         finally:
-            quality._vmaf_style = saved
+            vmaf_tools._vmaf_style = saved
 
     def test_detect_crop_rect_timeout_returns_none(self):
         import subprocess
