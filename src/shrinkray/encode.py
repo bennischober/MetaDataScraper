@@ -15,15 +15,6 @@ from rich.progress import Progress
 from shrinkray import resources
 from shrinkray.logger import log, log_error
 from shrinkray.media import FFPROBE_TIMEOUT
-from shrinkray.tools.process import (
-    DEFAULT_STALL_MINUTES as DEFAULT_STALL_MINUTES,
-)
-from shrinkray.tools.process import (
-    configure_stall as configure_stall,
-)
-from shrinkray.tools.process import (
-    stall_timeout_seconds as stall_timeout_seconds,
-)
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
 
@@ -90,6 +81,34 @@ def check_disk_space(target_dir: Path, required_bytes: int) -> tuple[bool, str]:
 # encode is cancelled (partial output removed) instead of filling the shared
 # drive - a full disk harms every co-tenant, not just this run
 DISK_FREE_FLOOR_BYTES = 1 * 1024**3
+
+# default stall timeout: a healthy HandBrake reports progress at least once
+# per second; minutes of silence mean a hung child. Configurable via
+# handbrake.stall_minutes (0 = disabled). Generous by design: final muxing
+# of a large file can be silent for a while.
+DEFAULT_STALL_MINUTES = 10.0
+
+_stall_minutes: float | None = DEFAULT_STALL_MINUTES
+
+
+def configure_stall(minutes: float) -> None:
+    """Sets the stall timeout for encode/probe subprocesses.
+
+    Args:
+        minutes (float): Minutes without child output before a subprocess is
+            terminated as hung; 0 disables the watchdog.
+    """
+    global _stall_minutes
+    _stall_minutes = minutes if minutes and minutes > 0 else None
+
+
+def stall_timeout_seconds() -> float | None:
+    """Returns the stall timeout in seconds (None = disabled).
+
+    Returns:
+        float | None: Seconds of tolerated child silence, None when off.
+    """
+    return _stall_minutes * 60.0 if _stall_minutes is not None else None
 
 
 def _terminate(popen: subprocess.Popen) -> None:

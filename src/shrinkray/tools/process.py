@@ -298,34 +298,3 @@ def _cgroup_cpu_quota() -> int | None:
     if quota <= 0:
         return None
     return quota // period
-
-
-# The stall watchdog (moved from encode.py, issue #97 phase 2).
-
-# default stall timeout: a healthy HandBrake reports progress at least once
-# per second; minutes of silence mean a hung child. Configurable via
-# handbrake.stall_minutes (0 = disabled). Generous by design: final muxing
-# of a large file can be silent for a while.
-DEFAULT_STALL_MINUTES = 10.0
-
-_stall_minutes: float | None = DEFAULT_STALL_MINUTES
-
-
-def configure_stall(minutes: float) -> None:
-    """Sets the stall timeout for encode/probe subprocesses.
-
-    Args:
-        minutes (float): Minutes without child output before a subprocess is
-            terminated as hung; 0 disables the watchdog.
-    """
-    global _stall_minutes
-    _stall_minutes = minutes if minutes and minutes > 0 else None
-
-
-def stall_timeout_seconds() -> float | None:
-    """Returns the stall timeout in seconds (None = disabled).
-
-    Returns:
-        float | None: Seconds of tolerated child silence, None when off.
-    """
-    return _stall_minutes * 60.0 if _stall_minutes is not None else None
