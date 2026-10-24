@@ -20,7 +20,7 @@ Root AGENTS.md covers the product rules and the gate; this file is the module ma
 | Job queue, worker thread, live progress | `jobs.py` (989 L) | `JobQueue` (persisted), `ProgressBus` (in-memory, bounded) |
 | Batch orchestration + result persistence | `service.py` (520 L) | `record_plan`, `save_encode`, `save_skip`, `doctor` |
 | Inbox watchdog | `watch.py` (362 L) | `watch()`, `decide`, stability + lock |
-| ffprobe parse | `media.py` (327 L) | `run_ffprobe`, `get_data` |
+| ffprobe parse | `tools/ffprobe.py` (moved from `media.py`, #97 phase 2; transitional shim in `media.py`) | `run_ffprobe`, `get_data` |
 | Scan -> DB rows | `scanner.py` (404 L) | `scan_movies`, thread pool `min(8, cpu)` |
 | HTML report | `report.py` (259 L) | self-contained, reads sqlite directly |
 | Priority / nice / RSS | `tools/process.py` (moved from `resources.py`, #97 phase 2; transitional shim in `resources.py`) | `apply`, `spawn_kwargs` |

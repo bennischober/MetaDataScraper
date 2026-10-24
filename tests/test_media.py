@@ -3,7 +3,7 @@
 import unittest
 
 from shrinkray import config as config_helper
-from shrinkray import media as read_media
+from shrinkray.tools import ffprobe as read_media
 
 
 class TestReadMedia(unittest.TestCase):
