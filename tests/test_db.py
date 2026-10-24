@@ -1282,6 +1282,90 @@ class TestDb(unittest.TestCase):
             self.assertEqual(result.pruned, 1)
             self.assertIsNone(db.get_file_by_path(self.connection, root / "gone.mkv"))
 
+    def test_invalid_put_leaves_no_file_behind(self):
+        """Issue #60: an invalid PUT against a directory with NO existing
+        config.json returns 400 and leaves no config.json behind (previously
+        the rejected content stayed on disk and broke every later
+        load_config())."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        import shrinkray.config as config_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            bad = {"handbrake": {"max_threads": "abc"}}
+            response = client.put("/api/config", json=bad)
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("invalid config", response.json()["detail"])
+            config_path = app_module.state.db_file.parent / "config.json"
+            self.assertFalse(config_path.exists())
+            # a later engine load is NOT poisoned (defaults, no error)
+            config_module.reset_config()
+            conf = config_module.load_config(app_module.state.db_file.parent)
+            self.assertEqual(conf.handbrake_max_threads, 0)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+            config_module.reset_config()
+
+    def test_invalid_put_leaves_existing_bytes_unchanged(self):
+        """Issue #60: an invalid PUT against an EXISTING config.json leaves
+        its bytes unchanged (validate first, write never happens)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            config_path = app_module.state.db_file.parent / "config.json"
+            original = '{"handbrake": {"max_threads": 4}}'
+            config_path.write_text(original, encoding="utf-8")
+            bad = {"handbrake": {"max_threads": "abc"}}
+            response = client.put("/api/config", json=bad)
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_failed_replace_leaves_original_intact(self):
+        """Issue #60: a failure between the temp write and the replace (the
+        acceptance criterion mocks os.replace to raise) leaves the original
+        file intact and no temp file behind."""
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            config_path = app_module.state.db_file.parent / "config.json"
+            original = '{"handbrake": {"max_threads": 4}}'
+            config_path.write_text(original, encoding="utf-8")
+            with patch("shrinkray.app.os.replace", side_effect=OSError("disk full")):
+                response = client.put("/api/config", json={"handbrake": {"max_threads": 2}})
+            self.assertEqual(response.status_code, 500)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
+            # no temp file left behind
+            leftovers = [
+                p.name for p in config_path.parent.iterdir() if p.name.startswith(".config-")
+            ]
+            self.assertEqual(leftovers, [])
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ to the local HTTP API — same engine, same database, same guardrails.
 Run with `shrinkray app`.
 """
 
+import contextlib
 import json
 import os
 import os.path
@@ -14,6 +15,7 @@ import queue
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -440,8 +442,13 @@ def read_config() -> dict:
 def update_config(data: dict) -> dict:
     """Updates the configuration (writes config.json).
 
-    The config is validated by loading it through Conf after writing;
-    invalid configs are rejected with 400 and the file restored.
+    Validate first, write atomically (issue #60): the request body is
+    validated in memory (Conf) BEFORE any file is touched — a rejected
+    config never reaches the disk (previously a rejected write stayed on
+    disk and every later load_config() failed). The write itself is a
+    temp-file + os.replace pair: atomic on POSIX and Windows for a
+    same-volume rename, so a crash or a concurrent reader never sees a
+    half-written config.json.
 
     Args:
         data (dict): The configuration in config.json shape.
@@ -452,24 +459,35 @@ def update_config(data: dict) -> dict:
     s = get_state()
     config_path = _config_path(s)
 
-    backup = None
-    if config_path.is_file():
-        backup = config_path.read_text(encoding="utf-8")
+    # 1. validate in memory: no file is written until the config parses
+    import shrinkray.config as config_module
 
     try:
-        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        # validate: reset the cached config and load it fresh (the public
-        # reset function - reaching into config._config from here reached
-        # into private module state, issue #58)
-        import shrinkray.config as config_module
-
-        config_module.reset_config()
-        config_module.load_config(s.db_file.parent)
+        config_module.Conf(data)
     except Exception as e:
-        # restore the backup on failure
-        if backup is not None:
-            config_path.write_text(backup, encoding="utf-8")
         raise HTTPException(status_code=400, detail=f"invalid config: {e}") from e
+
+    # 2. write atomically: temp file in the same directory (same volume),
+    # fsync'd, then an atomic rename over the target; no backup/restore
+    # dance — a failure before the replace leaves the original untouched
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=config_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temp:
+            temp.write(json.dumps(data, indent=2))
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_name, config_path)
+    except Exception as e:
+        # best effort cleanup of the temp file; the original config.json
+        # was never touched (the replace either happened or did not)
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise HTTPException(status_code=500, detail=f"config write failed: {e}") from e
+
+    # 3. swap the in-memory singleton through the public reset (issue #58)
+    config_module.reset_config()
+    config_module.load_config(s.db_file.parent)
     return data
 
 
