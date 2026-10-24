@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a change to what ShrinkRay does
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Scope first, please.** ShrinkRay answers one question per file: *is
+        this file bigger than its quality requires?* It changes a file's
+        **bytes**, never its **identity**. It does not rename, move, organize,
+        deduplicate, acquire, play or serve media — that belongs to the tooling
+        that already assembled your collection. Requests whose usefulness
+        depends on knowing what a file is *called* or *which* file it is are
+        out of scope. (The duplicates view in the current tree predates this
+        boundary and is being removed — see issue #37.)
+
+        Also read [PRODUCT.md](https://github.com/bennischober/ShrinkRay/blob/main/PRODUCT.md):
+        the output target is AV1-only, quality mode is VMAF-driven, and there is
+        exactly one encode mode — these are decisions, not defaults.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to achieve, and what does ShrinkRay currently do instead? "I keep having to…" beats "please add…".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you think ShrinkRay should do. If it involves the quality decision (targets, presets, probe strategy), say what would be measured to validate it.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to get the same outcome, including doing it outside ShrinkRay.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This stays inside the scope boundary (bytes, not identity)
+        - label: I have read PRODUCT.md and this does not contradict it

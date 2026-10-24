@@ -1,0 +1,58 @@
+name: Bug report
+description: Something is broken, wrong, or destroys information
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **For anything you believe is exploitable, use private disclosure
+        instead:** [report a security
+        vulnerability](https://github.com/bennischober/ShrinkRay/security/advisories/new)
+        (see [SECURITY.md](https://github.com/bennischober/ShrinkRay/blob/main/SECURITY.md)).
+
+        ShrinkRay is run unattended against libraries that cannot be
+        re-acquired — if a bug damaged data, say exactly what state the
+        files and `metadata.db` were left in. That matters more than the
+        write-up.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened. Include the exact command or API call.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Console output or log lines around the failure. Errors a user cannot see are bugs — if there was no error, say so.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: "`shrinkray --version`, the release tag, or the commit you run."
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, Python version, and how you run it (CLI, resident server, container).
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: A reproducing file (if the bug involves a specific media file)
+      description: |
+        ffprobe output for the file (`ffprobe -v error -show_streams -show_format <file>`)
+        is usually enough; a real sample only if ffprobe output cannot reproduce it.
+        Do not attach anything you cannot share publicly.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I ran the latest release or `main`
+        - label: The database (`metadata.db`) was not hand-edited or is a fresh one
