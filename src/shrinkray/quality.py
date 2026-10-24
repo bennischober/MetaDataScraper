@@ -19,7 +19,6 @@ scores and chosen CRFs are only comparable between similar libvmaf builds.
 import hashlib
 import json
 import math
-import os
 import re
 import shutil
 import sqlite3
@@ -1016,7 +1015,7 @@ def measure_vmaf(
     model = workdir / VMAF_MODEL.name
     shutil.copyfile(VMAF_MODEL, model)
 
-    threads = min(os.cpu_count() or MAX_VMAF_THREADS, MAX_VMAF_THREADS)
+    threads = min(resources.cpu_count(), MAX_VMAF_THREADS)
     if detect_vmaf_style() != VMAF_STYLE_MODERN:
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0

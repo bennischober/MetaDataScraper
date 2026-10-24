@@ -347,9 +347,9 @@ Example [config.json](config.json):
     },
     "handbrake": {
         "preset": "Fast 1080p30",        // fixed-mode HandBrake preset NAME
-        "encoder": "x265",
-        "probe_encoder_preset": "medium", // quality mode: the PROBES' speed preset
-        "encoder_preset": "slow",         // quality mode: the FINAL encode's preset
+        "encoder": "svt_av1",
+        "probe_encoder_preset": "5", // quality mode: the PROBES' speed preset
+        "encoder_preset": "3",         // quality mode: the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "resources": {
@@ -402,8 +402,26 @@ still carries its `integrations` key loads fine and logs one warning).
 
 ## Development
 
-A [devcontainer](.devcontainer/devcontainer.json) is included (Ubuntu with uv,
-ffmpeg and handbrake-cli) - open in VS Code and reopen in the container.
+A [devcontainer](.devcontainer/devcontainer.json) is included - open in VS Code
+and reopen in the container. Note that its apt `ffmpeg` is built **without
+libvmaf**, so quality mode cannot run there; use the `dev` target of the
+[Dockerfile](Dockerfile) for a full toolchain (see
+[docs/docker.md](docs/docker.md)).
+
+### Container
+
+Two targets, one file:
+
+```bash
+docker build --target runtime -t shrinkray:local .
+docker build --target dev     -t shrinkray:dev   .
+```
+
+`dev` runs the five gate commands inside the image. `runtime` is the deployment
+shape; see [docs/docker.md](docs/docker.md) for the volumes, the `--root`
+requirement on Linux, and the fact that publishing a port **requires**
+`SHRINKRAY_TOKEN` (the app refuses to bind `0.0.0.0` without one, and there is
+no TLS - terminate it at a reverse proxy).
 
 ### Web UI (ui/)
 The dashboard is a Svelte 5 + Vite + TypeScript app in `ui/`. Node.js is only

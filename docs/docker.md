@@ -1,10 +1,53 @@
-# Docker deployment (proposal - not built yet)
+# Docker deployment
 
-Status: **target install shape**. Recorded 2026-10-23, promoted from
-"proposal" the same day when the product direction was set: ShrinkRay is meant
-to run as a container on a server, pointed at a media folder, unattended. The
-Dockerfile is still unbuilt — this file keeps the trade-offs and open
-decisions in one place. Tracked as GitHub issue #34.
+Status: **built** (issue #34). `Dockerfile` defines two targets - `runtime`
+for deployment and `dev` for the gate - and `docker-compose.yml` is the deployment
+shape. The trade-offs recorded below are the ones the build actually had to
+respect; where a decision was made, it is stated with the reason.
+
+## What shipped
+
+- **`Dockerfile`, two targets.** `runtime` is the deployment image; `dev` is the
+  same base plus the dev group and Node, so the five gate commands run in the
+  environment they ship in.
+- **`.dockerignore`** excludes credentials (`.opencode/`, `*.key`, `.env`), user data
+  (`*.db`), media (`test_media/`), and build state (`.venv/`, `node_modules/`).
+  A test asserts the exclusions still hold, because a bare `COPY . .` would bake a
+  credential and a database into a layer readable forever.
+- **A pinned, checksummed toolchain.** Stock Debian/Ubuntu ffmpeg is built
+  without libvmaf, so quality mode cannot run on it at all - apt is not an option.
+  ffmpeg comes from a dated BtbN release and HandBrakeCLI is compiled from the
+  pinned source (no Linux CLI binary is published). Both are verified by sha256, and
+  the build fails if `ffmpeg -h filter=libvmaf` fails or either version string
+  does not match the pin: an image measuring with a different libvmaf would write
+  scores that are not comparable with anyone else's.
+- **Non-root by default** (`--build-arg UID/GID`), so everything written on a bind
+  mount is host-owned.
+- **Volumes:** `/media` (library, read-only by default), `/data` (the database AND
+  `config.json` - the app writes config next to the db), `/output` (encoded files for
+  the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
+  film rather than to the container layer).
+- **Healthcheck** on `GET /api/status`, which is the app's own summary; no new
+  endpoint was needed.
+- **CPU quota is honoured.** `os.cpu_count()` reports the machine, not the
+  container's share, so `resources.cpu_count()` prefers `os.process_cpu_count()`
+  (3.13+) and falls back for 3.10-3.12. Without it a `--cpus=4` container would
+  plan 24 parallel encodes.
+
+## Two things a reader must know
+
+1. **Publishing a port requires a token.** The app refuses to bind a non-loopback
+   address without `SHRINKRAY_TOKEN` (issue #36), so the compose file passes one and
+   the healthcheck sends it. There is still no TLS: terminate it at a reverse proxy,
+   and do not read the token as making a plain-HTTP port safe.
+2. **The library is mounted read-only by default.** ShrinkRay changes bytes only with
+   an explicit `--replace` (issue #35), so a read-only mount makes the sacred-source
+   rule a property of the deployment rather than a promise in a doc. Swap-in-place needs
+   the mount writable, and a replaced original is then retained as
+   `<name>.shrinkray-original` **inside the library**, not in a separate `./retained`
+   volume - it lives beside the source so the final rename is same-filesystem and
+   therefore atomic. `shrinkray retained list` and the dashboard's Retained page tell
+   the operator what they may delete.
 
 ## The ask
 
@@ -70,81 +113,49 @@ fresh" cost. Details below.
    already handle (EncodeBusyError), not a corruption risk. Document
    "one watcher per library" anyway.
 
+## Decisions taken
+
+1. **Where retained originals live.** Alongside the source, as
+   `<name>.shrinkray-original` (issue #35). Not a configured mirror and not a
+   `./retained` volume: the final rename must be same-filesystem to be atomic,
+   and a fixed suffix works on any mount with no configuration. The operator
+   reads the list with `shrinkray retained list` or the Retained page and deletes
+   them in their own file manager.
+2. **PUID/PGID.** A fixed non-root user built with `--build-arg UID/GID`, not
+   entrypoint-driven user fixing. It is one `useradd` in the Dockerfile instead
+   of a runtime step that can fail in ways a stranger has to debug.
+3. **Docker is an official deployment channel alongside systemd + uv.** Yes -
+   `deploy/shrinkray.service` stays for bare metal; the image is the NAS path.
+4. **Registry.** Neither yet: `docker build` is the documented path, and the
+   image is built and exercised by hand. Publishing to ghcr.io on tags, and a CI
+   job that builds the image, are follow-ups that need a workflow and secrets;
+   neither is claimed here.
+
+## Running it
+
+```bash
+SHRINKRAY_TOKEN=... MEDIA_DIR=/path/to/library docker compose up -d
+```
+
+The healthcheck calls `GET /api/status` with the token. `--root /media` is in the
+entrypoint because the default allowlist on Linux is the working directory, so
+without it every library path is a 403.
+
 ## Not problems
 
 - Resource politeness: `nice` works in containers; thread caps are
   config; RSS self-monitoring reads /proc (works on Linux).
-- os.startfile (open dashboard) is Windows-only and already guarded.
-- Network: the dashboard is a plain web UI, ports are publishable.
-- Tests: the suite runs without ffmpeg (by-design skips) and the CI
-  mirror proved a bare-Linux toolchain works.
+- `os.startfile` (open dashboard) is Windows-only and already guarded.
+- Network: the dashboard is a plain web UI, ports are publishable - with the
+  token above.
+- Tests: the suite runs without ffmpeg (by-design skips), and the `dev` target
+  carries the pinned toolchain so the smoke tests can run there too.
 
-## Open decisions (needed before building)
+## Two-copy caveat
 
-1. **Trash story in containers:** no longer a decision. ShrinkRay never deletes a
-   source; replaced originals are renamed aside and retained, so no host trash
-   mount is needed. The remaining question is where retained originals live (a
-   subdirectory of the library, or a configured path) and how the operator is
-   told they can be removed.
-2. **PUID/PGID:** fixed non-root user in the image (simple, needs
-   `--user` discipline) vs entrypoint-driven user fixing
-   (linuxserver-style, more magic)?
-3. **Decisions-list amendment:** "Docker is an official deployment
-   channel alongside systemd + uv install" - yes/no.
-4. **Registry:** CI builds the image (build-only, no push) or publishes
-   to ghcr.io on tags (needs a workflow + secrets)?
-
-## Sketch (for the eventual build)
-
-Multi-stage Dockerfile (uv base -> deps layer -> app layer), roughly:
-
-```dockerfile
-FROM ghcr.io/astral-sh/uv:python3.15-bookworm-slim AS builder
-WORKDIR /app
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-editable
-
-FROM python:3.15-slim-bookworm
-# ffmpeg + HandBrakeCLI from debian repos; libvmaf included in ffmpeg
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg handbrake-cli && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/.venv /app/.venv
-COPY src /app/src
-ENV PATH="/app/.venv/bin:$PATH"
-# entrypoint: PUID/PGID fixup, then exec the requested mode
-COPY deploy/docker/entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
-```
-
-Compose example shape:
-
-```yaml
-services:
-  shrinkray:
-    build: .
-    ports: ["8080:8080"]
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - SHRINKRAY_MODE=watch   # or serve / cron
-    volumes:
-      - /media:/media          # the library (read/write for encodes)
-      - ./config:/config       # config.json + metadata.db
-      - ./retained:/retained   # originals renamed aside, awaiting manual removal
-```
-
-Entrypoint modes: `serve` (resident app: dashboard + jobs), `watch`
-(inbox watcher loop), `cron` (scan/plan/encode batches via supercronic
-or crond). Default: `serve`.
-
-## Proposed commit series (when approved)
-
-1. `build(docker): image with pinned ffmpeg/handbrake toolchain` -
-   Dockerfile + entrypoint + .dockerignore
-2. `build(docker): compose example + container docs` - compose file,
-   docs updates, PUID/PGID decision applied
-3. `ci: docker build job (build-only)` - or registry push on tags,
-   per decision 4
+Two containers pointed at one output directory are the same conflict the
+pid-stamped encode locks already handle (`EncodeBusyError`), not a corruption
+risk. Still: one watcher per library.
 
 ## Related
 

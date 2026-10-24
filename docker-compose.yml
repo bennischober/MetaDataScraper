@@ -1,0 +1,55 @@
+# ShrinkRay's deployment shape (issue #34): one container on a server,
+# pointed at a media folder, running unattended.
+#
+# The library is mounted read-only. That is the honest default: ShrinkRay
+# changes bytes only with an explicit --replace, so a read-only mount makes the
+# sacred-source rule a property of the deployment, not a promise in a doc.
+#
+# Publishing a port means authentication is mandatory: the app refuses to bind
+# 0.0.0.0 without SHRINKRAY_TOKEN (issue #36), so the token below is not
+# optional here - see docs/docker.md.
+
+services:
+  shrinkray:
+    build:
+      context: .
+      target: runtime
+    image: shrinkray:local
+    restart: unless-stopped
+    ports:
+      - "8420:8420"
+    environment:
+      # required: the app refuses a non-loopback bind without it
+      SHRINKRAY_TOKEN: ${SHRINKRAY_TOKEN:?set SHRINKRAY_TOKEN to a secret token}
+      # a --cpus=4 quota is honoured by the worker plan (issue #34)
+      TZ: ${TZ:-UTC}
+      # config.json lives beside the database, on the /data volume
+      SHRINKRAY_CONFIG: /data/config.json
+    volumes:
+      # the library: read-only unless you deliberately use --replace
+      - ${MEDIA_DIR:?set MEDIA_DIR to your library folder}:/media:ro
+      # the database AND config.json (the app writes config next to the db)
+      - ${DATA_DIR:-./data}:/data
+      # encoded outputs for the non-replace flow
+      - ${OUTPUT_DIR:-./output}:/output
+      # probe and verify scratch: sized to the FILM, not to the container layer
+      - ${SCRATCH_DIR:-./scratch}:/tmp/shrinkray
+    deploy:
+      resources:
+        limits:
+          # keep it explicit: the plan derives workers from the quota
+          cpus: "${CPUS:-4}"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os,urllib.request,sys;
+          req=urllib.request.Request('http://127.0.0.1:8420/api/status',
+          headers={'Authorization':'Bearer '+os.environ['SHRINKRAY_TOKEN']});
+          sys.exit(0 if urllib.request.urlopen(req,timeout=3).status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

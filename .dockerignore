@@ -1,0 +1,56 @@
+# The build context must never carry secrets or user state (issue #34): a bare
+# `COPY . .` would bake a credential and a database into an image layer, where it
+# is readable forever by anyone who can pull it.
+
+# credentials
+.opencode/
+*.key
+*.pem
+.env
+.env.*
+
+# user data: the database is data, never source
+*.db
+*.db-wal
+*.db-shm
+metadata.db*
+
+# media: the library is huge and is mounted, never baked in
+test_media/
+testdata/
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.m2v
+*.wmv
+*.mpg
+*.mpeg
+
+# build and dependency state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+ui/node_modules/
+ui/dist/
+dist/
+build/
+*.egg-info/
+
+# vcs and editor state
+.git/
+.gitignore
+.github/
+.idea/
+.vscode/
+
+# reports and scratch output
+report.html
+*.log
+.omo/
+TODO.md
