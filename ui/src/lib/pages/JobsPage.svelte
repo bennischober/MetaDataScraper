@@ -312,9 +312,10 @@
     color: var(--ink-dim);
     padding: 3px 10px;
     cursor: pointer;
-    font-size: 10.5px;
+    font-size: var(--fs-data); /* interactive text reads at data size (a11y pass) */
     letter-spacing: 1px;
     min-height: 24px;
+    min-width: 24px;
   }
   .mini:hover { color: var(--ink); border-color: var(--ink-dim); }
   .trace {

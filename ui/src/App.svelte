@@ -641,10 +641,13 @@
         </span>
       {/if}
       <button class="theme-toggle legend" onclick={() => (theme = theme === 'dark' ? 'light' : 'dark')}
+        aria-label={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
       </button>
-      <button class="legend watcher" class:on={status?.watcher === 'running'} onclick={toggleWatcher}>
+      <button class="legend watcher" class:on={status?.watcher === 'running'} onclick={toggleWatcher}
+        aria-label={status?.watcher === 'running' ? 'Stop the background watcher' : 'Start the background watcher'}
+        aria-pressed={status?.watcher === 'running'}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
       </button>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
@@ -929,6 +932,10 @@
     padding: 5px 10px;
     cursor: pointer;
     text-align: left;
+    /* a11y pass: interactive controls read at data size and carry a
+       24px-minimum hit target */
+    font-size: var(--fs-data);
+    min-height: 24px;
   }
   .armed-chip {
     color: var(--red);
