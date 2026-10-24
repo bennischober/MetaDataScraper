@@ -53,8 +53,13 @@ from shrinkray.engine.crop import (
 from shrinkray.engine.crop import (
     parse_crop_line as parse_crop_line,
 )
-from shrinkray.logger import log, log_error, log_warning
-from shrinkray.media import FFPROBE_TIMEOUT
+from shrinkray.engine.samples import (
+    extract_samples as extract_samples,
+)
+from shrinkray.engine.samples import (
+    sample_offsets as sample_offsets,
+)
+from shrinkray.logger import log, log_error
 from shrinkray.tools.handbrake import (
     build_encode_command as build_encode_command,
 )
@@ -367,169 +372,6 @@ def sample_count_for(
     if duration is None or duration <= 0 or not sample_every or sample_every <= 0:
         return DEFAULT_SAMPLE_COUNT
     return max(1, math.ceil(duration / sample_every))
-
-
-def sample_offsets(duration: float, count: int) -> list[float]:
-    """Computes the sample start offsets evenly spread over the duration.
-
-    The offsets avoid the first and last seconds (credits/lead-in) and are
-    spread between 10% and 90% of the duration.
-
-    Args:
-        duration (float): The duration in seconds.
-        count (int): The number of samples.
-
-    Returns:
-        list[float]: The start offsets in seconds.
-    """
-    if duration <= 0 or count <= 0:
-        return []
-    start, end = duration * 0.1, duration * 0.9
-    if count == 1:
-        return [start]
-    step = (end - start) / (count - 1)
-    return [start + i * step for i in range(count)]
-
-
-def extract_samples(
-    movie: Path,
-    workdir: Path,
-    count: int,
-    seconds: float,
-    cancel: threading.Event | None = None,
-    progress: ProgressCallback | None = None,
-) -> list[tuple[Path, float]]:
-    """Extracts sample clips for probing by stream-copying the source.
-
-    The samples are the VMAF *reference* and the probe encode's input, so a
-    re-encode here would bias both sides of every measurement: a lossy pass
-    smooths grain and fine detail, making the probe source easier than the real
-    one and the chosen CRF too high. A stream copy keeps the reference
-    pristine, and it is I/O-bound rather than CPU-bound.
-
-    `-ss` before `-i` with `-c:v copy` starts the clip at the keyframe at or
-    before the offset, so the clip is slightly longer than `seconds`. Both the
-    probe encode and the VMAF reference read the same file, so the comparison
-    stays frame-aligned; `-avoid_negative_ts make_zero` normalises the
-    timestamps open-GOP sources otherwise carry into the clip.
-
-    If the container cannot hold the source codec the copy fails and the clip is
-    re-extracted losslessly (ffv1), which keeps the reference pristine but
-    costs a decode + encode; that fallback is logged so the operator knows the
-    extraction was expensive.
-
-    Args:
-        movie (Path): The source movie file.
-        workdir (Path): Directory for the sample files.
-        count (int): The number of samples.
-        seconds (float): The length of each sample in seconds.
-        cancel (threading.Event | None): Cooperative cancellation.
-        progress (callable | None): Callback progress(dict) for live
-            step updates (flow to the UI, never persisted).
-
-    Returns:
-        list[tuple[Path, float]]: The sample files with their start offsets
-            in seconds (the offset is part of a probe's cache identity).
-
-    Raises:
-        RuntimeError: If a sample could not be extracted.
-        Cancelled: When the cancel event fires.
-    """
-    _check_cancel(cancel)
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                str(movie),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-        )
-    except subprocess.SubprocessError as e:
-        # TimeoutExpired: a stale mount (NFS/SMB that went away) blocks the
-        # read in the kernel — without a timeout this call would hang the
-        # job worker/watch loop forever with no error (issue #62).
-        raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s for '{movie}': {e}") from e
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffprobe failed for '{movie}'")
-    duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
-
-    samples: list[tuple[Path, float]] = []
-    for index, offset in enumerate(sample_offsets(duration, count)):
-        _check_cancel(cancel)
-        if progress:
-            progress(
-                {
-                    "stage": "probe",
-                    "detail": f"extracting sample {index + 1}/{count}",
-                    "done": index,
-                    "total": count,
-                }
-            )
-        sample = workdir / f"sample_{index}.mkv"
-        code, err = _run(
-            [
-                FFMPEG_BINARY,
-                "-y",
-                "-v",
-                "error",
-                "-ss",
-                f"{offset:.3f}",
-                "-t",
-                f"{seconds:.3f}",
-                "-i",
-                str(movie),
-                "-map",
-                "0:v:0",
-                "-c:v",
-                "copy",
-                "-avoid_negative_ts",
-                "make_zero",
-                "-an",
-                str(sample),
-            ],
-            cancel=cancel,
-        )
-        if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
-            # the container cannot hold the source codec: re-extract losslessly
-            # so the reference stays pristine, and say so - this path costs a
-            # full decode and encode instead of a copy
-            log_warning(
-                f"Sample extraction could not stream-copy '{movie.name}' "
-                f"at {offset:.0f}s; re-extracting losslessly (slower)."
-            )
-            code, err = _run(
-                [
-                    FFMPEG_BINARY,
-                    "-y",
-                    "-v",
-                    "error",
-                    "-ss",
-                    f"{offset:.3f}",
-                    "-t",
-                    f"{seconds:.3f}",
-                    "-i",
-                    str(movie),
-                    "-map",
-                    "0:v:0",
-                    "-c:v",
-                    "ffv1",
-                    "-avoid_negative_ts",
-                    "make_zero",
-                    "-an",
-                    str(sample),
-                ],
-                cancel=cancel,
-            )
-        if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
-            raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
-        samples.append((sample, offset))
-    return samples
 
 
 def source_codec(movie: Path) -> str | None:

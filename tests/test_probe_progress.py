@@ -21,12 +21,12 @@ class TestProbeProgress(unittest.TestCase):
 
         with (
             patch(
-                "shrinkray.quality.subprocess.run",
+                "shrinkray.engine.samples.subprocess.run",
                 return_value=type(
                     "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
                 )(),
             ),
-            patch("shrinkray.quality._run", side_effect=fake_run),
+            patch("shrinkray.engine.samples._run", side_effect=fake_run),
             tempfile.TemporaryDirectory() as tmp,
         ):
             quality.extract_samples(
