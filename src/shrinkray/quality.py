@@ -38,6 +38,9 @@ from shrinkray.encode import (
 )
 from shrinkray.logger import log, log_error, log_warning
 from shrinkray.media import FFPROBE_TIMEOUT
+from shrinkray.tools.handbrake import (
+    build_encode_command as build_encode_command,
+)
 from shrinkray.tools.process import (
     Cancelled as Cancelled,
 )
@@ -676,76 +679,6 @@ def extract_samples(
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
         samples.append((sample, offset))
     return samples
-
-
-def build_encode_command(
-    binary: str,
-    input_file: Path,
-    output_file: Path,
-    crf: int,
-    encoder: str,
-    encoder_preset: str,
-    crop: tuple[int, int, int, int] | None = None,
-    encoder_threads: int | None = None,
-) -> list[str]:
-    """Builds the HandBrakeCLI command for a quality-driven encode.
-
-    Unlike the fixed preset in encode.py, the quality is set via --quality
-    (CRF) and the speed via --encoder-preset.
-
-    Args:
-        binary (str): Path to the HandBrakeCLI binary.
-        input_file (Path): The file to re-encode.
-        output_file (Path): The target file.
-        crf (int): The CRF quality value.
-        encoder (str): The video encoder, e.g. 'svt_av1'.
-        encoder_preset (str): The encoder speed preset to encode at.
-        crop (tuple | None): Crop bars (top, bottom, left, right) to remove
-            baked-in black bars. None keeps the source resolution.
-        encoder_threads (int | None): Thread limit for the encoder
-            (None = no limit). Keeps cores free for other work.
-
-    Returns:
-        list[str]: The command as argument list.
-    """
-    command = [
-        binary,
-        "--input",
-        str(input_file),
-        "--output",
-        str(output_file),
-        "--encoder",
-        encoder,
-        "--encoder-preset",
-        encoder_preset,
-        "--quality",
-        str(crf),
-    ]
-    if encoder_threads is not None:
-        # HandBrakeCLI has no thread flag, and SVT-AV1 has no `threads`
-        # option: --encopts pairs go to svt_av1_enc_parse_parameter, which
-        # would silently ignore `threads=N` (issue #21). SVT-AV1's `pin`
-        # restricts execution to the first N cores, which is what the cap
-        # means here.
-        command += ["--encopts", f"pin={encoder_threads}"]
-    if crop is not None:
-        top, bottom, left, right = crop
-        # HandBrake crop order is top:bottom:left:right
-        command += ["--crop", f"{top}:{bottom}:{left}:{right}"]
-    else:
-        # keep the source resolution: HandBrake's auto-crop would letterbox
-        # crops break the VMAF comparison (dimension mismatch) and change
-        # the output resolution of the library
-        command += ["--crop", "0:0:0:0"]
-    command += [
-        # keep all audio and subtitle tracks, copy audio => no quality loss
-        "--all-audio",
-        "--all-subtitles",
-        "--aencoder",
-        "copy",
-        "--optimize",  # web optimized => mp4/mkv file can start streaming
-    ]
-    return command
 
 
 def source_codec(movie: Path) -> str | None:
