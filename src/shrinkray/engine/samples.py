@@ -20,6 +20,13 @@ from shrinkray.tools.process import Cancelled, _run
 
 FFMPEG_BINARY = "ffmpeg"
 
+DEFAULT_SAMPLE_COUNT = 3
+DEFAULT_SAMPLE_SECONDS = 10.0
+# probe density as a duration: one window per N seconds of runtime, so
+# coverage is a fixed fraction (sample_seconds / sample_every) instead of
+# shrinking as the movie gets longer. None keeps the count-based default.
+DEFAULT_SAMPLE_EVERY = 600.0
+
 # the engine's live-progress callback: stage detail and counters, never persisted
 # (quality.py holds the same alias; the two merge when the engine split finishes)
 ProgressCallback = Callable[[dict], None]

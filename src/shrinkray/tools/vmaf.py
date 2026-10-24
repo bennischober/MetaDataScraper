@@ -262,3 +262,34 @@ def measure_vmaf(
         return parse_vmaf_log(log_file.read_text(encoding="utf-8"))
     except (ValueError, json.JSONDecodeError) as e:
         raise RuntimeError(f"libvmaf log could not be parsed: {e}") from e
+
+
+def _tool_versions(handbrake: str) -> str:
+    """Reads the tool versions relevant for benchmark records.
+
+    Args:
+        handbrake (str): Path to the HandBrakeCLI binary.
+
+    Returns:
+        str: A compact version string, e.g. 'hb=1.11.2;libvmaf=v3'.
+    """
+    import re as _re
+    import subprocess as _subprocess
+
+    versions = []
+    try:
+        proc = _subprocess.run([handbrake, "--version"], capture_output=True, timeout=15)
+        match = _re.search(r"HandBrake\s+([0-9.]+)", proc.stdout.decode(errors="replace"))
+        if match:
+            versions.append(f"hb={match.group(1)}")
+    except (OSError, _subprocess.SubprocessError):
+        pass
+    try:
+        style = detect_vmaf_style()
+    except RuntimeError:
+        # ffmpeg absent (CI runners, minimal NAS installs): version
+        # metadata must never fail the encode result - the tool_versions
+        # string is documentation, not function. Omit the libvmaf token.
+        return ";".join(versions)
+    versions.append("libvmaf=v3" if style == VMAF_STYLE_MODERN else "libvmaf=v2")
+    return ";".join(versions)

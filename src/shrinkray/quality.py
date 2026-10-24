@@ -54,10 +54,28 @@ from shrinkray.engine.crop import (
     parse_crop_line as parse_crop_line,
 )
 from shrinkray.engine.samples import (
+    DEFAULT_SAMPLE_COUNT as DEFAULT_SAMPLE_COUNT,
+)
+from shrinkray.engine.samples import (
+    DEFAULT_SAMPLE_EVERY as DEFAULT_SAMPLE_EVERY,
+)
+from shrinkray.engine.samples import (
+    DEFAULT_SAMPLE_SECONDS as DEFAULT_SAMPLE_SECONDS,
+)
+from shrinkray.engine.samples import (
     extract_samples as extract_samples,
 )
 from shrinkray.engine.samples import (
     sample_offsets as sample_offsets,
+)
+from shrinkray.engine.search import (
+    DEFAULT_CRF_RANGE as DEFAULT_CRF_RANGE,
+)
+from shrinkray.engine.search import (
+    DEFAULT_HDR_CRF_RANGE as DEFAULT_HDR_CRF_RANGE,
+)
+from shrinkray.engine.search import (
+    DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF,
 )
 from shrinkray.logger import log, log_error
 from shrinkray.tools.handbrake import (
@@ -80,6 +98,9 @@ from shrinkray.tools.vmaf import (
 )
 from shrinkray.tools.vmaf import (
     VMAF_STYLE_MODERN as VMAF_STYLE_MODERN,
+)
+from shrinkray.tools.vmaf import (
+    _tool_versions as _tool_versions,
 )
 from shrinkray.tools.vmaf import (
     build_vmaf_command as build_vmaf_command,
@@ -113,9 +134,6 @@ MIN_SOURCE_CODEC = "h264"
 ProgressCallback = Callable[[dict], None]
 
 
-# VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
-# top-tier floor); VMAF falls monotonically with rising CRF.
-DEFAULT_TARGET_VMAF = 95.0
 # AV1 is the only output codec (issue #21): SVT-AV1 on the CPU, 10-bit for
 # HDR. x265 is gone from every path - not demoted to a fallback, not kept
 # as an option. encoder_for() is the single source of this choice.
@@ -137,21 +155,6 @@ HDR_ESTIMATE_NOTE = (
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
 # 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
 DEFAULT_HDR_TARGET_VMAF = 94.5
-# SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
-# hb_video_quality_get_limits), a wider and finer scale than x265's.
-# These bounds are NOT calibrated for SVT-AV1 yet: they are the
-# x265-era ranges carried over, and the issue requires a measured
-# SVT-AV1 CRF-to-VMAF curve on 3-5 titles before they can be
-# trusted. The search clamps to this band, so an over-wide range only
-# costs probes - it cannot make the decision wrong in the safe direction.
-DEFAULT_CRF_RANGE = (14, 45)
-DEFAULT_HDR_CRF_RANGE = (10, 45)
-DEFAULT_SAMPLE_COUNT = 3
-DEFAULT_SAMPLE_SECONDS = 10.0
-# probe density as a duration: one window per N seconds of runtime, so
-# coverage is a fixed fraction (sample_seconds / sample_every) instead of
-# shrinking as the movie gets longer. None keeps the count-based default.
-DEFAULT_SAMPLE_EVERY = 600.0
 
 # full-file verification sub-samples above this output size (n_subsample=10:
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
@@ -469,37 +472,6 @@ def is_hdr_file(movie: Path) -> bool:
     except (RuntimeError, OSError, ValueError):
         return False
     return bool(data.get("hdr"))
-
-
-def _tool_versions(handbrake: str) -> str:
-    """Reads the tool versions relevant for benchmark records.
-
-    Args:
-        handbrake (str): Path to the HandBrakeCLI binary.
-
-    Returns:
-        str: A compact version string, e.g. 'hb=1.11.2;libvmaf=v3'.
-    """
-    import re as _re
-    import subprocess as _subprocess
-
-    versions = []
-    try:
-        proc = _subprocess.run([handbrake, "--version"], capture_output=True, timeout=15)
-        match = _re.search(r"HandBrake\s+([0-9.]+)", proc.stdout.decode(errors="replace"))
-        if match:
-            versions.append(f"hb={match.group(1)}")
-    except (OSError, _subprocess.SubprocessError):
-        pass
-    try:
-        style = detect_vmaf_style()
-    except RuntimeError:
-        # ffmpeg absent (CI runners, minimal NAS installs): version
-        # metadata must never fail the encode result - the tool_versions
-        # string is documentation, not function. Omit the libvmaf token.
-        return ";".join(versions)
-    versions.append("libvmaf=v3" if style == VMAF_STYLE_MODERN else "libvmaf=v2")
-    return ";".join(versions)
 
 
 def _source_snapshot(movie: Path) -> dict:

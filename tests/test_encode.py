@@ -955,7 +955,7 @@ class TestEncodeLock(unittest.TestCase):
                 mock.patch("shrinkray.quality.measure_vmaf", side_effect=RuntimeError("no ffmpeg")),
                 mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
                 mock.patch(
-                    "shrinkray.quality.detect_vmaf_style",
+                    "shrinkray.tools.vmaf.detect_vmaf_style",
                     side_effect=RuntimeError("ffmpeg not found"),
                 ),
             ):
@@ -972,7 +972,7 @@ class TestEncodeLock(unittest.TestCase):
             hb = Path(tmp) / "hb.cmd"
             hb.write_bytes(b"@echo off\r\necho HandBrake 1.11.2\r\n")
             with mock.patch(
-                "shrinkray.quality.detect_vmaf_style",
+                "shrinkray.tools.vmaf.detect_vmaf_style",
                 side_effect=RuntimeError("ffmpeg not found"),
             ):
                 versions = quality._tool_versions(str(hb))
