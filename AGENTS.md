@@ -111,7 +111,7 @@ anti-patterns are the sections further down — this block does not restate them
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `DEFAULT_TARGET_VMAF` | const 96.0 | `engine/search.py:47` | 8 | the decided default; every CLI option, the API model and the job payload derive from it |
+| `DEFAULT_TARGET_VMAF` | const 96.0 | `engine/search.py:48` | 8 | the decided default; every CLI option, the API model and the job payload derive from it |
 | `CANDIDATE_CODECS` | const | `quality.py:65` | 5 | `("h264",)` — the only size-alone candidates |
 | `MODERN_CODECS` | const | `quality.py:66` | 5 | `("hevc","av1")` — bars-only candidates |
 | `guard_encodes` | context mgr | `encode_lock.py:142` | 14 | per-output-dir lock, 6 h stale window |
@@ -122,7 +122,7 @@ anti-patterns are the sections further down — this block does not restate them
 ### NOTES (gotchas that cost a reader time)
 
 - **VMAF default: 96, and the code now ships 96.** `DEFAULT_TARGET_VMAF`
-  (`engine/search.py:47`) is `96.0`, and every `--target-vmaf` default, the API request
+  (`engine/search.py:48`) is `96.0`, and every `--target-vmaf` default, the API request
   model and the job payload derive from it rather than repeating a literal — the literals
   were the defect (issue #103). The target participates in the stored plan fingerprint, so
   the 95.0 -> 96.0 change deliberately invalidated every cached plan: a library planned
