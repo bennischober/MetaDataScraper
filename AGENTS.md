@@ -39,6 +39,83 @@ are target behaviour, not yet implemented — check the code before assuming one
 - The watchdog scans every new or changed file into the database and re-decides it
   from the fresh scan.
 
+## PROJECT KNOWLEDGE BASE
+
+**Generated:** 2026-10-24 · **Commit:** a1a5c33 · **Branch:** main
+
+Orientation only: the rules below this block are normative, and the two module maps
+live in `src/shrinkray/AGENTS.md` and `ui/AGENTS.md`. Conventions, the gate and the
+anti-patterns are the sections further down — this block does not restate them.
+
+### STRUCTURE
+
+```
+./
+├── src/shrinkray/    # 18 flat modules, ~11.4k LOC — the whole Python product
+├── ui/               # Svelte 5 dashboard, second toolchain with its own gate
+├── tests/            # one file per source module, plain unittest, run by pytest
+├── testdata/         # gitignored local fixtures (mkv clips, inbox/movies trees)
+├── test_media/       # gitignored real media, manual end-to-end runs only
+├── docs/             # decisions/0001-module-layout.md, docker.md, tui.md, plan-reuse.md
+├── deploy/           # shrinkray.service (systemd)
+├── scripts/          # verify_fullmovie.py — manual full-movie check
+└── .github/workflows/ci.yml   # job `test` (the six commands) + job `ui`
+```
+
+### WHERE TO LOOK
+
+| Task | Location | Notes |
+|------|----------|-------|
+| Change a CLI command or flag | `src/shrinkray/__main__.py` (1067 L) | typer app; no business logic |
+| Change the VMAF/CRF decision | `src/shrinkray/quality.py` (2821 L) | measure, crop detect, sampling, search, plan cache |
+| Change an HTTP route or SSE | `src/shrinkray/app.py` (1311 L) | FastAPI, 16 routes incl. SSE `/api/events` |
+| Change the schema | `src/shrinkray/db.py` (1082 L) | migration + `SCHEMA_VERSION` bump |
+| Change what gets encoded | `src/shrinkray/encode.py` (1029 L) | HandBrake invocation, artifact verification |
+| Change candidate selection | `src/shrinkray/quality.py` | `CANDIDATE_CODECS` / `MODERN_CODECS` gate |
+| Change the watchdog | `src/shrinkray/watch.py` | poll interval, stability, `decide()` |
+| Change the dashboard | `ui/src/lib/pages/` | contract also in `ui/src/lib/api.ts` |
+| Understand a past decision | `docs/decisions/`, issue #63 | layout target, not current state |
+
+### CODE MAP
+
+| Symbol | Type | Location | Refs | Role |
+|--------|------|----------|------|------|
+| `DEFAULT_TARGET_VMAF` | const 95.0 | `quality.py:120` | 8 | every CLI default derives from it |
+| `CANDIDATE_CODECS` | const | `quality.py:65` | 5 | `("h264",)` — the only size-alone candidates |
+| `MODERN_CODECS` | const | `quality.py:66` | 5 | `("hevc","av1")` — bars-only candidates |
+| `guard_encodes` | context mgr | `encode_lock.py:142` | 14 | per-output-dir lock, 6 h stale window |
+| `SCHEMA_VERSION` | const 13 | `db.py:8` | 9 | bump with every migration |
+| `find_handbrake` | function | `encode.py:175` | 40 | binary discovery, degrades to `None` |
+| `encode_file` | function | `encode.py:742` | — | the one full encode |
+
+### NOTES (gotchas that cost a reader time)
+
+- **VMAF default disagrees with the prose.** `DEFAULT_TARGET_VMAF = 95.0`
+  (`quality.py:120`) and every `--target-vmaf` default is 95.0, while PRODUCT.md and
+  the product rules above say 96. The rule stands; when reading or changing code,
+  quote the constant, never the prose, and do not "fix" the number in a doc PR.
+- **The package is flat today.** The `tools/`/`engine/`/`server/` tree in Project
+  conventions is the #63 target, not the current layout. Do not describe it as
+  current, and do not restructure as a drive-by on an unrelated issue.
+- **One writer per output directory.** `encode_lock.guard_encodes` is the only guard;
+  any new code path that writes into an output dir must take it.
+- **Tests patch module-qualified names** (`shrinkray.encode.find_handbrake`), so moving
+  a function between modules silently breaks patch targets — a #63 move must update
+  the patch strings in the same commit.
+- **The gate is not the whole gate.** The six commands cover Python only; CI also runs
+  a separate `ui` job (`npm ci`, `npm run check`, `npm run build` in `ui/`). A change
+  under `ui/` is unverified until those three pass too, and there is no UI test suite.
+- **The API contract is duplicated by hand.** A new FastAPI field that is not added to
+  `ui/src/lib/api.ts` is invisible to the dashboard; add both in one change.
+- **`ui/dist` is served by `app.py`** (`/` no-cache, `/assets/*` immutable, realpath
+  containment) — it is build output, never edit it by hand.
+- **Two stale docs, one accurate.** `DESIGN.md` describes a grid/table toggle and a
+  poster card the app no longer has (`LibraryPage` is table-only, `PosterCard.svelte`
+  is orphaned); `ui/README.md` is unedited Vite template text. The root README's
+  "Web UI (ui/)" section is the accurate one.
+- **`helpers.py` still exists** (257 L). The "no helpers module" rule governs new code
+  and the #63 moves; do not grow it.
+
 ## Engineering standard (non-negotiable)
 
 This is not a hobby project. It is built to be **given to the community**, which
