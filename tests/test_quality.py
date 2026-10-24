@@ -955,6 +955,105 @@ class TestProbeCache(unittest.TestCase):
         self.assertEqual(factor, 0.5)
 
 
+class TestChosenCrfSizeGate(unittest.TestCase):
+    """Issue #129: the search must check size at the CRF it chose, not only at
+    the top of the range.
+
+    The top-of-range probe (crf_range[1], 45) is a *bound*: it answers "can any
+    CRF shrink this file?". The chosen CRF sits far below it, so the file there
+    is much bigger and can still grow. These tests drive the two calls to
+    different answers, which a flat mock cannot do.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp.name) / "work"
+        self.workdir.mkdir()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 100)
+        self.sample = self.workdir / "sample.mkv"
+        self.sample.write_bytes(b"y" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_search(self, factors: dict[int, float]):
+        """Runs find_optimal_crf_and_skip with estimate_size_factor keyed by CRF.
+
+        A dict (rather than a constant) is the point: it lets the top-of-range
+        probe and the chosen-CRF probe disagree, which is the case under test.
+        """
+        seen: list[int] = []
+
+        def fake_estimate(*args, **kwargs):
+            crf = args[3]
+            seen.append(crf)
+            return factors[crf]
+
+        with (
+            patch.object(quality, "estimate_size_factor", side_effect=fake_estimate),
+            patch.object(quality, "find_optimal_crf", return_value=(22, 95.5, [])),
+        ):
+            result = quality.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+            )
+        return result, seen
+
+    def test_a_growth_at_the_chosen_crf_is_skipped(self):
+        """The top of the range shrinks, the chosen CRF does not: skip.
+
+        This is the case the old code missed entirely - it would have encoded the
+        file at CRF 22 and made it bigger.
+        """
+        result, seen = self._run_search({45: 0.5, 22: 1.2})
+        _crf, _vmaf, _probes, skip = result
+        self.assertTrue(skip, "a grown chosen CRF must be skipped")
+        self.assertIn(45, seen, "the bound probe must still run")
+        self.assertIn(22, seen, "the chosen CRF must be checked")
+
+    def test_a_shrink_at_both_points_is_encoded(self):
+        """The regression guard: the new gate must not reject a normal file."""
+        result, seen = self._run_search({45: 0.4, 22: 0.7})
+        _crf, _vmaf, _probes, skip = result
+        self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
+        self.assertIn(22, seen)
+
+    def test_the_early_exit_still_skips_the_search(self):
+        """When the bound itself cannot shrink, the search never runs.
+
+        The bound is the whole point of the top-of-range probe: if CRF 45 cannot
+        shrink the file, nothing in the range can, so the bisect is wasted work.
+        """
+        with (
+            patch.object(quality, "estimate_size_factor", return_value=1.3),
+            patch.object(quality, "find_optimal_crf") as fake_search,
+        ):
+            result = quality.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+            )
+        fake_search.assert_not_called()
+        self.assertTrue(result[3], "the early exit must report a skip")
+
+    def test_the_chosen_check_is_a_separate_measurement(self):
+        """The chosen-CRF size probe is not served by the VMAF cache.
+
+        The VMAF cache is keyed kind='vmaf' and the size cache kind='size', so
+        reusing a VMAF probe's bytes as a size measurement would need a shared
+        cache entry - a separate optimization, not this fix. Asserting the two CRFs
+        were both measured keeps that honest.
+        """
+        _result, seen = self._run_search({45: 0.5, 22: 1.2})
+        self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
+        self.assertEqual(seen.count(45), 1)
+        self.assertEqual(seen.count(22), 1)
+
+
 class TestSubprocessTimeouts(unittest.TestCase):
     """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
     documented failure path instead of hanging the thread forever (issue
