@@ -903,7 +903,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         movie = Path(tempfile.mkdtemp()) / "no-such-file.mkv"
         try:
             with patch(
-                "shrinkray.quality.subprocess.run",
+                "shrinkray.engine.crop.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
             ) as mocked:
                 self.assertIsNone(quality.detect_crop_rect(movie, None, count=3))
@@ -993,7 +993,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             with (
                 patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
-                    "shrinkray.quality.subprocess.run",
+                    "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
                         "P",
                         (),
@@ -1003,7 +1003,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         },
                     )(),
                 ),
-                patch("shrinkray.quality._run", side_effect=fake_run),
+                patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
                 quality.detect_crop_rect(movie, Path(tmp))
         self.assertEqual(len(commands), 10)
@@ -1026,7 +1026,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             with (
                 patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
-                    "shrinkray.quality.subprocess.run",
+                    "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
                         "P",
                         (),
@@ -1036,7 +1036,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         },
                     )(),
                 ),
-                patch("shrinkray.quality._run", side_effect=fake_run),
+                patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
                 quality.detect_crop_rect(movie, Path(tmp), count=4)
         self.assertEqual(len(commands), 4)
