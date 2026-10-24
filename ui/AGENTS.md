@@ -53,7 +53,8 @@ ui/
   `ms.decision`, `ms.sortKey`, `ms.sortAsc`, `ms.jobsKind`, `ms.jobsState`, `sr.detail`)
   only the tab. `removeBars` is never persisted — arming dies with the tab.
 - **Gate**: `npm run check` (svelte-check + `tsc`); CI runs `npm ci`, `npm run check`,
-  `npm run build` in `ui/`.
+  `npm run test` (vitest: api contract helpers, the SSE progress store, the jobs page
+  render pattern), `npm run build` in `ui/`.
 
 ## ANTI-PATTERNS
 - `fetch`/`EventSource` in a component, or a locally re-declared API shape: extend
@@ -69,7 +70,5 @@ ui/
 - `ui/README.md` is still the untouched Vite template text — not project docs.
 - `DESIGN.md` is partly stale: it documents a grid/table toggle and the poster card, but
   `LibraryPage` is table-only and `PosterCard.svelte` has no importer.
-- No UI test suite (`package.json` has no `test` script); verification is `npm run check`,
-  `npm run build` and a manual browser run.
 - `App.svelte` hardcodes Windows defaults (`D:\Movies`, `D:\Encoded`) and VMAF 95; a fresh
   browser profile shows them verbatim. The rail legend still reads `1–5: pages` for four pages.
