@@ -160,6 +160,9 @@ class JobRequest(BaseModel):
     output_dir: str | None = None
     quality: bool = False
     target_vmaf: float = Field(95.0, ge=1.0, le=100.0)
+    sample_count: int | None = Field(None, ge=1, le=64)
+    sample_every: float | None = Field(None, ge=0.1)
+    sample_seconds: float | None = Field(None, ge=1.0)
     remove_bars: bool = False
     overwrite: bool = False
     verify: bool = False
@@ -552,6 +555,12 @@ def create_job(request: JobRequest) -> dict:
         payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))
         payload["quality"] = request.quality
         payload["target_vmaf"] = request.target_vmaf
+        if request.sample_count is not None:
+            payload["sample_count"] = request.sample_count
+        if request.sample_every is not None:
+            payload["sample_every"] = request.sample_every
+        if request.sample_seconds is not None:
+            payload["sample_seconds"] = request.sample_seconds
         payload["remove_bars"] = request.remove_bars
         payload["overwrite"] = request.overwrite
         payload["workers"] = request.workers
@@ -576,6 +585,12 @@ def create_job(request: JobRequest) -> dict:
             payload["probe_encoder_preset"] = request.probe_encoder_preset
     elif request.kind == JobKind.PLAN:
         payload["target_vmaf"] = request.target_vmaf
+        if request.sample_count is not None:
+            payload["sample_count"] = request.sample_count
+        if request.sample_every is not None:
+            payload["sample_every"] = request.sample_every
+        if request.sample_seconds is not None:
+            payload["sample_seconds"] = request.sample_seconds
         payload["remove_bars"] = request.remove_bars
         if request.encoder_preset is not None:
             if request.encoder_preset not in ENCODER_PRESETS:

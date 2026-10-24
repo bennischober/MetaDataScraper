@@ -335,7 +335,13 @@ class TestPlanReuse(unittest.TestCase):
                 quality, "_encode_with_command", side_effect=fake_encode_command
             ) as fake_encode,
         ):
-            result = quality.encode_with_quality(movie, output, db_file=self.db_file, **kwargs)
+            # sample_count=3: the stored plans this class tests were probed
+            # with the legacy fixed budget — pin it so the fingerprint
+            # matches (the derived count from the mocked 600s duration
+            # would be 1, and a mismatch correctly re-probes)
+            result = quality.encode_with_quality(
+                movie, output, db_file=self.db_file, sample_count=3, **kwargs
+            )
         return result, fake_encode
 
     def test_valid_plan_skips_probing_and_encodes_planned_crf(self):
@@ -1053,6 +1059,287 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 quality.extract_samples(movie, Path(tmp) / "work", count=3, seconds=10.0)
         self.assertIn("timed out after 60s", str(ctx.exception))
         self.assertIn("movie.mkv", str(ctx.exception))
+
+
+class TestSamplingAndMean(unittest.TestCase):
+    """Duration-based sampling and the mean decision statistic (issues
+    #14 + #15, which land together: the mean is only defensible with
+    enough windows to average over)."""
+
+    def test_derive_sample_count_boundaries(self):
+        derive = quality.derive_sample_count
+        self.assertEqual(derive(20 * 60), 2)  # 20-minute short
+        self.assertEqual(derive(2 * 3600), 12)  # 2-hour film
+        self.assertEqual(derive(4 * 3600), 24)  # 4-hour film
+        self.assertEqual(derive(5 * 60), 1)  # shorter than one interval
+        self.assertEqual(derive(0), 1)  # degenerate input still probes once
+        self.assertEqual(derive(1200, sample_every=300.0), 4)  # custom interval
+
+    def _probe_crf(self, per_sample: dict[int, float], **kwargs) -> tuple[float, list]:
+        """One probe_crf call whose samples measure the given scores."""
+        encodes: list = []
+
+        def fake_run(command, cancel=None):
+            encodes.append(command)
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        def fake_measure(distorted, reference, workdir, **kw):
+            # the sample's index is recoverable from its file name
+            index = int(Path(distorted).stem.rsplit("_", 1)[1])
+            return per_sample[index]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # sample files live in the tmp dir (absolute paths): a relative
+            # name would resolve against the pytest CWD and pollute the repo
+            samples = [
+                (Path(tmp) / f"s{i}.mkv", 10.0 * i) for i in range(len(per_sample))
+            ]
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            for s, _ in samples:
+                s.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "measure_vmaf", side_effect=fake_measure),
+            ):
+                score = quality.probe_crf(
+                    samples,
+                    kwargs.pop("crf", 20),
+                    Path(tmp),
+                    "hb",
+                    movie,
+                    kwargs.pop("sample_seconds", 10.0),
+                    kwargs.pop("encoder", "x265"),
+                    kwargs.pop("probe_encoder_preset", "medium"),
+                    use_probe_cache=False,
+                    **kwargs,
+                )
+        return score, encodes
+
+    def test_mean_is_returned_not_min(self):
+        # [96, 96, 92] -> mean 94.67 (min 92); the returned value is the mean
+        score, _ = self._probe_crf({0: 96.0, 1: 96.0, 2: 92.0})
+        self.assertAlmostEqual(score, (96.0 + 96.0 + 92.0) / 3, places=5)
+
+    def test_mean_passes_where_min_would_fail(self):
+        """The acceptance numbers: the mean must clear the target while the
+        minimum does not ([96, 96, 96, 92]: mean 95.0 >= 95, min 92 < 95)."""
+        score, _ = self._probe_crf({0: 96.0, 1: 96.0, 2: 96.0, 3: 92.0})
+        self.assertGreaterEqual(score, 95.0)  # mean decision: passes
+        self.assertLess(min(96.0, 96.0, 96.0, 92.0), 95.0)  # min would fail
+
+    @staticmethod
+    def _write_samples(tmp: str, count: int) -> list[tuple[Path, float]]:
+        samples = []
+        for i in range(count):
+            sample = Path(tmp) / f"s{i}.mkv"
+            sample.write_bytes(b"x" * 8)
+            samples.append((sample, 10.0 * i))
+        return samples
+
+    def test_pathological_window_does_not_skip_the_movie(self):
+        """One low-outlier window among passing samples must yield an encode
+        decision, not 'target unreachable' (issue #15's core defect)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+
+            def fake_run(command, cancel=None):
+                Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+                return 0, ""
+
+            # windows 0/1 pass, window 2 is a VMAF-misbehaving scene; at the
+            # floor CRF (14) the probing raises in the OLD min world and the
+            # movie was skipped — under the mean the floor probe scores
+            # (96+96+60)/3 = 84 and fails, but the search then probes other
+            # CRFs... no: a mean of 84 < 95 at CRF 14 fails the floor probe
+            # => still unreachable. The defect this test pins is subtler:
+            # the mean lets the search find a CRF when only ONE window is
+            # bad but the others carry it at a LOWER crf. With scores rising
+            # as CRF falls, probe_crf at the floor is the BEST case — so the
+            # honest shape here: windows score high enough that the mean at
+            # the floor clears the target while the min does not.
+            scores = {0: 96.0, 1: 96.0, 2: 92.0}  # mean 94.67? fails 95...
+            # use [97, 97, 92]: mean 95.33 >= 95, min 92 < 95
+            scores = {0: 97.0, 1: 97.0, 2: 92.0}
+
+            def fake_measure(distorted, reference, workdir, **kw):
+                index = int(Path(distorted).stem.rsplit("_", 1)[1])
+                return scores[index]
+
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=7200.0),
+                patch.object(quality, "is_hdr_file", return_value=False),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+                patch.object(
+                    quality,
+                    "extract_samples",
+                    side_effect=lambda m, w, c, s, cancel=None, progress=None: self._write_samples(
+                        tmp, c
+                    ),
+                ),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "measure_vmaf", side_effect=fake_measure),
+                patch.object(quality, "detect_crop_rect", return_value=None),
+            ):
+                result = quality.plan_quality(
+                    movie,
+                    sample_count=3,
+                    db_file=None,
+                    use_probe_cache=False,
+                )
+        # min(97,97,92)=92 < 95 would skip 'unreachable'; the mean 95.33
+        # passes at the floor CRF => the movie gets an encode decision
+        self.assertIsNone(result.skipped_reason)
+        self.assertTrue(result.success)
+
+    def test_uniformly_failing_samples_still_skip(self):
+        """The mean must not mask a film that misses the target everywhere."""
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+
+            def fake_run(command, cancel=None):
+                Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+                return 0, ""
+
+            def fake_measure(distorted, reference, workdir, **kw):
+                return 85.0  # every window fails 95 everywhere
+
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=7200.0),
+                patch.object(quality, "is_hdr_file", return_value=False),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+                patch.object(
+                    quality,
+                    "extract_samples",
+                    side_effect=lambda m, w, c, s, cancel=None, progress=None: self._write_samples(
+                        tmp, c
+                    ),
+                ),
+                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(quality, "measure_vmaf", side_effect=fake_measure),
+                patch.object(quality, "detect_crop_rect", return_value=None),
+            ):
+                result = quality.plan_quality(
+                    movie,
+                    sample_count=3,
+                    db_file=None,
+                    use_probe_cache=False,
+                )
+        self.assertEqual(result.skipped_reason, "target unreachable")
+        self.assertFalse(result.success)
+
+    def test_skip_evidence_is_recorded(self):
+        """A 'target unreachable' skip from encode carries its evidence: the
+        skip row keeps the best CRF and VMAF (issue #15)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "test.db"
+            connection = db.connect(db_file)
+            try:
+                movie = Path(tmp) / "movie.mkv"
+                movie.write_bytes(b"x" * 64)
+                service.ensure_file_row(connection, movie)
+                connection.commit()
+
+                def fake_run(command, cancel=None):
+                    Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+                    return 0, ""
+
+                def fake_measure(distorted, reference, workdir, **kw):
+                    return 85.0
+
+                with (
+                    patch.object(quality, "probe_duration_seconds", return_value=7200.0),
+                    patch.object(quality, "is_hdr_file", return_value=False),
+                    patch.object(quality, "find_handbrake", return_value="hb"),
+                    patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+                    patch.object(
+                        quality,
+                        "extract_samples",
+                        side_effect=lambda m, w, c, s, cancel=None, progress=None: (
+                            self._write_samples(tmp, c)
+                        ),
+                    ),
+                    patch.object(quality, "_run", side_effect=fake_run),
+                    patch.object(quality, "measure_vmaf", side_effect=fake_measure),
+                    patch.object(quality, "detect_crop_rect", return_value=None),
+                ):
+                    result = quality.encode_with_quality(
+                        movie,
+                        Path(tmp) / "out.mkv",
+                        sample_count=3,
+                        db_file=db_file,
+                        use_probe_cache=False,
+                    )
+                self.assertEqual(result.skipped_reason, "target unreachable")
+                outcome = service.record_quality_results(
+                    connection, movie, result, type("C", (), {"handbrake_encoder": "x265"})()
+                )
+                self.assertTrue(outcome.skipped)
+                row = connection.execute(
+                    "SELECT chosen_crf, achieved_vmaf FROM encodes WHERE preset LIKE 'skipped%'"
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["chosen_crf"], 14)  # the floor CRF probed
+                self.assertAlmostEqual(row["achieved_vmaf"], 85.0, places=5)
+            finally:
+                connection.close()
+
+    def test_min_statistic_plan_is_not_reused(self):
+        """A plan recorded under the old 'min' statistic (the v12 default)
+        must not be trusted by a mean-decision encode (issue #15)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "test.db"
+            connection = db.connect(db_file)
+            try:
+                movie = Path(tmp) / "movie.mkv"
+                movie.write_bytes(b"x" * 8)
+                service.ensure_file_row(connection, movie)
+                connection.commit()
+                from shrinkray.quality import SampleProbe
+
+                db.save_plan(
+                    connection,
+                    connection.execute("SELECT id FROM files").fetchone()["id"],
+                    21,
+                    95.47,
+                    None,
+                    [SampleProbe(crf=21, vmaf=95.47)],
+                    None,
+                    None,
+                    movie.stat().st_mtime,
+                    movie.stat().st_size,
+                    "x265",
+                    "medium",
+                    95.0,
+                    14,
+                    32,
+                    3,
+                    10.0,
+                    False,
+                )
+                # force the row back to the pre-#15 statistic
+                connection.execute("UPDATE plans SET statistic = 'min'")
+                connection.commit()
+                valid = db.get_valid_plan(
+                    connection,
+                    movie,
+                    encoder="x265",
+                    encoder_preset="medium",
+                    target_vmaf=95.0,
+                    crf_range=(14, 32),
+                    sample_count=3,
+                    sample_seconds=10.0,
+                    remove_bars=False,
+                )
+                self.assertIsNone(valid)  # min-decided plan: re-probe
+            finally:
+                connection.close()
 
 
 if __name__ == "__main__":

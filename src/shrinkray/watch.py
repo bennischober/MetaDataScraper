@@ -23,7 +23,13 @@ from shrinkray.encode import (
 )
 from shrinkray.encode_lock import EncodeBusyError, guard_encodes
 from shrinkray.logger import log, log_error
-from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled, encode_with_quality
+from shrinkray.quality import (
+    DEFAULT_SAMPLE_EVERY,
+    DEFAULT_SAMPLE_SECONDS,
+    DEFAULT_TARGET_VMAF,
+    Cancelled,
+    encode_with_quality,
+)
 
 # a file is stable when its size is unchanged between two checks ...
 STABLE_CHECK_INTERVAL = 30.0
@@ -195,6 +201,9 @@ def watch(
     inbox: Path,
     output_dir: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    sample_count: int | None = None,
+    sample_every: float = DEFAULT_SAMPLE_EVERY,
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     remove_bars: bool = False,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
@@ -218,6 +227,11 @@ def watch(
         inbox (Path): The directory to watch for new movies.
         output_dir (Path): Directory for the encoded files.
         target_vmaf (float): The VMAF quality floor.
+        sample_count (int | None): Fixed probe-window count (None = derive
+            from sample_every; watch defaults to deriving, pass a count for
+            a fixed latency budget).
+        sample_every (float): Seconds of runtime per probe window.
+        sample_seconds (float): The length of each sample in seconds.
         remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
@@ -315,6 +329,9 @@ def watch(
                             movie,
                             output_dir / movie.name,
                             target_vmaf=target_vmaf,
+                            sample_count=sample_count,
+                            sample_every=sample_every,
+                            sample_seconds=sample_seconds,
                             remove_bars=remove_bars,
                             encoder=encoder,
                             probe_encoder_preset=probe_encoder_preset,

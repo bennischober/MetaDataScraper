@@ -174,9 +174,13 @@ and probes run below normal priority and each encode can be thread-capped
    size are computed and cached (unchanged files skip probing entirely).
 3. **Black-bar detection** — `cropdetect` samples several segments per movie;
    a threshold keeps noise pixels from being mistaken for bars.
-4. **Quality search** *(quality mode)* — three 10-second samples are encoded at
-   different CRF values and scored with VMAF against their source; a binary
-   search converges on the largest CRF that still meets the quality floor.
+4. **Quality search** *(quality mode)* — one 10-second probe window per 10
+   minutes of runtime (duration-based, so coverage is a fixed ~1.7% of the
+   movie regardless of its length; `--sample-count` pins a fixed budget) is
+   encoded at different CRF values and scored with VMAF against its source;
+   the window scores are aggregated with their **mean** and a bracketing
+   search converges on the largest CRF whose mean still meets the quality
+   floor.
 5. **Encode & verify** — the full movie is encoded once with the winning CRF;
    the output duration is verified against the source to catch interrupted
    encodes.
@@ -219,6 +223,9 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 |---|---|
 | `--quality` | VMAF-driven CRF search per movie (see above) |
 | `--target-vmaf N` | quality floor for quality mode (default: `95`) |
+| `--sample-every N` | minutes of runtime per probe window (default: `10`; coverage = `sample-seconds / sample-every` ≈ 1.7%) |
+| `--sample-seconds N` | length of each probe window in seconds (default: `10`) |
+| `--sample-count N` | fixed probe-window count (default: `0` = derive from `--sample-every`; a fixed budget for latency-sensitive runs) |
 | `--probe-encoder-preset NAME` | the PROBES' encoder speed preset (`medium` default; a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset NAME` | the FINAL encode's speed preset (`slow` default; an output setting — the probes run `--probe-encoder-preset`) |
 | `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
@@ -229,7 +236,16 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 **Batch-safe:** every finished encode is recorded, so an interrupted run skips
 its completed work on the next start. Movies whose quality target is provably
 unreachable (e.g. already-efficient HEVC) or that would not shrink are skipped
-and remembered — future runs do not re-probe them.
+and remembered — future runs do not re-probe them. A skip row carries its
+evidence (the best CRF probed and the VMAF it reached), so "already probed
+and failed" is distinguishable from "never probed".
+
+**What `achieved_vmaf` means:** the **mean** of the per-window VMAF scores at
+the chosen CRF (a mean since the duration-based sampling landed; earlier
+versions reported the *worst* window). The mean is robust against one
+VMAF-misbehaving window (fades, heavy grain) sinking an otherwise encodable
+movie; the concession is that a genuinely bad scene can hide behind several
+good ones — the denser window coverage is what keeps that risk low.
 
 ### `plan` — look before you leap
 

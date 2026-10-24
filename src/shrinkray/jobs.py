@@ -712,6 +712,9 @@ def execute_plan(
             result = plan_quality(
                 movie,
                 target_vmaf=payload.get("target_vmaf", 95.0),
+                sample_count=payload.get("sample_count") or None,
+                sample_every=payload.get("sample_every", 600.0),
+                sample_seconds=payload.get("sample_seconds", 10.0),
                 encoder=config.handbrake_encoder,
                 probe_encoder_preset=payload.get(
                     "probe_encoder_preset", config.handbrake_probe_encoder_preset
@@ -814,6 +817,9 @@ def execute_encode(
                     movie,
                     output_dir / movie.name,
                     target_vmaf=payload.get("target_vmaf", 95.0),
+                    sample_count=payload.get("sample_count") or None,
+                    sample_every=payload.get("sample_every", 600.0),
+                    sample_seconds=payload.get("sample_seconds", 10.0),
                     encoder=config.handbrake_encoder,
                     probe_encoder_preset=payload.get(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset

@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
+
+# the decision statistic of CURRENT plans (issue #15): probe scores are
+# aggregated with the mean across windows. Older plans (statistic='min',
+# the column default from the v12 migration) are invalid by fingerprint.
+DECISION_STATISTIC = "mean"
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -91,6 +96,7 @@ CREATE TABLE IF NOT EXISTS plans (
     input_size INTEGER NOT NULL,
     encoder TEXT NOT NULL,
     encoder_preset TEXT NOT NULL,
+    statistic TEXT NOT NULL DEFAULT 'min',
     target_vmaf REAL NOT NULL,
     crf_low INTEGER NOT NULL,
     crf_high INTEGER NOT NULL,
@@ -260,6 +266,15 @@ MIGRATIONS = {
         # on the probe preset only).
         "ALTER TABLE encodes ADD COLUMN probe_encoder_preset TEXT",
     ],
+    12: [
+        # the decision statistic (issue #15): achieved_vmaf switched from the
+        # worst per-sample VMAF to the MEAN across windows. Existing plans
+        # were decided under 'min'; a mean decision must not trust them, so
+        # the statistic is part of the fingerprint (old rows default to
+        # 'min' and are re-probed). The v9 plans-table rebuild may already
+        # have created the column at the current schema => guarded ALTER.
+        "__plans_statistic__",
+    ],
 }
 
 
@@ -309,6 +324,14 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 plans_table_migration(connection)
             elif statement == "__probe_cache_table__":
                 probe_cache_table_migration(connection)
+            elif statement == "__plans_statistic__":
+                columns = {
+                    r["name"] for r in connection.execute("PRAGMA table_info(plans)").fetchall()
+                }
+                if "statistic" not in columns:
+                    connection.execute(
+                        "ALTER TABLE plans ADD COLUMN statistic TEXT NOT NULL DEFAULT 'min'"
+                    )
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")
@@ -567,6 +590,8 @@ def save_plan(
         encoder (str): The encoder used (fingerprint).
         encoder_preset (str): The PROBE's speed preset (fingerprint; a plan
             is a probe result, issue #22).
+        statistic (str): The decision statistic the probes were aggregated
+            with ('mean'; 'min' for pre-#15 rows — fingerprint, issue #15).
         target_vmaf (float): The VMAF target (fingerprint).
         crf_low (int): The search range's low bound (fingerprint).
         crf_high (int): The search range's high bound (fingerprint).
@@ -583,9 +608,9 @@ def save_plan(
         INSERT INTO plans (
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
-            target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            remove_bars
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            statistic, target_vmaf, crf_low, crf_high, sample_count,
+            sample_seconds, remove_bars
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -599,6 +624,7 @@ def save_plan(
             input_size,
             encoder,
             encoder_preset,
+            DECISION_STATISTIC,
             target_vmaf,
             crf_low,
             crf_high,
@@ -655,6 +681,7 @@ def get_valid_plan(
     *,
     encoder: str,
     encoder_preset: str,
+    statistic: str = DECISION_STATISTIC,
     target_vmaf: float,
     crf_range: tuple[int, int],
     sample_count: int,
@@ -674,6 +701,9 @@ def get_valid_plan(
         encoder (str): The encoder of the pending encode.
         encoder_preset (str): The PROBE's speed preset of the pending
             encode (a plan is a probe result, issue #22).
+        statistic (str): The pending decision's aggregation statistic
+            (issue #15) - a plan decided under another statistic (e.g.
+            'min' rows from before the change) is not reused.
         target_vmaf (float): The VMAF target of the pending encode.
         crf_range (tuple[int, int]): The pending encode's search range.
         sample_count (int): The pending encode's sample count.
@@ -701,6 +731,7 @@ def get_valid_plan(
         or stat.st_size != row["input_size"]
         or row["encoder"] != encoder
         or row["encoder_preset"] != encoder_preset
+        or row["statistic"] != statistic
         or abs(row["target_vmaf"] - target_vmaf) > 0.01
         or row["crf_low"] != crf_range[0]
         or row["crf_high"] != crf_range[1]

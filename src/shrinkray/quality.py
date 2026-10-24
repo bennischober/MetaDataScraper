@@ -117,8 +117,36 @@ DEFAULT_CRF_RANGE = (14, 32)
 # HDR needs deeper quality headroom (4K + tone-map scale): CRF 10 was
 # measured at VMAF 96.5 on real HDR10 content
 DEFAULT_HDR_CRF_RANGE = (10, 32)
+# Probe sampling (#14): duration-based by default - one window per
+# SAMPLE_EVERY seconds of runtime (10 min), so coverage is a FIXED fraction of
+# the runtime (sample_seconds / sample_every = ~1.7%) instead of shrinking as
+# movies get longer. sample_count stays as an explicit override (None =
+# derive): a latency-sensitive caller (watch) can pin a fixed probe budget.
+DEFAULT_SAMPLE_EVERY = 600.0
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
+
+
+def derive_sample_count(duration: float, sample_every: float = DEFAULT_SAMPLE_EVERY) -> int:
+    """Derives the sample count from the runtime and the sampling interval.
+
+    The count is the ceiling of duration / sample_every, floored at 1: a
+    20-minute short gets 2 windows, a 2-hour film 12, a 4-hour film 24, and
+    anything shorter than one interval still gets probed once.
+
+    Args:
+        duration (float): The movie's duration in seconds.
+        sample_every (float): Seconds of runtime per probe window.
+
+    Returns:
+        int: The number of probe windows (at least 1).
+    """
+    if duration <= 0:
+        return 1
+    import math
+
+    return max(1, math.ceil(duration / sample_every))
+
 
 # libvmaf v3 thread cap: values above ~8 crash the filter with EINVAL on
 # some builds (frame queue limit), so stay on the safe side
@@ -309,8 +337,9 @@ class QualityResult:
         target_vmaf (float): The effective VMAF quality floor that was met:
             the requested one, or the HDR override when the movie is HDR.
         chosen_crf (int | None): The CRF selected by the bisect.
-        achieved_vmaf (float | None): The worst per-sample VMAF measured at
-            the chosen CRF (None if no probe was possible).
+        achieved_vmaf (float | None): The MEAN per-sample VMAF measured at
+            the chosen CRF (None if no probe was possible; a mean across
+            windows since #15 — not the worst window).
         probes (list[SampleProbe]): All CRF probes performed during the search.
         input_size (int): Size of the input file in bytes.
         output_size (int): Size of the output file in bytes.
@@ -348,7 +377,9 @@ class QualityResult:
     crop: tuple[int, int, int, int] | None = None
     remove_bars: bool = False
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
-    sample_count: int = DEFAULT_SAMPLE_COUNT
+    # the probing pipeline's resolved window count (None when the run
+    # skipped before any sampling decision — early gates carry no budget)
+    sample_count: int | None = None
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS
     # provenance of the CRF decision ('plan' when reused from a stored
     # plan, 'probe' when measured now, None when not applicable)
@@ -577,7 +608,13 @@ def sample_offsets(duration: float, count: int) -> list[float]:
     """Computes the sample start offsets evenly spread over the duration.
 
     The offsets avoid the first and last seconds (credits/lead-in) and are
-    spread between 10% and 90% of the duration.
+    spread between 10% and 90% of the duration. With the duration-based
+    default count (#14) this means approximately one window per `sample_every`
+    of PROBED content: the 80% band compresses the effective spacing slightly
+    below the nominal interval (a 2-hour film at sample_every=10m spaces its
+    12 windows ~8.7 min apart), and a single window sits at the 10% mark, not
+    the middle. Keeping the band is deliberate: it skips the title card and
+    the end credits.
 
     Args:
         duration (float): The duration in seconds.
@@ -1262,10 +1299,15 @@ def probe_crf(
     encoder_threads: int | None = None,
     use_probe_cache: bool = True,
 ) -> float:
-    """Encodes all samples at one CRF and returns their worst VMAF score.
+    """Encodes all samples at one CRF and returns their mean VMAF score.
 
-    The worst (minimum) per-sample mean governs the decision so that every
-    probed segment meets the target quality.
+    The mean of the per-sample means governs the decision (issue #15): a
+    mean over many windows is robust against one VMAF-misbehaving window
+    (fades, heavy grain) sinking an otherwise encodable movie — the old
+    minimum statistic was monotone non-increasing in the sample count and
+    structurally hostile to denser sampling (#14). The concession, stated
+    plainly: the mean can hide a genuinely bad scene behind several good
+    ones; a floor guard is a possible follow-up, not part of this change.
 
     Per-sample measurements are cached (probe_cache table, content-addressed
     via probe_cache_key): a sample whose identity, encode settings and
@@ -1296,7 +1338,7 @@ def probe_crf(
             (force_reprobe: the caller asked to measure everything fresh).
 
     Returns:
-        float: The lowest per-sample VMAF mean at this CRF.
+        float: The mean of the per-sample VMAF means at this CRF.
 
     Raises:
         RuntimeError: If a sample encode or VMAF measurement failed.
@@ -1354,7 +1396,8 @@ def probe_crf(
         _store_probe(connection, key, score)
         encoded.unlink()
         scores.append(score)
-    return min(scores)
+    # mean across windows (issue #15): robust against one misbehaving window
+    return sum(scores) / len(scores)
 
 
 def estimate_size_factor(
@@ -1672,7 +1715,8 @@ def plan_quality(
     input_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
+    sample_every: float = DEFAULT_SAMPLE_EVERY,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
@@ -1699,7 +1743,10 @@ def plan_quality(
         input_file (Path): The file to analyze.
         target_vmaf (float): The VMAF quality floor to meet.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
-        sample_count (int): The number of samples to probe.
+        sample_count (int | None): Explicit probe-window override; None
+            derives the count from the duration (issue #14).
+        sample_every (float): Seconds of runtime per probe window (the
+            derivation's interval; ignored when sample_count is set).
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'; for HDR the engine
             switches to the 10-bit variant and the result carries it.
@@ -1770,6 +1817,14 @@ def plan_quality(
             hdr=hdr,
             encoder=effective_encoder,
         )
+    # resolve the sampling budget NOW (issue #14): one window per sample_every
+    # of runtime, unless the caller pinned an explicit count. An unknown
+    # duration falls back to the legacy fixed budget (nothing better known).
+    sample_count = (
+        sample_count
+        if sample_count is not None
+        else (derive_sample_count(duration, sample_every) if duration else DEFAULT_SAMPLE_COUNT)
+    )
 
     height = source_height(input_file)
     if height is not None and height < min_source_height:
@@ -2206,7 +2261,10 @@ def _probe_movie(
             raise SkipEncode("re-encode would not shrink the file")
         if achieved < target_vmaf and crf == crf_range[0]:
             raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})"
+                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
             )
         return crf, achieved, probes, crop
     finally:
@@ -2214,7 +2272,27 @@ def _probe_movie(
 
 
 class SkipEncode(Exception):
-    """Raised when the probing decides a movie should not be encoded."""
+    """Raised when the probing decides a movie should not be encoded.
+
+    Attributes:
+        chosen_crf (int | None): The best CRF the probe reached (evidence
+            for the skip record; None when no probe informed the decision).
+        achieved_vmaf (float | None): The mean VMAF measured at that CRF.
+        probes (list): The sample probes performed (empty for size-gate
+            skips).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        chosen_crf: int | None = None,
+        achieved_vmaf: float | None = None,
+        probes: list | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.chosen_crf = chosen_crf
+        self.achieved_vmaf = achieved_vmaf
+        self.probes = probes if probes is not None else []
 
 
 class Cancelled(Exception):
@@ -2245,7 +2323,8 @@ def encode_with_quality(
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
+    sample_every: float = DEFAULT_SAMPLE_EVERY,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
@@ -2273,7 +2352,10 @@ def encode_with_quality(
         output_file (Path): The target file (must not exist).
         target_vmaf (float): The VMAF quality floor to meet.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
-        sample_count (int): The number of samples to probe.
+        sample_count (int | None): Explicit probe-window override; None
+            derives the count from the duration (issue #14).
+        sample_every (float): Seconds of runtime per probe window (the
+            derivation's interval; ignored when sample_count is set).
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
@@ -2343,6 +2425,14 @@ def encode_with_quality(
             hdr=hdr,
             encoder=effective_encoder,
         )
+    # resolve the sampling budget NOW (issue #14): the derived count must be
+    # fixed before the plan lookup so the fingerprint matches the recorded
+    # plan's sample_count. Unknown duration => legacy fixed budget.
+    sample_count = (
+        sample_count
+        if sample_count is not None
+        else (derive_sample_count(duration, sample_every) if duration else DEFAULT_SAMPLE_COUNT)
+    )
 
     # the resolution gate decides from cached metadata, before the size probe
     # and the CRF search spend minutes on a source whose pixels bound the saving
@@ -2550,11 +2640,17 @@ def encode_with_quality(
                 crop_detected=modern_bars is not None,
             )
         except SkipEncode as e:
+            # carry the probe evidence (issue #15): the skip row then tells
+            # a later run 'already probed and failed' instead of 'never
+            # probed' - the numbers are the probe's best, not a decision
             return QualityResult(
                 input=input_file,
                 output=output_file,
                 success=False,
                 target_vmaf=target_vmaf,
+                chosen_crf=e.chosen_crf,
+                achieved_vmaf=e.achieved_vmaf,
+                probes=e.probes,
                 error=f"skipped: {e}",
                 skipped_reason=(
                     "target unreachable" if "unreachable" in str(e) else "no size gain"

@@ -109,6 +109,18 @@ is tracked as a GitHub issue and none of it is implemented yet.
   the project venv; pattern taken from the orthos TUI example).
 
 ## Decisions (2026-10-22)
+- [x] **Mean over probe windows, paired with duration-based sampling**
+      (2026-10-24, issues #15 + #14, one change): `achieved_vmaf` is the mean
+      of the per-window scores, and the window count derives from the runtime
+      (one 10 s window per 10 min, `--sample-count` as the fixed-budget
+      override). The mean is robust against one VMAF-misbehaving window
+      sinking an otherwise encodable movie; the concession is that a
+      genuinely bad scene can hide behind several good ones — the ~4x denser
+      coverage keeps that risk low. A floor guard (fail when any window
+      falls below `target - tolerance`) is a possible follow-up: measure on
+      real content first, do not add it speculatively. Plans decided under
+      the old min statistic are not reused (the `plans.statistic` fingerprint
+      column, schema v12).
 - [x] **Releases are changelog-written.** Every tag gets real release
       notes assembled from the cycle's history (CHANGELOG.md is the
       durable record; the GitHub release carries the same text). No

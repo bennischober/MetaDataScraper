@@ -133,17 +133,19 @@ class TestSubprocessTimeouts(unittest.TestCase):
     by AST, not re-audited: a new subprocess.run without timeout= fails the
     suite. The allowlist is the two watchdog-off fallback branches, whose
     operators explicitly opted out of stall protection (the code comments
-    at those sites record the decision)."""
+    at those sites record the decision). The allowlist matches the CALL
+    SHAPE, not line numbers, so reformatting cannot silently re-arm it:
+    the fallbacks are exactly the runs of one positional command argument
+    with capture_output and a **kwargs splat and no timeout."""
 
-    ALLOWLIST: ClassVar[dict[str, tuple[int, ...]]] = {
-        # (module filename, line numbers) of intentional no-timeout runs —
-        # the blocking fallbacks used only when the stall watchdog is OFF
-        # and no progress/cancel is requested; a fixed timeout would kill
-        # hours-long healthy encodes:
+    ALLOWLIST: ClassVar[dict[str, tuple[str, ...]]] = {
+        # module filename => allowed call sites, identified by the branch's
+        # code comment (grep-able, so an allowlisted call without its comment
+        # fails this test):
         #   encode.py: the _encode_with_command non-streamed branch
         #   quality.py: the _run simple branch
-        "encode.py": (378,),
-        "quality.py": (400,),
+        "encode.py": ("Fallback decision (issue #62): when the operator disables the",),
+        "quality.py": ("Fallback decision (issue #62): no timeout here on purpose",),
     }
 
     def _run_calls(self, tree: ast.AST) -> list[ast.Call]:
@@ -159,16 +161,29 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 calls.append(node)
         return calls
 
+    def _fallback_shape(self, call: ast.Call) -> bool:
+        """True for the watchdog-off fallback runs: one positional command
+        argument, capture_output=True, a **kwargs splat, no timeout."""
+        has_capture = any(kw.arg == "capture_output" for kw in call.keywords)
+        has_splat = any(kw.arg is None for kw in call.keywords)
+        has_timeout = any(kw.arg == "timeout" for kw in call.keywords)
+        return len(call.args) == 1 and has_capture and has_splat and not has_timeout
+
     def test_every_subprocess_run_has_timeout(self):
         src_root = Path(__file__).resolve().parents[1] / "src" / "shrinkray"
         offenders: list[str] = []
         for py in sorted(src_root.glob("*.py")):
             tree = ast.parse(py.read_text(encoding="utf-8"))
-            allowed_lines = self.ALLOWLIST.get(py.name, ())
+            lines = py.read_text(encoding="utf-8").splitlines()
+            allowed_comments = self.ALLOWLIST.get(py.name, ())
             for call in self._run_calls(tree):
                 if any(kw.arg == "timeout" for kw in call.keywords):
                     continue
-                if call.lineno in allowed_lines:
+                # allowed only when the branch's decision comment is present
+                # in the file - the comment IS the justification
+                if self._fallback_shape(call) and all(
+                    any(comment in line for line in lines) for comment in allowed_comments
+                ):
                     continue
                 offenders.append(f"{py.name}:{call.lineno}")
         self.assertEqual(offenders, [], "subprocess.run without timeout= in:")

@@ -360,6 +360,31 @@ def encode(
         max=100.0,
         help="VMAF quality floor for --quality mode.",
     ),
+    sample_every: float = typer.Option(
+        10.0,
+        "--sample-every",
+        min=0.1,
+        help=(
+            "Quality mode: probe one window per N minutes of runtime "
+            "(coverage is a fixed fraction of the movie, issue #14). "
+            "--sample-count overrides this."
+        ),
+    ),
+    sample_seconds: float = typer.Option(
+        10.0,
+        "--sample-seconds",
+        min=1.0,
+        help="Quality mode: length of each probe window in seconds.",
+    ),
+    sample_count: int = typer.Option(
+        0,
+        "--sample-count",
+        min=0,
+        help=(
+            "Quality mode: fixed number of probe windows (0 = derive from "
+            "--sample-every; a fixed budget for latency-sensitive runs)."
+        ),
+    ),
     remove_bars: bool = typer.Option(
         False,
         "--remove-bars",
@@ -444,6 +469,9 @@ def encode(
             overwrite,
             quality,
             target_vmaf,
+            sample_every,
+            sample_seconds,
+            sample_count,
             remove_bars,
             verify,
             workers,
@@ -498,6 +526,9 @@ def _record_encodes(
     overwrite: bool,
     quality: bool,
     target_vmaf: float,
+    sample_every: float,
+    sample_seconds: float,
+    sample_count: int,
     remove_bars: bool,
     verify: bool,
     workers: int,
@@ -518,6 +549,11 @@ def _record_encodes(
         overwrite (bool): Whether existing output files may be replaced.
         quality (bool): Use VMAF-driven quality mode.
         target_vmaf (float): VMAF quality floor for quality mode.
+        sample_every (float): Minutes of runtime per probe window
+            (converted to seconds for the engine).
+        sample_seconds (float): Length of each probe window in seconds.
+        sample_count (int): Fixed probe-window count (0 = derive from
+            sample_every).
         remove_bars (bool): Crop stable baked-in black bars (quality mode).
         verify (bool): Full-file VMAF verification after each encode.
         workers (int): Number of concurrent encodes (fixed mode).
@@ -575,6 +611,9 @@ def _record_encodes(
                             movie,
                             output_dir / movie.name,
                             target_vmaf=target_vmaf,
+                            sample_count=sample_count or None,
+                            sample_every=sample_every * 60.0,
+                            sample_seconds=sample_seconds,
                             encoder=config.handbrake_encoder,
                             remove_bars=remove_bars,
                             db_file=db_file,
@@ -662,6 +701,24 @@ def plan(
         max=100.0,
         help="VMAF quality floor for the quality plan.",
     ),
+    sample_every: float = typer.Option(
+        10.0,
+        "--sample-every",
+        min=0.1,
+        help="Probe one window per N minutes of runtime (--sample-count overrides).",
+    ),
+    sample_seconds: float = typer.Option(
+        10.0,
+        "--sample-seconds",
+        min=1.0,
+        help="Length of each probe window in seconds.",
+    ),
+    sample_count: int = typer.Option(
+        0,
+        "--sample-count",
+        min=0,
+        help="Fixed number of probe windows (0 = derive from --sample-every).",
+    ),
     remove_bars: bool = typer.Option(
         False, "--remove-bars", help="Include black-bar removal in the plan."
     ),
@@ -726,6 +783,9 @@ def plan(
                 result = plan_quality(
                     movie,
                     target_vmaf=target_vmaf,
+                    sample_count=sample_count or None,
+                    sample_every=sample_every * 60.0,
+                    sample_seconds=sample_seconds,
                     encoder=config.handbrake_encoder,
                     remove_bars=remove_bars,
                     db_file=db_file,
@@ -924,6 +984,24 @@ def watch_mode(
         max=100.0,
         help="VMAF quality floor.",
     ),
+    sample_every: float = typer.Option(
+        10.0,
+        "--sample-every",
+        min=0.1,
+        help="Probe one window per N minutes of runtime (--sample-count overrides).",
+    ),
+    sample_seconds: float = typer.Option(
+        10.0,
+        "--sample-seconds",
+        min=1.0,
+        help="Length of each probe window in seconds.",
+    ),
+    sample_count: int = typer.Option(
+        0,
+        "--sample-count",
+        min=0,
+        help="Fixed number of probe windows (0 = derive from --sample-every).",
+    ),
     remove_bars: bool = typer.Option(
         False, "--remove-bars", help="Detect and crop stable black bars."
     ),
@@ -943,6 +1021,9 @@ def watch_mode(
             inbox,
             output_dir,
             target_vmaf=target_vmaf,
+            sample_count=sample_count or None,
+            sample_every=sample_every * 60.0,
+            sample_seconds=sample_seconds,
             remove_bars=remove_bars,
             encoder=config.handbrake_encoder,
             probe_encoder_preset=config.handbrake_probe_encoder_preset,

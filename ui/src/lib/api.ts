@@ -305,6 +305,11 @@ export const api = {
     output_dir?: string
     quality?: boolean
     target_vmaf?: number
+    sample_count?: number | null
+    sample_every?: number | null
+    sample_seconds?: number | null
+    probe_encoder_preset?: string | null
+    encoder_preset?: string | null
     remove_bars?: boolean
     overwrite?: boolean
     workers?: number | null

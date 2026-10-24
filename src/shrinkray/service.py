@@ -131,6 +131,10 @@ def record_plan(
     # stored plan is a probe result, its CRF depends on the probe preset
     # only - the plans.encoder_preset column holds the probe preset
     probe_preset = result.probe_encoder_preset or result.encoder_preset or "medium"
+    # results that skipped before sampling carry no budget; the plan row's
+    # NOT NULL column stores the legacy fixed budget (a later probe of the
+    # same early-skip case re-derives and re-skips anyway)
+    stored_count = result.sample_count if result.sample_count is not None else 3
     return db.save_plan(
         connection,
         row["id"],
@@ -149,7 +153,7 @@ def record_plan(
         result.target_vmaf,
         result.crf_range[0],
         result.crf_range[1],
-        result.sample_count,
+        stored_count,
         result.sample_seconds,
         result.remove_bars,
     )
@@ -273,16 +277,26 @@ def save_verification(
     )
 
 
-def save_skip(connection: sqlite3.Connection, movie: Path, reason: str) -> None:
+def save_skip(
+    connection: sqlite3.Connection,
+    movie: Path,
+    reason: str,
+    chosen_crf: int | None = None,
+    achieved_vmaf: float | None = None,
+) -> None:
     """Stores a skip record for the given movie in the database.
 
     Args:
         connection: The database connection.
         movie (Path): The input movie file.
         reason (str): Why the movie was skipped.
+        chosen_crf (int | None): The best CRF the probe reached (evidence;
+            a later run can tell 'already probed and failed' from 'never
+            probed', issue #15).
+        achieved_vmaf (float | None): The mean VMAF measured at that CRF.
     """
     file_id = ensure_file_row(connection, movie)
-    db.add_skip(connection, file_id, reason)
+    db.add_skip(connection, file_id, reason, chosen_crf=chosen_crf, achieved_vmaf=achieved_vmaf)
 
 
 def finished_movies(
@@ -379,7 +393,16 @@ def record_quality_results(
         save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True)
     if result.skipped_reason is not None:
-        save_skip(connection, movie, result.skipped_reason)
+        # keep the probe evidence on the skip row (issue #15): the chosen
+        # CRF and its mean VMAF tell a later run 'already probed and
+        # failed at this quality' instead of 'never probed'
+        save_skip(
+            connection,
+            movie,
+            result.skipped_reason,
+            chosen_crf=result.chosen_crf,
+            achieved_vmaf=result.achieved_vmaf,
+        )
         return EncodeOutcome(movie=str(movie), skipped=True, error=result.error)
     return EncodeOutcome(movie=str(movie), error=result.error)
 
