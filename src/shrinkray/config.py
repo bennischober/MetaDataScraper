@@ -61,6 +61,11 @@ DEFAULT_MIN_SOURCE_HEIGHT = 1080
 # the bars are the ones common to every sample, which is the safe direction
 # for an irreversible crop (issue #17)
 DEFAULT_CROP_SAMPLE_COUNT = 10
+# probe density as a duration: one window per N seconds of runtime, so
+# coverage is a fixed fraction of the file instead of shrinking with length
+DEFAULT_SAMPLE_EVERY = 600.0
+DEFAULT_SAMPLE_COUNT = 3
+DEFAULT_SAMPLE_SECONDS = 10.0
 # eligibility: sources below this size are never re-encoded (0 = gate off).
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
@@ -152,6 +157,21 @@ class Conf:
             raise ValueError(
                 f"ffmpeg.crop_sample_count: {self.crop_sample_count} must be at least 1"
             )
+
+        # quality => probe density
+        quality: dict[str, Any] = data.get("quality") or {}
+        self.sample_every: float = float(quality.get("sample_every", DEFAULT_SAMPLE_EVERY))
+        self.sample_count: int = int(quality.get("sample_count", DEFAULT_SAMPLE_COUNT))
+        self.sample_seconds: float = float(quality.get("sample_seconds", DEFAULT_SAMPLE_SECONDS))
+        if self.sample_every < 0:
+            raise ValueError(
+                f"quality.sample_every: {self.sample_every} is negative "
+                "(0 disables the density knob)"
+            )
+        if self.sample_count < 1:
+            raise ValueError(f"quality.sample_count: {self.sample_count} must be at least 1")
+        if self.sample_seconds <= 0:
+            raise ValueError(f"quality.sample_seconds: {self.sample_seconds} must be positive")
 
         # resources => how politely the engine behaves on a shared machine
         resources: dict[str, Any] = data.get("resources") or {}

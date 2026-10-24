@@ -394,6 +394,11 @@ def _conf_to_dict(conf: Conf) -> dict:
             },
             "crop_sample_count": conf.crop_sample_count,
         },
+        "quality": {
+            "sample_every": conf.sample_every,
+            "sample_count": conf.sample_count,
+            "sample_seconds": conf.sample_seconds,
+        },
         "handbrake": {
             "preset": conf.handbrake_preset,
             "encoder": conf.handbrake_encoder,
