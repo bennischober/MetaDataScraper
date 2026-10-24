@@ -382,50 +382,71 @@ def _config_path(s: AppState) -> Path:
 def _conf_to_dict(conf: Conf) -> dict:
     """Converts a Conf object into the config.json dict shape.
 
+    Built FROM THE SCHEMA MODEL (issue #61): every field the model has is
+    returned - including settings the hand-written dict had already drifted
+    past (handbrake.stall_minutes, the two encoder speed presets) - and the
+    canonical key names ('separator', not the deprecated 'seperator').
+
     Args:
         conf (Conf): The configuration object.
 
     Returns:
         dict: The config.json-shaped dict.
     """
-    return {
-        "codec": {
-            "hdr": {
-                "color_space": conf.hdr_color_spaces,
-                "color_transfer": conf.hdr_color_transfers,
-            }
-        },
-        "file": {
-            "extensions": conf.extensions,
-            "output": {"seperator": conf.separator},
-        },
-        "ffmpeg": {
-            "black_bars": {
-                "MIN_WIDTH": conf.black_bar_min_width,
-                "MIN_HEIGHT": conf.black_bar_min_height,
-            },
-            "crop_sample_count": conf.crop_sample_count,
-        },
-        "quality": {
-            "sample_every": conf.sample_every,
-            "sample_count": conf.sample_count,
-            "sample_seconds": conf.sample_seconds,
-        },
-        "handbrake": {
-            "preset": conf.handbrake_preset,
-            "encoder": conf.handbrake_encoder,
-            "max_threads": conf.handbrake_max_threads,
-        },
-        "resources": {
-            "idle_priority": conf.idle_priority,
-        },
-        "eligibility": {
-            "min_source_height": conf.min_source_height,
-            "min_source_size_gb": conf.min_source_size_gb,
-            "candidate_codecs": conf.candidate_codecs,
-        },
-        "language": conf.language,
-    }
+    from shrinkray.config import (
+        BlackBarsSection,
+        CodecSection,
+        ConfigModel,
+        EligibilitySection,
+        FfmpegSection,
+        FileSection,
+        HandbrakeSection,
+        HdrSection,
+        OutputSection,
+        QualitySection,
+        ResourcesSection,
+    )
+
+    model = ConfigModel(
+        file=FileSection(
+            extensions=conf.extensions,
+            output=OutputSection(separator=conf.separator),
+        ),
+        ffmpeg=FfmpegSection(
+            black_bars=BlackBarsSection(
+                MIN_WIDTH=conf.black_bar_min_width,
+                MIN_HEIGHT=conf.black_bar_min_height,
+            ),
+            crop_sample_count=conf.crop_sample_count,
+        ),
+        handbrake=HandbrakeSection(
+            preset=conf.handbrake_preset,
+            encoder=conf.handbrake_encoder,
+            probe_encoder_preset=conf.handbrake_probe_encoder_preset,
+            encoder_preset=conf.handbrake_encoder_preset,
+            max_threads=conf.handbrake_max_threads,
+            stall_minutes=conf.handbrake_stall_minutes,
+        ),
+        quality=QualitySection(
+            sample_every=conf.sample_every,
+            sample_count=conf.sample_count,
+            sample_seconds=conf.sample_seconds,
+        ),
+        resources=ResourcesSection(idle_priority=conf.idle_priority),
+        codec=CodecSection(
+            hdr=HdrSection(
+                color_space=conf.hdr_color_spaces,
+                color_transfer=conf.hdr_color_transfers,
+            )
+        ),
+        eligibility=EligibilitySection(
+            min_source_height=conf.min_source_height,
+            min_source_size_gb=conf.min_source_size_gb,
+            candidate_codecs=conf.candidate_codecs,
+        ),
+        language=conf.language,
+    )
+    return model.model_dump()
 
 
 @app.get("/api/config")

@@ -315,13 +315,21 @@ The resolved path is logged at startup (`Using config ...`). There is no
 package-relative lookup: in an installed wheel that directory is not a
 user-writable location.
 
+**Every value is validated** against a schema (issue #61): an unknown key, a
+string where a boolean belongs, an out-of-range number — each is an **error
+that names the key** at load time, never a silently-applied default (a typo'd
+section used to load with all defaults and tell you nothing). An empty
+`file.extensions` list is rejected too: it would silently scan nothing. The
+old `file.output.seperator` spelling still loads with one deprecation warning;
+write `separator`.
+
 Example [config.json](config.json):
 
 ```jsonc
 {
     "file": {
         "extensions": [".mkv"],
-        "output": { "seperator": ";" }
+        "output": { "separator": ";" }
     },
     "ffmpeg": {
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }

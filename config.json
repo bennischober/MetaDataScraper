@@ -29,7 +29,7 @@
       ".wmv"
     ],
     "output": {
-      "seperator": ";"
+      "separator": ";"
     }
   },
   "ffmpeg": {
