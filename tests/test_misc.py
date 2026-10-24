@@ -186,9 +186,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         # and no progress/cancel is requested; a fixed timeout would kill
         # hours-long healthy encodes:
         #   encode.py: the _encode_with_command non-streamed branch
-        #   quality.py: the _run simple branch
-        "encode.py": (300,),
-        "quality.py": (440,),
+        "encode.py": (259,),
     }
 
     def _run_calls(self, tree: ast.AST) -> list[ast.Call]:

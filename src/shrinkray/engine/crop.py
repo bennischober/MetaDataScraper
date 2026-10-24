@@ -123,7 +123,7 @@ def detect_crop_rect(
         tuple | None: The (top, bottom, left, right) bars to crop, or None
             if no stable bars were detected.
     """
-    from shrinkray.encode import probe_duration_seconds  # transitional (phase 3)
+    from shrinkray.tools.ffprobe import probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     if duration is None:
