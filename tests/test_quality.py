@@ -1340,12 +1340,12 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
         with (
             patch(
-                "shrinkray.quality.subprocess.run",
+                "shrinkray.engine.samples.subprocess.run",
                 return_value=type(
                     "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
                 )(),
             ),
-            patch("shrinkray.quality._run", side_effect=fake_run),
+            patch("shrinkray.engine.samples._run", side_effect=fake_run),
             tempfile.TemporaryDirectory() as tmp,
         ):
             quality.extract_samples(Path("movie.mkv"), Path(tmp), 2, 10.0)
@@ -1373,13 +1373,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
         with (
             patch(
-                "shrinkray.quality.subprocess.run",
+                "shrinkray.engine.samples.subprocess.run",
                 return_value=type(
                     "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
                 )(),
             ),
-            patch("shrinkray.quality._run", side_effect=fake_run),
-            patch("shrinkray.quality.log_warning") as warned,
+            patch("shrinkray.engine.samples._run", side_effect=fake_run),
+            patch("shrinkray.engine.samples.log_warning") as warned,
             tempfile.TemporaryDirectory() as tmp,
         ):
             samples = quality.extract_samples(Path("movie.mkv"), Path(tmp), 1, 10.0)
@@ -1396,7 +1396,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             with (
                 patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
-                    "shrinkray.quality.subprocess.run",
+                    "shrinkray.engine.samples.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
                 ),
                 self.assertRaises(RuntimeError) as ctx,
