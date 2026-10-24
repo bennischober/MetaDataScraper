@@ -153,6 +153,7 @@ def record_plan(
         result.sample_seconds,
         result.remove_bars,
         result.crop_sample_count,
+        result.vmaf_statistic,
     )
 
 
@@ -274,16 +275,28 @@ def save_verification(
     )
 
 
-def save_skip(connection: sqlite3.Connection, movie: Path, reason: str) -> None:
+def save_skip(
+    connection: sqlite3.Connection,
+    movie: Path,
+    reason: str,
+    chosen_crf: int | None = None,
+    achieved_vmaf: float | None = None,
+) -> None:
     """Stores a skip record for the given movie in the database.
+
+    The skip keeps its evidence (the best CRF and the VMAF measured there),
+    so a later run can recognize 'already probed at the floor and failed'
+    instead of re-deriving the same verdict.
 
     Args:
         connection: The database connection.
         movie (Path): The input movie file.
         reason (str): Why the movie was skipped.
+        chosen_crf (int | None): The best CRF the search reached.
+        achieved_vmaf (float | None): The VMAF measured there.
     """
     file_id = ensure_file_row(connection, movie)
-    db.add_skip(connection, file_id, reason)
+    db.add_skip(connection, file_id, reason, chosen_crf, achieved_vmaf)
 
 
 def finished_movies(
@@ -380,7 +393,13 @@ def record_quality_results(
         save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True)
     if result.skipped_reason is not None:
-        save_skip(connection, movie, result.skipped_reason)
+        save_skip(
+            connection,
+            movie,
+            result.skipped_reason,
+            result.chosen_crf,
+            result.achieved_vmaf,
+        )
         return EncodeOutcome(movie=str(movie), skipped=True, error=result.error)
     return EncodeOutcome(movie=str(movie), error=result.error)
 

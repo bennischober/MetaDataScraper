@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS plans (
     sample_seconds REAL NOT NULL,
     remove_bars INTEGER NOT NULL,
     crop_sample_count INTEGER NOT NULL DEFAULT 3,
+    vmaf_statistic TEXT NOT NULL DEFAULT 'min',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -267,6 +268,13 @@ MIGRATIONS = {
         # ones common to every sample (issue #17), so a plan made with three
         # samples must not be reused by a run that samples ten
         "ALTER TABLE plans ADD COLUMN crop_sample_count INTEGER NOT NULL DEFAULT 3",
+    ],
+    13: [
+        # the decision statistic is part of the fingerprint (issue #15):
+        # a plan recorded under the min aggregation was a different
+        # decision, so it must not be reused as if it were a mean one.
+        # Existing rows default to 'min', which is what they measured.
+        "ALTER TABLE plans ADD COLUMN vmaf_statistic TEXT NOT NULL DEFAULT 'min'",
     ],
 }
 
@@ -564,6 +572,7 @@ def save_plan(
     sample_seconds: float,
     remove_bars: bool,
     crop_sample_count: int = 3,
+    vmaf_statistic: str = "mean",
 ) -> int:
     """Stores (upserts) the plan decision for one file — one row per file.
 
@@ -604,8 +613,8 @@ def save_plan(
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
             target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            remove_bars, crop_sample_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            remove_bars, crop_sample_count, vmaf_statistic
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -626,6 +635,7 @@ def save_plan(
             sample_seconds,
             int(remove_bars),
             crop_sample_count,
+            vmaf_statistic,
         ),
     )
     connection.commit()
@@ -682,6 +692,7 @@ def get_valid_plan(
     sample_seconds: float,
     remove_bars: bool,
     crop_sample_count: int = 3,
+    vmaf_statistic: str = "mean",
 ) -> sqlite3.Row | None:
     """Returns the file's stored plan when the fingerprint matches.
 
@@ -731,6 +742,7 @@ def get_valid_plan(
         or abs(row["sample_seconds"] - sample_seconds) > 0.01
         or bool(row["remove_bars"]) != remove_bars
         or int(row["crop_sample_count"]) != crop_sample_count
+        or str(row["vmaf_statistic"]) != vmaf_statistic
     ):
         return None
     return cast("sqlite3.Row", row)
