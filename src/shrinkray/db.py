@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -253,13 +253,6 @@ MIGRATIONS = {
         "__probe_cache_table__",
     ],
     11: [
-<<<<<<< HEAD
-        # the crop sample count is part of the decision: the crop is
-        # monotone non-increasing in the sample count once the bars are the
-        # ones common to every sample (issue #17), so a plan made with three
-        # samples must not be reused by a run that samples ten
-        "ALTER TABLE plans ADD COLUMN crop_sample_count INTEGER NOT NULL DEFAULT 3",
-=======
         # two encoder presets (issue #22): the probe preset (a measurement
         # setting) and the final preset (an output setting) are recorded
         # separately, so a drift investigation can tell which number
@@ -267,7 +260,13 @@ MIGRATIONS = {
         # the PROBE preset (a plan is a probe result; its fingerprint keys
         # on the probe preset only).
         "ALTER TABLE encodes ADD COLUMN probe_encoder_preset TEXT",
->>>>>>> origin/main
+    ],
+    12: [
+        # the crop sample count is part of the decision: the crop is
+        # monotone non-increasing in the sample count once the bars are the
+        # ones common to every sample (issue #17), so a plan made with three
+        # samples must not be reused by a run that samples ten
+        "ALTER TABLE plans ADD COLUMN crop_sample_count INTEGER NOT NULL DEFAULT 3",
     ],
 }
 
