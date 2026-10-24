@@ -1946,6 +1946,42 @@ def encode_with_quality(
             probes=probes,
             error=encode_result.error,
         )
+
+    # the size gate that matters: the probe estimate is a prediction from a few
+    # samples, this is the ground truth. The product rule is that a re-encode
+    # happens only when the file gets smaller, so a grown output is a failure to
+    # report - not a success with a negative saved_percent. Reported before the
+    # verification pass: measuring a file that is about to be discarded would
+    # spend minutes on a number nobody keeps.
+    final_input_size = input_file.stat().st_size
+    final_output_size = output_file.stat().st_size
+    if final_output_size >= final_input_size:
+        output_file.unlink(missing_ok=True)
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            error=(
+                f"skipped: the encode did not shrink the file "
+                f"({final_input_size} -> {final_output_size} bytes)"
+            ),
+            skipped_reason="output not smaller",
+            encoder_preset=encoder_preset,
+            probe_encoder_preset=probe_encoder_preset,
+            remove_bars=remove_bars,
+            crop=crop,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            crf_source=crf_source,
+            plan_created_at=plan_created_at,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     # success path: skip the verification below (already done)
     verified_vmaf: float | None = None
     verified_subsample: int | None = None

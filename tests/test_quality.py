@@ -541,6 +541,96 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(result.chosen_crf, 18)
         self.assertEqual(result.encoder, "svt_av1_10bit")
 
+    def _encode_growing(self, movie: Path, factor: float = 1.5):
+        """Runs _encode with a fake final encode that writes a LARGER file.
+
+        The engine's size gate is the thing under test, so the fake must
+        produce a grown artifact exactly as a real encode can (the probe
+        estimate is a prediction; the full encode is the ground truth).
+        """
+        from shrinkray.encode import EncodeResult
+
+        output = Path(self.tmp.name) / "out.mkv"
+
+        def fake_encode_command(input_file, output_file, command, **kwargs):
+            output_file.write_bytes(b"y" * int(input_file.stat().st_size * factor))
+            return EncodeResult(
+                input=input_file,
+                output=output_file,
+                success=True,
+                input_size=input_file.stat().st_size,
+                output_size=output_file.stat().st_size,
+            )
+
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(
+                quality,
+                "_source_snapshot",
+                return_value={
+                    "width": None,
+                    "height": None,
+                    "codec": None,
+                    "duration": None,
+                    "bitrate": None,
+                },
+            ),
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(quality, "_encode_with_command", side_effect=fake_encode_command),
+        ):
+            result = quality.encode_with_quality(movie, output, db_file=self.db_file)
+        return result, output
+
+    def test_a_grown_encode_is_a_failure_not_a_success(self):
+        """Issue #130: the product rule is that a re-encode happens only when
+        the file gets smaller. A grown output must be reported as a skip, not as
+        a success with a negative saved_percent."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, _output = self._encode_growing(movie, factor=1.5)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "output not smaller")
+        self.assertIsNone(result.verified_vmaf)
+
+    def test_a_grown_encode_names_both_sizes(self):
+        """The reason must carry the numbers, so the operator can see how far
+        off the estimate was without re-running anything."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, _ = self._encode_growing(movie, factor=2.0)
+        self.assertIn("did not shrink", result.error)
+        self.assertIn("bytes", result.error)
+
+    def test_a_grown_output_is_discarded(self):
+        """The grown artifact must be removed, or it sits next to the source as
+        a second copy of the film - the duplication the product excludes."""
+        movie = self._movie()
+        self._store_plan(movie)
+        _result, output = self._encode_growing(movie, factor=1.5)
+        self.assertFalse(output.exists(), "a grown output must be deleted")
+        self.assertTrue(movie.exists(), "the source must be untouched")
+
+    def test_an_identical_size_is_also_a_failure(self):
+        """Equal size is not a shrink: the operator gains nothing and pays a
+        generation loss, so it counts as grown."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, output = self._encode_growing(movie, factor=1.0)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "output not smaller")
+        self.assertFalse(output.exists())
+
+    def test_a_smaller_encode_still_succeeds(self):
+        """The regression guard: the new gate must not reject the normal case."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, output = self._encode_growing(movie, factor=0.5)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+        self.assertGreater(result.saved_percent, 0)
+        self.assertTrue(output.exists())
+
 
 class TestProbeCache(unittest.TestCase):
     def test_probe_command_carries_probe_preset(self):
