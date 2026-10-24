@@ -636,6 +636,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         quality._vmaf_style = None
         try:
             with (
+                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.quality.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
@@ -664,6 +665,132 @@ class TestSubprocessTimeouts(unittest.TestCase):
             self.assertIn("-show_format", mocked.call_args.args[0])
         finally:
             movie.parent.rmdir()
+
+    def test_detect_crop_rect_defaults_to_ten_samples(self):
+        """The crop detector samples ten windows by default.
+
+        With the bars common to every sample the crop is monotone
+        non-increasing in the sample count, so more samples only ever shrink
+        it. That is the safe direction for an irreversible crop, and it makes
+        an aspect-ratio switch much less likely to be missed (issue #17).
+        """
+        commands: list[list[str]] = []
+
+        def fake_run(command, cancel=None):
+            commands.append(command)
+            return 0, "crop=1920:800:0:140"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch(
+                    "shrinkray.quality.subprocess.run",
+                    return_value=type(
+                        "P",
+                        (),
+                        {
+                            "returncode": 0,
+                            "stdout": b'{"streams": [{"codec_type": "video", "width": 1920, "height": 1080}]}',
+                        },
+                    )(),
+                ),
+                patch("shrinkray.quality._run", side_effect=fake_run),
+            ):
+                quality.detect_crop_rect(movie, Path(tmp))
+        self.assertEqual(len(commands), 10)
+
+    def test_crop_samples_are_configurable(self):
+        """The crop sample count reaches the detector from the caller.
+
+        A plan made with three crop samples must not be reused by a run that
+        samples ten, so the count cannot be a hidden default.
+        """
+        commands: list[list[str]] = []
+
+        def fake_run(command, cancel=None):
+            commands.append(command)
+            return 0, "crop=1920:800:0:140"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch(
+                    "shrinkray.quality.subprocess.run",
+                    return_value=type(
+                        "P",
+                        (),
+                        {
+                            "returncode": 0,
+                            "stdout": b'{"streams": [{"codec_type": "video", "width": 1920, "height": 1080}]}',
+                        },
+                    )(),
+                ),
+                patch("shrinkray.quality._run", side_effect=fake_run),
+            ):
+                quality.detect_crop_rect(movie, Path(tmp), count=4)
+        self.assertEqual(len(commands), 4)
+
+    def test_plan_fingerprint_records_crop_sample_count(self):
+        """A plan made with a different crop sample count is not reused.
+
+        The crop depends on the sample count, so the count belongs to the
+        decision fingerprint (issue #17).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "test.db"
+            connection = db.connect(db_file)
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            stat = movie.stat()
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=stat.st_mtime,
+                    size=stat.st_size,
+                    name="movie",
+                    category="Cat",
+                ),
+            )
+            db.save_plan(
+                connection,
+                file_id,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=None,
+                input_mtime=stat.st_mtime,
+                input_size=stat.st_size,
+                encoder="x265",
+                encoder_preset="medium",
+                target_vmaf=95.0,
+                crf_low=14,
+                crf_high=32,
+                sample_count=3,
+                sample_seconds=10.0,
+                remove_bars=True,
+                crop_sample_count=3,
+            )
+            common = {
+                "encoder": "x265",
+                "encoder_preset": "medium",
+                "target_vmaf": 95.0,
+                "crf_range": (14, 32),
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+                "remove_bars": True,
+            }
+            self.assertIsNotNone(
+                db.get_valid_plan(connection, movie, **common, crop_sample_count=3)
+            )
+            self.assertIsNone(db.get_valid_plan(connection, movie, **common, crop_sample_count=10))
+            connection.close()
 
     def test_codec_gate_rejects_older_codec(self):
         """An older codec is never re-encoded, before any probe runs.
@@ -960,6 +1087,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
+                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.quality.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),

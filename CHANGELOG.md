@@ -7,6 +7,16 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **Ten cropdetect windows per movie, configurable**: `ffmpeg.crop_sample_count`
+  (default 10) and `--crop-samples N` raise the crop detector's coverage
+  from three samples to ten (issue #17). With the bars common to every
+  sample, the crop is monotone non-increasing in the sample count, so more
+  samples only ever shrink it - the safe direction for an irreversible crop -
+  and an aspect-ratio switch is far less likely to be missed. The count is
+  part of the plan fingerprint (schema v11), so a plan made with three crop
+  samples is not reused by a run that samples ten. Cost is 10 x 2s of
+  cropdetect per movie when `--remove-bars` is set.
+
 - **The source-codec gate (PRODUCT.md's candidate rule)**: an H.264 source
   is a candidate on size alone, while an HEVC or AV1 source is already
   efficient and becomes a candidate only when it has black bars to remove

@@ -36,6 +36,10 @@ DEFAULT_STALL_MINUTES = 10.0
 # PRODUCT.md makes 1080p the floor: a lower-resolution source has too few
 # pixels to save meaningfully, so the probe cost is spent for nothing
 DEFAULT_MIN_SOURCE_HEIGHT = 1080
+# cropdetect windows per movie: more samples can only shrink the crop once
+# the bars are the ones common to every sample, which is the safe direction
+# for an irreversible crop (issue #17)
+DEFAULT_CROP_SAMPLE_COUNT = 10
 # eligibility: sources below this size are never re-encoded (0 = gate off).
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
@@ -104,6 +108,15 @@ class Conf:
         self.handbrake_stall_minutes: float = float(
             handbrake.get("stall_minutes", DEFAULT_STALL_MINUTES)
         )
+
+        # ffmpeg => crop detection
+        self.crop_sample_count: int = int(
+            ffmpeg.get("crop_sample_count", DEFAULT_CROP_SAMPLE_COUNT)
+        )
+        if self.crop_sample_count < 1:
+            raise ValueError(
+                f"ffmpeg.crop_sample_count: {self.crop_sample_count} must be at least 1"
+            )
 
         # resources => how politely the engine behaves on a shared machine
         resources: dict[str, Any] = data.get("resources") or {}

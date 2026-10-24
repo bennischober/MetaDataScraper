@@ -138,6 +138,7 @@ class TestJobs(unittest.TestCase):
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
+            crop_sample_count=10,
             hdr=False,
             encoder="x265",
         )
@@ -194,6 +195,7 @@ class TestJobs(unittest.TestCase):
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
+            crop_sample_count=10,
             hdr=False,
             encoder="x265",
         )

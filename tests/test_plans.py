@@ -164,6 +164,7 @@ class TestRecordPlan(unittest.TestCase):
             sample_count=3,
             sample_seconds=10.0,
             remove_bars=False,
+            crop_sample_count=10,
             encoder_preset="medium",
             hdr=False,
             encoder="x265",
@@ -204,6 +205,7 @@ class TestRecordPlan(unittest.TestCase):
             sample_count=3,
             sample_seconds=10.0,
             remove_bars=False,
+            crop_sample_count=10,
             encoder_preset="medium",
             hdr=False,
         )

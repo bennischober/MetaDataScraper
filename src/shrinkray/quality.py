@@ -46,6 +46,12 @@ from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
 
+# cropdetect windows per movie: with the bars common to every sample the
+# crop is monotone non-increasing in the sample count, so more samples only
+# ever shrink it. That is the safe direction for an irreversible crop, and it
+# makes an aspect-ratio switch much less likely to be missed (issue #17).
+DEFAULT_CROP_SAMPLE_COUNT = 10
+
 # PRODUCT.md's source-codec rule: an H.264 source is a candidate on size
 # alone, while a modern codec (HEVC/AV1) is already efficient and is only
 # worth re-encoding when it has bars to remove. Anything older is never
@@ -210,7 +216,7 @@ def intersect_crop_rects(
 
 
 def detect_crop_rect(
-    movie: Path, workdir: Path, count: int = 3
+    movie: Path, workdir: Path, count: int = DEFAULT_CROP_SAMPLE_COUNT
 ) -> tuple[int, int, int, int] | None:
     """Detects baked-in black bars (letterbox) of a movie via cropdetect.
 
@@ -349,6 +355,7 @@ class QualityResult:
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
     sample_count: int = DEFAULT_SAMPLE_COUNT
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT
     # provenance of the CRF decision ('plan' when reused from a stored
     # plan, 'probe' when measured now, None when not applicable)
     crf_source: str | None = None
@@ -1680,6 +1687,7 @@ def plan_quality(
     min_source_height: int = 0,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1717,6 +1725,10 @@ def plan_quality(
             on size alone. A modern codec (HEVC/AV1) is already efficient,
             so it is a candidate only when it has bars to remove; anything
             older is never re-encoded.
+        crop_sample_count (int): cropdetect windows per movie. More
+            samples can only shrink the crop once the bars are the ones
+            common to every sample, the safe direction for an
+            irreversible crop.
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -1832,7 +1844,7 @@ def plan_quality(
             )
         probe_dir = Path(tempfile.mkdtemp(prefix="metadata_bars_"))
         try:
-            modern_bars = detect_crop_rect(input_file, probe_dir)
+            modern_bars = detect_crop_rect(input_file, probe_dir, count=crop_sample_count)
         finally:
             shutil.rmtree(probe_dir, ignore_errors=True)
         if modern_bars is None:
@@ -1887,7 +1899,11 @@ def plan_quality(
         crop = (
             modern_bars
             if modern_bars is not None
-            else (detect_crop_rect(input_file, workdir) if remove_bars else None)
+            else (
+                detect_crop_rect(input_file, workdir, count=crop_sample_count)
+                if remove_bars
+                else None
+            )
         )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         # extract the windows once and hand the same list to the search and
@@ -2054,6 +2070,7 @@ def _lookup_plan(
     sample_count: int,
     sample_seconds: float,
     remove_bars: bool,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
 ) -> sqlite3.Row | None:
     """Consults the plan cache for a valid plan of this movie+settings.
 
@@ -2072,6 +2089,7 @@ def _lookup_plan(
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         remove_bars (bool): The pending encode's remove_bars setting.
+        crop_sample_count (int): The pending encode's crop sample count.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -2092,6 +2110,7 @@ def _lookup_plan(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             remove_bars=remove_bars,
+            crop_sample_count=crop_sample_count,
         )
     finally:
         connection.close()
@@ -2114,6 +2133,7 @@ def _probe_movie(
     use_probe_cache: bool = True,
     crop: tuple[int, int, int, int] | None = None,
     crop_detected: bool = False,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -2130,6 +2150,8 @@ def _probe_movie(
             detected (the codec gate's), applied instead of sampling again.
         crop_detected (bool): True when crop was supplied by the caller,
             so the pipeline must not detect it a second time.
+        crop_sample_count (int): cropdetect windows per movie, used only
+            when the pipeline detects the bars itself.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
@@ -2161,7 +2183,11 @@ def _probe_movie(
         # sampled again: the gate had to detect it to decide, and the same
         # bars must be applied to the encode that justifies it
         if not crop_detected:
-            crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+            crop = (
+                detect_crop_rect(input_file, workdir, count=crop_sample_count)
+                if remove_bars
+                else None
+            )
         if crop is not None:
             log(
                 f"Removing stable black bars of '{input_file.name}': "
@@ -2244,6 +2270,7 @@ def encode_with_quality(
     min_source_height: int = 0,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -2276,6 +2303,7 @@ def encode_with_quality(
             off).
         candidate_codecs (tuple[str, ...]): Source codecs that are
             candidates on size alone.
+        crop_sample_count (int): cropdetect windows per movie.
         verify (bool): Run a full-file VMAF verification after a successful
             encode (opt-in: hours of decode for a large movie; sub-sampled
             1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
@@ -2379,7 +2407,7 @@ def encode_with_quality(
             )
         bars_dir = Path(tempfile.mkdtemp(prefix="metadata_bars_"))
         try:
-            modern_bars = detect_crop_rect(input_file, bars_dir)
+            modern_bars = detect_crop_rect(input_file, bars_dir, count=crop_sample_count)
         finally:
             shutil.rmtree(bars_dir, ignore_errors=True)
         if modern_bars is None:

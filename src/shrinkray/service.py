@@ -148,6 +148,7 @@ def record_plan(
         result.sample_count,
         result.sample_seconds,
         result.remove_bars,
+        result.crop_sample_count,
     )
 
 

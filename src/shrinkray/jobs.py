@@ -722,6 +722,7 @@ def execute_plan(
                 min_source_height=config.min_source_height,
                 min_source_size_gb=config.min_source_size_gb,
                 candidate_codecs=tuple(config.candidate_codecs),
+                crop_sample_count=config.crop_sample_count,
             )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -822,6 +823,7 @@ def execute_encode(
                     min_source_height=config.min_source_height,
                     min_source_size_gb=config.min_source_size_gb,
                     candidate_codecs=tuple(config.candidate_codecs),
+                    crop_sample_count=config.crop_sample_count,
                 )
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})

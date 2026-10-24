@@ -390,7 +390,8 @@ def _conf_to_dict(conf: Conf) -> dict:
             "black_bars": {
                 "MIN_WIDTH": conf.black_bar_min_width,
                 "MIN_HEIGHT": conf.black_bar_min_height,
-            }
+            },
+            "crop_sample_count": conf.crop_sample_count,
         },
         "handbrake": {
             "preset": conf.handbrake_preset,
@@ -1144,6 +1145,7 @@ def watch_control(
                     min_source_height=load_config().min_source_height,
                     min_source_size_gb=load_config().min_source_size_gb,
                     candidate_codecs=tuple(load_config().candidate_codecs),
+                    crop_sample_count=load_config().crop_sample_count,
                 )
             except Exception as e:  # the thread must never die silently
                 log_error(f"watch loop crashed: {e}")

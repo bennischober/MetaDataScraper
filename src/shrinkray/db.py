@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS plans (
     sample_count INTEGER NOT NULL,
     sample_seconds REAL NOT NULL,
     remove_bars INTEGER NOT NULL,
+    crop_sample_count INTEGER NOT NULL DEFAULT 3,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -250,6 +251,13 @@ MIGRATIONS = {
         # plan does not re-encode them. force_reprobe bypasses this cache.
         "__probe_cache_table__",
     ],
+    11: [
+        # the crop sample count is part of the decision: the crop is
+        # monotone non-increasing in the sample count once the bars are the
+        # ones common to every sample (issue #17), so a plan made with three
+        # samples must not be reused by a run that samples ten
+        "ALTER TABLE plans ADD COLUMN crop_sample_count INTEGER NOT NULL DEFAULT 3",
+    ],
 }
 
 
@@ -299,6 +307,15 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 plans_table_migration(connection)
             elif statement == "__probe_cache_table__":
                 probe_cache_table_migration(connection)
+            elif statement.startswith("ALTER TABLE") and " ADD COLUMN " in statement:
+                # a column added by the current schema already exists on a
+                # database created by this version: adding it twice is not
+                # an error worth failing the open over
+                try:
+                    connection.execute(statement)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e):
+                        raise
             else:
                 connection.execute(statement)
         connection.execute("DELETE FROM schema_version")
@@ -536,6 +553,7 @@ def save_plan(
     sample_count: int,
     sample_seconds: float,
     remove_bars: bool,
+    crop_sample_count: int = 3,
 ) -> int:
     """Stores (upserts) the plan decision for one file — one row per file.
 
@@ -562,6 +580,8 @@ def save_plan(
         sample_count (int): Samples per probe (fingerprint).
         sample_seconds (float): Sample length (fingerprint).
         remove_bars (bool): The remove_bars setting (fingerprint).
+        crop_sample_count (int): The crop detector's sample count
+            (fingerprint: more samples can only shrink the crop).
 
     Returns:
         int: The plan row id.
@@ -573,8 +593,8 @@ def save_plan(
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
             target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            remove_bars
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            remove_bars, crop_sample_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -594,6 +614,7 @@ def save_plan(
             sample_count,
             sample_seconds,
             int(remove_bars),
+            crop_sample_count,
         ),
     )
     connection.commit()
@@ -649,6 +670,7 @@ def get_valid_plan(
     sample_count: int,
     sample_seconds: float,
     remove_bars: bool,
+    crop_sample_count: int = 3,
 ) -> sqlite3.Row | None:
     """Returns the file's stored plan when the fingerprint matches.
 
@@ -667,6 +689,7 @@ def get_valid_plan(
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         remove_bars (bool): The pending encode's remove_bars setting.
+        crop_sample_count (int): The pending encode's crop sample count.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -695,6 +718,7 @@ def get_valid_plan(
         or row["sample_count"] != sample_count
         or abs(row["sample_seconds"] - sample_seconds) > 0.01
         or bool(row["remove_bars"]) != remove_bars
+        or int(row["crop_sample_count"]) != crop_sample_count
     ):
         return None
     return cast("sqlite3.Row", row)
