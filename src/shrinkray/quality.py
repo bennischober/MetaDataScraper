@@ -198,8 +198,10 @@ HDR_ESTIMATE_NOTE = (
 )
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
-# 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
-DEFAULT_HDR_TARGET_VMAF = 94.5
+# 96.49). The calibrated offset is -0.5, expressed here as a difference so
+# the two defaults cannot drift apart again (issue #103).
+HDR_VMAF_OFFSET = 0.5
+DEFAULT_HDR_TARGET_VMAF = DEFAULT_TARGET_VMAF - HDR_VMAF_OFFSET
 
 # full-file verification sub-samples above this output size (n_subsample=10:
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
