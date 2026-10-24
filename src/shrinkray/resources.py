@@ -13,6 +13,8 @@ process niceness (POSIX), memory is read from psapi (Windows) or
 /proc (Linux).
 """
 
+from __future__ import annotations
+
 import contextlib
 import os
 import signal

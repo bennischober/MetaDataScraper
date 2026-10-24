@@ -6,6 +6,8 @@ caching the results in the database. It has no presentation logic —
 printing tables and writing output files belongs to the CLI layer.
 """
 
+from __future__ import annotations
+
 import os
 import sqlite3
 from collections.abc import Callable

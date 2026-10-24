@@ -5,6 +5,8 @@ movie set: batch resume, skip recording and result persistence. It has no
 presentation logic — the CLI prints, this module decides and records.
 """
 
+from __future__ import annotations
+
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
