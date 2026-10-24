@@ -37,6 +37,11 @@ from shrinkray.tools.vmaf import _tool_versions, measure_vmaf
 
 FFMPEG_BINARY = "ffmpeg"
 
+# the decision statistic (issue #15): the mean of the per-sample
+# VMAF means, not the minimum. A minimum is monotone non-increasing in
+# the sample count, which punishes denser sampling (#14).
+VMAF_STATISTIC = "mean"
+
 # VMAF 95 is Netflix's 'visually transparent' zone (93 is their common
 # top-tier floor); VMAF falls monotonically with rising CRF.
 DEFAULT_TARGET_VMAF = 95.0
