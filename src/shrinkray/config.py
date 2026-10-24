@@ -40,6 +40,10 @@ DEFAULT_MIN_SOURCE_HEIGHT = 1080
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
 DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
+# eligibility: the source codecs that are candidates on size alone. A modern
+# codec (HEVC/AV1) is already efficient, so it is a candidate only when it has
+# bars to remove; anything older is never re-encoded (PRODUCT.md)
+DEFAULT_CANDIDATE_CODECS = ["h264"]
 
 
 class Conf:
@@ -124,6 +128,15 @@ class Conf:
             raise ValueError(
                 f"eligibility.min_source_size_gb: {self.min_source_size_gb} is negative "
                 "(0 disables the gate)"
+            )
+        self.candidate_codecs: list[str] = [
+            str(c).lower()
+            for c in (eligibility.get("candidate_codecs") or DEFAULT_CANDIDATE_CODECS)
+        ]
+        if not self.candidate_codecs:
+            raise ValueError(
+                "eligibility.candidate_codecs: the list is empty, so no source "
+                "would ever be re-encoded"
             )
 
         # the integrations key (opt-in media-server hooks) was REMOVED with the

@@ -46,6 +46,14 @@ from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
 
+# PRODUCT.md's source-codec rule: an H.264 source is a candidate on size
+# alone, while a modern codec (HEVC/AV1) is already efficient and is only
+# worth re-encoding when it has bars to remove. Anything older is never
+# re-encoded. The names are ffprobe's own codec_name values.
+CANDIDATE_CODECS = ("h264",)
+MODERN_CODECS = ("hevc", "av1")
+MIN_SOURCE_CODEC = "h264"
+
 # the engine's live-progress callback: stage detail and counters, never persisted
 ProgressCallback = Callable[[dict], None]
 
@@ -985,6 +993,36 @@ def measure_vmaf(
         raise RuntimeError(f"libvmaf log could not be parsed: {e}") from e
 
 
+def source_codec(movie: Path) -> str | None:
+    """Reads the source's video codec name for the codec gate.
+
+    The value is ffprobe's own codec_name (h264, hevc, mpeg2video, vc1,
+    av1, ...), so the gate compares against what ffprobe reports rather
+    than a normalized spelling.
+
+    Returns None when the codec cannot be determined, so the gate can treat
+    "unknown" as "do not skip": an unreadable codec must never silently
+    exclude a file the operator expected to be considered.
+
+    Args:
+        movie (Path): The movie file.
+
+    Returns:
+        str | None: The video stream's codec name, or None.
+    """
+    from shrinkray.config import load_config
+    from shrinkray.media import get_data
+
+    try:
+        data = get_data(movie, load_config())
+    except (RuntimeError, OSError, ValueError):
+        return None
+    codec = data.get("codec")
+    if codec is None:
+        return None
+    return str(codec)
+
+
 def source_height(movie: Path) -> int | None:
     """Reads the source video height for the resolution gate.
 
@@ -1641,6 +1679,7 @@ def plan_quality(
     samples: list[tuple[Path, float]] | None = None,
     min_source_height: int = 0,
     min_source_size_gb: float = 0.0,
+    candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1674,6 +1713,10 @@ def plan_quality(
             off). Probe cost is roughly constant per file while the payoff
             scales with size, so the smallest files have the worst
             cost/benefit ratio.
+        candidate_codecs (tuple[str, ...]): Source codecs that are candidates
+            on size alone. A modern codec (HEVC/AV1) is already efficient,
+            so it is a candidate only when it has bars to remove; anything
+            older is never re-encoded.
 
     Returns:
         QualityResult: The prediction (success=False with a skipped_reason
@@ -1759,6 +1802,77 @@ def plan_quality(
             encoder=effective_encoder,
         )
 
+    # the codec gate is the product rule: an H.264 source is a candidate on
+    # size alone, while a modern codec is only worth re-encoding when there
+    # are bars to remove (PRODUCT.md). An unknown codec is probed, never
+    # excluded - an unreadable value must not silently drop a file.
+    # a modern codec is already efficient, so size alone never triggers an
+    # encode: it is a candidate only when bars are to be removed, and the
+    # crop that justifies the encode is then actually applied
+    codec = source_codec(input_file)
+    modern_bars: tuple[int, int, int, int] | None = None
+    if codec in MODERN_CODECS:
+        if not remove_bars:
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                error=(
+                    f"source codec '{codec}' is already efficient; it is re-encoded "
+                    "only to remove black bars (use --remove-bars)"
+                ),
+                skipped_reason="already efficient",
+                remove_bars=remove_bars,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
+            )
+        probe_dir = Path(tempfile.mkdtemp(prefix="metadata_bars_"))
+        try:
+            modern_bars = detect_crop_rect(input_file, probe_dir)
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+        if modern_bars is None:
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                error=(
+                    f"source codec '{codec}' is already efficient and no black bars "
+                    "were detected, so there is nothing to re-encode"
+                ),
+                skipped_reason="already efficient",
+                remove_bars=remove_bars,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
+            )
+
+    if codec is not None and codec not in candidate_codecs and codec not in MODERN_CODECS:
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"source codec '{codec}' is below the {MIN_SOURCE_CODEC} minimum "
+                "(an older codec is not re-encoded)"
+            ),
+            skipped_reason="source codec not a candidate",
+            remove_bars=remove_bars,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
     handbrake = find_handbrake()
     if handbrake is None:
         raise RuntimeError(
@@ -1768,7 +1882,13 @@ def plan_quality(
 
     workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
     try:
-        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+        # the codec gate already detected the bars for a modern-codec source;
+        # reuse that crop so the pipeline does not sample them a second time
+        crop = (
+            modern_bars
+            if modern_bars is not None
+            else (detect_crop_rect(input_file, workdir) if remove_bars else None)
+        )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         # extract the windows once and hand the same list to the search and
         # the reported size factor: each extraction decodes and writes every
@@ -1992,6 +2112,8 @@ def _probe_movie(
     encoder_threads: int | None = None,
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
+    crop: tuple[int, int, int, int] | None = None,
+    crop_detected: bool = False,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -2004,6 +2126,10 @@ def _probe_movie(
         encoder (str): The video encoder, e.g. 'x265'.
         encoder_preset (str): The encoder speed preset, e.g. 'medium'.
         remove_bars (bool): Detect and crop stable black bars.
+        crop (tuple[int, int, int, int] | None): A crop the caller already
+            detected (the codec gate's), applied instead of sampling again.
+        crop_detected (bool): True when crop was supplied by the caller,
+            so the pipeline must not detect it a second time.
         hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
@@ -2031,7 +2157,11 @@ def _probe_movie(
 
     workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
     try:
-        crop = detect_crop_rect(input_file, workdir) if remove_bars else None
+        # a crop the codec gate already detected is reused rather than
+        # sampled again: the gate had to detect it to decide, and the same
+        # bars must be applied to the encode that justifies it
+        if not crop_detected:
+            crop = detect_crop_rect(input_file, workdir) if remove_bars else None
         if crop is not None:
             log(
                 f"Removing stable black bars of '{input_file.name}': "
@@ -2113,6 +2243,7 @@ def encode_with_quality(
     use_probe_cache: bool = True,
     min_source_height: int = 0,
     min_source_size_gb: float = 0.0,
+    candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -2143,6 +2274,8 @@ def encode_with_quality(
             off).
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off).
+        candidate_codecs (tuple[str, ...]): Source codecs that are
+            candidates on size alone.
         verify (bool): Run a full-file VMAF verification after a successful
             encode (opt-in: hours of decode for a large movie; sub-sampled
             1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
@@ -2205,6 +2338,76 @@ def encode_with_quality(
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
+    size_gb = input_file.stat().st_size / (1024**3)
+    if min_source_size_gb > 0 and size_gb < min_source_size_gb:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"size {size_gb:.2f} GB is below the {min_source_size_gb:.2f} GB "
+                "minimum (too little to save for the probe cost)"
+            ),
+            skipped_reason="below min size",
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
+
+    # an H.264 source is a candidate on size alone; a modern codec only
+    # when bars are to be removed, and then the crop is applied
+    codec = source_codec(input_file)
+    modern_bars: tuple[int, int, int, int] | None = None
+    if codec in MODERN_CODECS:
+        if not remove_bars:
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                error=(
+                    f"source codec '{codec}' is already efficient; it is re-encoded "
+                    "only to remove black bars (use --remove-bars)"
+                ),
+                skipped_reason="already efficient",
+                hdr=hdr,
+                encoder=effective_encoder,
+            )
+        bars_dir = Path(tempfile.mkdtemp(prefix="metadata_bars_"))
+        try:
+            modern_bars = detect_crop_rect(input_file, bars_dir)
+        finally:
+            shutil.rmtree(bars_dir, ignore_errors=True)
+        if modern_bars is None:
+            return QualityResult(
+                input=input_file,
+                output=output_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                error=(
+                    f"source codec '{codec}' is already efficient and no black bars "
+                    "were detected, so there is nothing to re-encode"
+                ),
+                skipped_reason="already efficient",
+                hdr=hdr,
+                encoder=effective_encoder,
+            )
+
+    if codec is not None and codec not in candidate_codecs and codec not in MODERN_CODECS:
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                f"source codec '{codec}' is below the {MIN_SOURCE_CODEC} minimum "
+                "(an older codec is not re-encoded)"
+            ),
+            skipped_reason="source codec not a candidate",
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -2319,6 +2522,8 @@ def encode_with_quality(
                 # force_reprobe means EVERYTHING is measured fresh: the plan
                 # cache above is bypassed, and so is the probe-encode cache
                 use_probe_cache=not force_reprobe,
+                crop=modern_bars,
+                crop_detected=modern_bars is not None,
             )
         except SkipEncode as e:
             return QualityResult(

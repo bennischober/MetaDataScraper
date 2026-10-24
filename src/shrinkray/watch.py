@@ -205,6 +205,7 @@ def watch(
     db_file: Path | None = None,
     min_source_height: int = 0,
     min_source_size_gb: float = 0.0,
+    candidate_codecs: tuple[str, ...] = ("h264",),
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -319,6 +320,7 @@ def watch(
                             force_reprobe=True,
                             min_source_height=min_source_height,
                             min_source_size_gb=min_source_size_gb,
+                            candidate_codecs=candidate_codecs,
                         )
                 except EncodeBusyError as e:
                     log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")

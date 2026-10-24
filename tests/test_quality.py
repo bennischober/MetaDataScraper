@@ -665,6 +665,120 @@ class TestSubprocessTimeouts(unittest.TestCase):
         finally:
             movie.parent.rmdir()
 
+    def test_codec_gate_rejects_older_codec(self):
+        """An older codec is never re-encoded, before any probe runs.
+
+        PRODUCT.md: a source in a codec older than H.264 is not a candidate.
+        The gate must decide from the codec alone and reach neither sample
+        extraction nor HandBrake.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=1080),
+                patch.object(quality, "source_codec", return_value="mpeg2video"),
+                patch.object(quality, "extract_samples") as fake_extract,
+                patch.object(quality, "find_handbrake") as fake_hb,
+            ):
+                result = quality.plan_quality(src)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "source codec not a candidate")
+        self.assertIn("mpeg2video", result.error or "")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_codec_gate_admits_h264_on_size_alone(self):
+        """An H.264 source is a candidate on size alone (PRODUCT.md)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=1080),
+                patch.object(quality, "source_codec", return_value="h264"),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
+    def test_codec_gate_skips_hevc_without_remove_bars(self):
+        """A modern codec is already efficient: size alone never triggers it.
+
+        PRODUCT.md makes an HEVC or AV1 source a candidate only when it has
+        bars to remove, so without --remove-bars it is left alone.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "source_codec", return_value="hevc"),
+                patch.object(quality, "extract_samples") as fake_extract,
+                patch.object(quality, "find_handbrake") as fake_hb,
+            ):
+                result = quality.plan_quality(src)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "already efficient")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_codec_gate_skips_hevc_without_bars_when_opted_in(self):
+        """Opting in to bar removal is not enough on its own: no bars, no encode.
+
+        The H.265 arm needs bars to be *detected*, because the crop is the
+        only justification for re-encoding an already-efficient source.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "source_codec", return_value="hevc"),
+                patch.object(quality, "detect_crop_rect", return_value=None),
+                patch.object(quality, "extract_samples") as fake_extract,
+                patch.object(quality, "find_handbrake") as fake_hb,
+            ):
+                result = quality.plan_quality(src, remove_bars=True)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "already efficient")
+        self.assertIn("no black bars", result.error or "")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_codec_gate_admits_hevc_with_detected_bars(self):
+        """An HEVC source with bars is a candidate, and the bars are cropped.
+
+        Without this the gate would admit a file whose only justification it
+        then does not act on.
+        """
+        bars = (20, 20, 0, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "source_codec", return_value="hevc"),
+                patch.object(quality, "detect_crop_rect", return_value=bars) as fake_crop,
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src, remove_bars=True)
+        self.assertTrue(result.success)
+        # detected once by the gate, not sampled again by the pipeline
+        self.assertEqual(fake_crop.call_count, 1)
+        self.assertEqual(result.crop, bars)
+
     def test_min_source_size_gate_skips_before_probing(self):
         """A source below the size floor is skipped before any probe runs.
 
