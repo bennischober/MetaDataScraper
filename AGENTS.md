@@ -27,6 +27,21 @@ process. See PRODUCT.md for the product contract.
 The product rules a change must not contradict (PRODUCT.md has the detail; most
 are target behaviour, not yet implemented — check the code before assuming one):
 
+- **Two operating modes, one engine.** A stateless one-shot CLI over a file, a folder
+  or a glob; and a resident container that scans a mounted tree, detects bars, runs the
+  CRF search for the whole collection, encodes the backlog and watches for changes.
+  Neither mode may require the other, and the CLI must never require the resident
+  process.
+- **The dashboard is Mode B's status window, not a control surface.** It reports what is
+  running, planned, remaining and reclaimed; it does not start work. A control panel
+  implies a watching operator, which is what the resident mode exists to remove — and a
+  read-only surface is a smaller attack surface. Do not add a route or a button that
+  starts, cancels or reconfigures work without a product decision first.
+- **The one-shot mode does not need the database.** A run against a file, folder or glob
+  goes straight to the CRF search and the encode. The database is an optimization for
+  repeated runs, never a prerequisite.
+- **In place, retaining the original.** A verified output takes the source's path; the
+  original is renamed aside and kept. No code path deletes a source file.
 - Files below 1080p or in a codec older than H.264 are never re-encoded.
 - H.264 sources are candidates on size alone; HEVC and AV1 sources only when they
   have black bars to remove.
@@ -38,6 +53,12 @@ are target behaviour, not yet implemented — check the code before assuming one
 - Only the video stream is re-encoded; audio and subtitle tracks are copied 1:1.
 - The watchdog scans every new or changed file into the database and re-decides it
   from the fresh scan.
+- **The collection is already organized.** The target library is a large set of
+  already-named files with no duplicates. Never name, vendor, or assume any particular
+  acquisition, naming or media-server product in code, comments, docs or commit
+  messages — ShrinkRay is written for "a large existing video collection" and nothing
+  more specific. Never add a feature whose usefulness depends on knowing what a file is
+  called or which file it is.
 
 ## PROJECT KNOWLEDGE BASE
 
@@ -84,16 +105,18 @@ anti-patterns are the sections further down — this block does not restate them
 | `CANDIDATE_CODECS` | const | `quality.py:65` | 5 | `("h264",)` — the only size-alone candidates |
 | `MODERN_CODECS` | const | `quality.py:66` | 5 | `("hevc","av1")` — bars-only candidates |
 | `guard_encodes` | context mgr | `encode_lock.py:142` | 14 | per-output-dir lock, 6 h stale window |
-| `SCHEMA_VERSION` | const 13 | `db.py:8` | 9 | bump with every migration |
+| `SCHEMA_VERSION` | const 14 | `db.py:8` | 9 | bump with every migration |
 | `find_handbrake` | function | `encode.py:175` | 40 | binary discovery, degrades to `None` |
 | `encode_file` | function | `encode.py:742` | — | the one full encode |
 
 ### NOTES (gotchas that cost a reader time)
 
-- **VMAF default disagrees with the prose.** `DEFAULT_TARGET_VMAF = 95.0`
-  (`quality.py:120`) and every `--target-vmaf` default is 95.0, while PRODUCT.md and
-  the product rules above say 96. The rule stands; when reading or changing code,
-  quote the constant, never the prose, and do not "fix" the number in a doc PR.
+- **VMAF default: the decision is 96, the code ships 95.** `DEFAULT_TARGET_VMAF`
+  (`quality.py:120`) and every `--target-vmaf` default are 95.0. The product decision
+  is **96** (confirmed 2026-10-24), so the constant is the defect, not the prose. The
+  target participates in the stored plan fingerprint, so raising it deliberately
+  invalidates every cached plan — one change, one migration note, not a doc edit.
+  Tracked in [ISSUES.md](ISSUES.md); do not "fix" it by editing a doc.
 - **The package is flat today.** The `tools/`/`engine/`/`server/` tree in Project
   conventions is the #63 target, not the current layout. Do not describe it as
   current, and do not restructure as a drive-by on an unrelated issue.

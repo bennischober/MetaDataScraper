@@ -135,7 +135,7 @@ components:
 
 **Creative North Star: "The ShrinkRay Console"**
 
-The console is a home-lab operator surface: Home Assistant's shell discipline meets Plex's library recognition, pointed at one measured movie library. Every domain is one click away in the sidebar rail; the overview answers "what needs me?" in five seconds (failures, missing files, what the last runs reclaimed, where work stands); the library is *recognized* at a glance in the poster grid and *operated* in bulk through the table and selection. The world is a deliberate 180° from round 1 (the Drafting Table sheet): the rejected single-page document arrangement is replaced by a console shell, and the previously rejected costume clichés are re-aimed — this is a console by structure and restraint, never by gaming-RGB, glow, or terminal cosplay.
+The console is a home-lab operator surface: a shell discipline borrowed from home-automation dashboards meets a media library's recognition, pointed at one measured movie library. Every domain is one click away in the sidebar rail; the overview answers "what needs me?" in five seconds (failures, missing files, what the last runs reclaimed, where work stands); the library is *recognized* at a glance in the poster grid and *operated* in bulk through the table and selection. The world is a deliberate 180° from round 1 (the Drafting Table sheet): the rejected single-page document arrangement is replaced by a console shell, and the previously rejected costume clichés are re-aimed — this is a console by structure and restraint, never by gaming-RGB, glow, or terminal cosplay.
 
 The system is **dual-theme by token, not by layout**: a dark cinema ground (`#101216`, the default) and a light working bench (`#eef0f2`), switched by `[data-theme]` on `<html>` and persisted. Both themes render the *same* structure — components never branch on theme; they only consume tokens. Color stays meaning-first: teal = measured/confirmed/selected, amber = work in progress, red = failure/destruction only. State is still expressed as **density** — solid fill means done, hatching means in progress, an empty swatch means untouched, a dashed outline means missing.
 
@@ -200,7 +200,7 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 **Body Font:** IBM Plex Sans (same family — there is no separate display face)
 **Label/Mono Font:** IBM Plex Mono (self-hosted woff2, 400 and 500–600; fallbacks `Consolas, ui-monospace, monospace`)
 
-**Character:** An operator-console pairing. Plex Sans speaks — page titles, labels, prose, poster titles — with labels in small tracked caps like equipment annotations; Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like an instrument readout. Faces are self-hosted because a localhost tool must not depend on a CDN.
+**Character:** An operator-console pairing. IBM Plex Sans speaks — page titles, labels, prose, poster titles — with labels in small tracked caps like equipment annotations; IBM Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like an instrument readout. Faces are self-hosted because a localhost tool must not depend on a CDN.
 
 ### Hierarchy
 - **Hero** (700, 22px, ~1.2): The movie-detail page title and the stat values' scale mate — the largest type in the console, used once per view.
@@ -214,7 +214,7 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Micro** (10px–9.5px): poster corner tags (9.5px, 1px tracking), in-table HDR tags and job action buttons (10px).
 
 ### Named Rules
-**The Two Voices Rule.** Plex Sans talks, Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is Plex Sans. Never set measurements in the sans.
+**The Two Voices Rule.** IBM Plex Sans talks, IBM Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is IBM Plex Sans. Never set measurements in the sans.
 
 **The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "2h 14m"), and an absent value is an em-dash (`—`), never blank or zero. Growth is reported honestly: an encode that enlarged the file prints "+X.X% larger" in red, not a masked percentage.
 

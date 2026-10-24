@@ -11,15 +11,101 @@ web
 A Svelte 5 + Vite dashboard served by the resident Python app (FastAPI), plus a
 first-class CLI. The backend is an orchestrator: all heavy work is delegated to
 external binaries (`ffprobe`, `ffmpeg`, `HandBrakeCLI`) via `subprocess`. No
-build-step-heavy SPA framework; the dashboard is a control surface, not the product.
+build-step-heavy SPA framework; the dashboard is an **observability surface for the
+resident mode**, not the product and not a control panel (see *Operating modes*).
 
 ## Users
 
-One operator with a large, already-collected video library on a home server or NAS
-(tens to thousands of files, on local disks or a network share). They already have
-automation that acquires and names their files; ShrinkRay deliberately knows nothing
-about it. They are comfortable with terminals and containers, want unattended
-operation, and will not accept a tool that can lose a file.
+One operator with a large, **already-organized** video library on a home server or NAS
+(tens to thousands of files, on local disks or a network share). The collection is
+curated upstream: files are already named, already matched, already free of duplicates.
+ShrinkRay is pointed at it and does one job.
+
+That last part is the defining constraint. Everything that falls under *managing a
+library* — naming, renaming, moving, organizing, matching, scraping, deduplicating,
+acquiring, playing, serving — has already been done by the time ShrinkRay sees a file,
+and ShrinkRay never does any of it. The operator is comfortable with terminals and
+containers, wants unattended operation, and will not accept a tool that can lose a file.
+
+## Operating modes
+
+There are exactly **two ways to run ShrinkRay**, and they share one engine. They differ
+in who holds the state and who drives the loop — not in what a re-encode is.
+
+### Mode A — one-shot CLI (the direct mode)
+
+The operator points the CLI at work and it does that work, then exits:
+
+```sh
+shrinkray encode 'media/movies/Some Film (2020).mkv'   # one file
+shrinkray encode 'media/movies/'                        # a whole folder
+shrinkray encode 'media/movies/*.mkv'                   # a glob
+```
+
+The input is **a file, a folder, or a glob**. By default this mode **does not use the
+database at all**: no scan to persist, no plan cache, no verdict history. It goes
+straight to the VMAF-driven CRF search for each file it was given and then re-encodes
+that file **in place**. The original is never deleted — it is renamed aside and kept, so
+the operator can delete it themselves once satisfied.
+
+The database is an optimization for repeated runs, not a prerequisite. Mode A must work
+with no `metadata.db` present and must not create one unless asked.
+
+### Mode B — fire and forget (the resident mode)
+
+The deployment shape: a container on a server, pointed at the mounted library, left
+alone. It owns its own sqlite database and runs the whole cycle without a babysitter:
+
+1. **Scan** the mounted folder into the database — codec, resolution, duration, HDR,
+   and the rest of each file's properties.
+2. **Black-bar detection for every file**, recorded in the database, so the crop decision
+   is a stored fact rather than a per-run measurement.
+3. **CRF search for every file that passes the gates**, with the result stored so the
+   work is never repeated on an unchanged file.
+4. **Re-encode the backlog automatically**, in place, retaining each original.
+5. **Watch** the folder and scan every stable new or changed file as it appears, then
+   decide it from the fresh scan.
+
+The loop is the product. The operator starts the container once and does not touch it
+again; the library gets smaller on its own and every decision is recorded and
+explainable.
+
+Both modes are first-class. Mode A is what a person runs to try the tool, to handle a
+single stubborn file, or to script their own batch; Mode B is what runs on the server.
+Every capability available in one is available in the other, and the CLI never requires
+the resident process.
+
+### The dashboard is Mode B's window, not its steering wheel
+
+The web UI exists to **observe Mode B**: what is happening right now, what is planned
+next, what still needs doing. It is a status surface. The operator starts the container
+once and the machine decides; the dashboard answers "where does it stand?" without
+becoming another way to drive the library.
+
+That means the dashboard's job is to show, not to do: the collection and its state, the
+running job with live progress, the plan (what is queued, at which CRF, for how much
+predicted saving), what has been reclaimed, what failed and why, and the retained
+originals waiting for manual deletion. Read-only by intent.
+
+This is a deliberate boundary, and it is the honest one for a fire-and-forget tool: a
+control surface implies an operator watching, which is the thing Mode B exists to
+remove. It is also the smaller attack surface — a status page needs no authorization
+model beyond the token that guards the network, and no route that can start work by
+accident.
+
+> **Implementation status.** The dashboard is currently a **full control surface**, not
+a status view: it enqueues scan/plan/encode jobs (`LibraryPage.svelte:173`, `:198`,
+`:201`, `:212`, `:213`), cancels and retries them (`JobsPage.svelte:180`, `:182`),
+starts and stops the watchdog (`App.svelte:648`), and edits `config.json`
+(`ConfigPage.svelte:97`). Moving it to observe-only — and giving Mode B the automatic
+loop that makes an observe-only dashboard sufficient — is tracked in
+[ISSUES.md](ISSUES.md).
+
+> **Implementation status.** Mode B is implemented. Mode A's input shapes (a single file,
+a glob), its database-free default, and its in-place default are **not implemented yet** —
+the CLI currently takes a folder plus a required output directory, always opens the
+database, and writes to the output directory unless `--replace` is passed. The gap is
+tracked in [ISSUES.md](ISSUES.md) and must not be read as working.
 
 ## Product Purpose
 
@@ -47,13 +133,20 @@ becomes a candidate only when it has black bars to remove, and a modern-codec fi
 without bars is left untouched.
 
 There is exactly **one way to re-encode**: a VMAF-driven CRF search against a required
-quality floor (VMAF 96 by default), then one full encode at the CRF it found. The
+quality floor (**VMAF 96 by default**), then one full encode at the CRF it found. The
 output is always **AV1, encoded on the CPU** — no other output codec and no hardware
 encoder. Both 8-bit and 10-bit sources are supported. Only the video stream is
 re-encoded: every audio and subtitle track is carried over 1:1 from the source,
 untouched. A bar
 removal goes through the same search. There is no fixed-preset or "just crop it"
 encode — an encode whose quality is not measured would miss the point of the tool.
+
+> **VMAF 96 is the decided default; the code still ships 95.0.** This is a gap in the
+> implementation, not a doc error. `DEFAULT_TARGET_VMAF` in `quality.py` is `95.0`, and
+> every CLI option and the job payload inherit it. The product decision is 96, so the
+> constant must change — and because the target VMAF participates in the stored plan
+> fingerprint, that change deliberately invalidates every cached plan. Tracked in
+> [ISSUES.md](ISSUES.md).
 
 In practice it fuses two steps an operator would otherwise run by hand per file — an
 `ab-av1`-style CRF search, then the encode at the CRF it found — into one, and applies
@@ -95,20 +188,31 @@ to its quality** and whether its **frame matches its content**.
 - Headless Linux server or NAS, run as a container (the target install) or from a
   source checkout with `uv`; the CLI also runs on a Windows workstation for
   development and for one-off runs.
-- The library arrives as one bind-mounted directory tree. ShrinkRay reads it, decides
-  per file, and writes only inside it.
+- The library arrives as one bind-mounted directory tree of **already-organized**
+  files. ShrinkRay reads it, decides per file, and writes only inside it.
+- **Mode A needs no state.** A one-shot CLI run against a file, folder or glob works
+  from a bare checkout with no database, no config, and no resident process.
+- **Mode B owns its state.** The container keeps its sqlite database and its
+  `config.json` on a volume beside the library, never inside it.
 - HandBrakeCLI + ffmpeg (with `libvmaf`) are external binaries baked into the
   image; a pinned image is also what makes VMAF scores comparable across runs.
 - Encodes run for hours. The service must be a polite guest: idle priority, thread
   caps, and a stall watchdog, so playback on the same box keeps its cores.
-- The dashboard is reached over the LAN. The CLI is a first-class product: every
-  capability is available without the resident process, and automation may drive it
-  alone.
+- The dashboard is reached over the LAN and is **read-only in intent**: it reports
+  Mode B's state (running, planned, remaining, reclaimed, retained) and does not start
+  work. The CLI is a first-class product: every capability is available without the
+  resident process, and automation may drive it alone.
 - Files appear and change continuously. A watchdog notices every stable new or
   changed file, re-scans it, and re-decides it without being asked.
 
 ## Capabilities and Constraints
 
+- **Two operating modes** (see *Operating modes*): a stateless one-shot CLI over a
+  file / folder / glob, and a resident container that scans a mounted tree, detects
+  bars and CRF for the whole collection, encodes the backlog, and watches for changes.
+- **The dashboard observes, it does not steer**: it shows the collection's state, the
+  running job, the plan, what remains and what was reclaimed. It is Mode B's status
+  window; it is not a second control path into the library.
 - **One encode mode**: VMAF-driven CRF search per file against the required VMAF
   (96 by default; sampled probes, measured quality), then one full encode at the
   winning setting. Every re-encode, bar removal included, goes through it. The

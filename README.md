@@ -12,7 +12,8 @@ remembers why.
 
 Built to run unattended on a server against a whole collection — fire and forget —
 with a watchdog for new arrivals and a web dashboard for status. The CLI is a first-class
-product: every capability works without the resident process.
+product: every capability works without the resident process, and it can be pointed at a
+single file, a folder, or a glob.
 
 **It shrinks files. It does not manage a library** — no renaming, moving,
 organizing, matching or deduplicating. That belongs to the tooling that already
@@ -26,6 +27,33 @@ put the collection together.
 </div>
 
 ---
+
+## Two ways to run it
+
+**One-shot, from the CLI.** Point it at work and it does that work, then exits:
+
+```bash
+shrinkray encode 'media/movies/Some Film (2020).mkv'   # one file
+shrinkray encode 'media/movies/'                        # a whole folder
+shrinkray encode 'media/movies/*.mkv'                   # a glob
+```
+
+No database, no config, no resident process — straight to the CRF search, then the file
+is re-encoded in place. The original is renamed aside and kept; nothing is deleted.
+
+**Fire and forget, in a container.** Point it at the mounted library once and leave it.
+It scans the collection into its own sqlite database, detects black bars for every file,
+runs the CRF search for the ones that pass the gates, works through the backlog on its
+own, and keeps a watchdog on the folder so new and changed files are picked up within
+seconds. The dashboard is its status window — what is running, what is planned, what is
+left, what was reclaimed — not a control panel.
+
+> [!IMPORTANT]
+> **The one-shot shape is the target, not the current behaviour.** Today `encode` takes a
+> folder plus a *required* output directory, always opens the database, and writes to the
+> output directory unless you pass `--replace`. Single files, globs, the database-free
+> default and the in-place default are tracked in [ISSUES.md](ISSUES.md). The commands in
+> the reference below are what actually runs.
 
 ## What does it do?
 
@@ -43,7 +71,7 @@ interesting:
 > the *largest* CRF that stays visually transparent — then the movie is encoded
 > once with exactly that setting.
 
-Measured on real content (target VMAF 95, x265):
+Measured on real content (target VMAF 95, x265 — the AV1 default is 96):
 
 | Movie | Content | Result | Saved |
 |---|---|---|---|
@@ -77,6 +105,10 @@ uv run shrinkray scan 'D:\Movies'
 uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
 uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 ```
+
+> The one-shot shape this is heading for — `encode` over a single file, a folder or a
+> glob, with no output directory and no database — is not wired yet. The commands above
+> are what runs today; see [ISSUES.md](ISSUES.md) for the gap.
 
 **Already have uv?** Run straight from GitHub without cloning:
 
@@ -212,15 +244,16 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 
 # with options
 uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
-    --quality --remove-bars --target-vmaf 95
+    --quality --remove-bars --target-vmaf 96
 ```
 
 | Option | Effect |
 |---|---|
 | `--quality` | VMAF-driven CRF search per movie (see above) |
-| `--target-vmaf N` | quality floor for quality mode (default: `95`) |
-| `--probe-encoder-preset NAME` | the PROBES' encoder speed preset (`medium` default; a measurement setting — changing it invalidates stored plans) |
-| `--encoder-preset NAME` | the FINAL encode's speed preset (`slow` default; an output setting — the probes run `--probe-encoder-preset`) |
+| `--target-vmaf N` | quality floor for quality mode (default: `96`) |
+| `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
+| `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
+| `--replace` | swap the verified output into the source's path, renaming the original aside (never deleted) instead of writing to the output directory |
 | `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
@@ -492,13 +525,19 @@ Everything else — naming, moving, organizing, matching, deduplicating, acquiri
 belongs to the tooling that already built the collection, and is out of scope here.
 
 > [!NOTE]
-> Most of this target shape is **not implemented yet**. What ships today differs:
-> `encode` writes to a separate output directory instead of swapping in place;
-> its default mode is a fixed HandBrake preset, and `--quality` defaults to VMAF 95;
-> the output is HEVC (x265), not AV1; there is no resolution, codec-age or
-> codec-routing gate; and `watch-mode` polls a single inbox folder for new files
-> only, without re-scanning changed ones. The commands documented above describe
-> what ships now, not the target shape.
+> **Target shape vs. what ships today.** These two operating modes are the contract:
+>
+> - **One-shot CLI** — point it at a file, a folder, or a glob; it skips the database,
+>   runs the CRF search, and re-encodes in place, retaining the original.
+> - **Fire and forget** — a container that scans the mounted library into its own
+>   database, detects black bars for every file, runs the CRF search for the whole
+>   backlog, encodes it, and watches for changes.
+>
+> **Fire-and-forget is implemented. The one-shot CLI is not, in three respects:** it
+> takes a folder plus a *required* output directory (no single file, no glob), it always
+> opens the database, and it writes to the output directory unless you pass `--replace`.
+> Everything else below describes what ships today. The gaps are listed in
+> [ISSUES.md](ISSUES.md).
 
 ## FAQ
 
