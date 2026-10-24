@@ -51,7 +51,6 @@ class TestPlans(unittest.TestCase):
             "crf_high": 32,
             "sample_count": 7,
             "sample_seconds": 5.0,
-            "remove_bars": False,
         }
         args.update(overrides)
         return db.save_plan(self.connection, **args)
@@ -64,7 +63,6 @@ class TestPlans(unittest.TestCase):
             "crf_range": (14, 32),
             "sample_count": 7,
             "sample_seconds": 5.0,
-            "remove_bars": False,
         }
         args.update(overrides)
         return db.get_valid_plan(self.connection, movie, **args)
@@ -107,7 +105,6 @@ class TestPlans(unittest.TestCase):
         self.assertIsNone(self._lookup(movie, crf_range=(16, 30)))
         self.assertIsNone(self._lookup(movie, sample_count=5))
         self.assertIsNone(self._lookup(movie, sample_seconds=4.0))
-        self.assertIsNone(self._lookup(movie, remove_bars=True))
         # changed file (mtime+size) invalidates
         movie.write_bytes(b"x" * 32)
         self.assertIsNone(self._lookup(movie))
@@ -163,7 +160,6 @@ class TestRecordPlan(unittest.TestCase):
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
-            remove_bars=False,
             crop_sample_count=10,
             vmaf_statistic="mean",
             encoder_preset="5",
@@ -206,7 +202,6 @@ class TestRecordPlan(unittest.TestCase):
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
-            remove_bars=False,
             crop_sample_count=10,
             vmaf_statistic="mean",
             encoder_preset="5",

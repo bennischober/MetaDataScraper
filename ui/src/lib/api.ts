@@ -371,7 +371,6 @@ export const api = {
     output_dir?: string
     quality?: boolean
     target_vmaf?: number
-    remove_bars?: boolean
     overwrite?: boolean
     workers?: number | null
     rescan?: boolean

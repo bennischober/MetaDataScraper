@@ -9,30 +9,24 @@
   let {
     scanPaths,
     outputDir,
-    removeBars = false,
     targetVmaf = 95,
     workers = null,
     onpathsChange,
     onoutputChange,
-    onbarsChange,
     onvmafChange,
     onworkersChange,
   }: {
     scanPaths: string[]
     outputDir: string
-    removeBars?: boolean
     targetVmaf?: number
     workers?: number | null
     onpathsChange: (paths: string[]) => void
     onoutputChange: (dir: string) => void
-    onbarsChange?: (armed: boolean) => void
     onvmafChange?: (vmaf: number) => void
     onworkersChange?: (workers: number | null) => void
   } = $props()
 
   let newPath = $state('')
-  // two-way: the armed state lives at app level; this page only edits it
-  let barsArmed = $derived(removeBars)
   // local editing copy of the VMAF target (committed on change); the
   // effect syncs it when the app-level value changes
   let vmafDraft = $state(95)
@@ -62,7 +56,7 @@
   })
 
   $effect(() => {
-    onbarsChange?.(barsArmed)
+    vmafDraft = targetVmaf
   })
 
   function addPath() {
@@ -242,26 +236,6 @@
     </div>
   </section>
 
-  <!-- ══ dangerous options ══ -->
-  <section class="panel danger">
-    <div class="panel-head">
-      <span class="legend red">DANGEROUS OPTIONS — PER SESSION ONLY</span>
-    </div>
-    <div class="pad">
-      <label class="bars-option">
-        <input
-          type="checkbox"
-          checked={barsArmed}
-          onchange={(e) => onbarsChange?.(e.currentTarget.checked)}
-        />
-        <span>
-          <strong>REMOVE BLACK BARS ON ENCODE</strong>
-          <span class="mono dim block">crops stable letterbox bars permanently — irreversible, never persisted, must be re-armed each session</span>
-        </span>
-      </label>
-    </div>
-  </section>
-
   <!-- ══ resource politeness (config.json; SAVE CONFIG model) ══ -->
   <section class="panel">
     <div class="panel-head">
@@ -408,18 +382,6 @@
   .pad.row { padding: 14px; }
   .groups { display: flex; flex-direction: column; gap: 14px; }
 
-  .panel.danger { border-color: var(--red); }
-  .red { color: var(--red); }
-  .bars-option {
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    cursor: pointer;
-  }
-  /* red accent ONLY on the dangerous panel's toggle — the shared geometry
-     moved to .option-row so politeness checkboxes (RESOURCES) inherit a
-     neutral accent instead of the failure hue (round-6 Red Lock breach) */
-  .bars-option input { accent-color: var(--red); margin-top: 2px; }
   .option-row {
     display: flex;
     gap: 10px;
@@ -427,7 +389,7 @@
     cursor: pointer;
   }
   .option-row input { margin-top: 2px; }
-  .bars-option .block, .option-row .block { display: block; margin-top: 2px; font-size: 11px; }
+  .option-row .block { display: block; margin-top: 2px; font-size: 11px; }
 
   .path-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .path-chip {

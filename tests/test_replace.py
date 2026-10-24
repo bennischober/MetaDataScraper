@@ -172,9 +172,10 @@ class TestLedger(unittest.TestCase):
     def test_an_empty_ledger_lists_nothing(self) -> None:
         self.assertEqual(db.list_retained(self.connection), [])
 
-    def test_the_schema_is_v14_with_a_retained_table(self) -> None:
+    def test_the_retained_table_exists_from_v14_onwards(self) -> None:
         version = self.connection.execute("SELECT version FROM schema_version").fetchone()[0]
-        self.assertEqual(version, 14)
+        # the ledger landed in migration 14; later migrations must not drop it
+        self.assertGreaterEqual(version, 14)
         columns = [row[1] for row in self.connection.execute("PRAGMA table_info(retained)")]
         for expected in (
             "source_path",

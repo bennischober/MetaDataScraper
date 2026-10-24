@@ -6,7 +6,6 @@
     movies,
     selectedPaths,
     targetVmaf,
-    removeBars,
     scanning = false,
     pending = false,
     runningMovie = null,
@@ -21,7 +20,6 @@
     movies: Movie[]
     selectedPaths: Set<string>
     targetVmaf: number
-    removeBars: boolean
     scanning?: boolean
     pending?: boolean
     runningMovie?: string | null

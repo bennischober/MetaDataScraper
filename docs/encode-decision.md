@@ -58,12 +58,12 @@ Every gate is a cheap question asked before the expensive next step.
 | # | Gate | Question | If it fails |
 |---|---|---|---|
 | 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `encode.py:208`) | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`min_source_height`, `quality.py:1358`) | skip — too few pixels to save |
-| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `quality.py:1381`) | skip — payoff below the probe cost |
-| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `quality.py:105`, checked at `:1452`) | skip — an older codec is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py:109`, called at `quality.py:1430`) | no crop; the encode proceeds uncropped |
-| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`) | skip — target unreachable |
-| 7 | **Size gate** | Would the result be smaller? (`quality.py:1196-1223`, gate at `:1218`) | skip — "would not shrink" |
+| 2 | Resolution | At least 1080p tall? (`min_source_height`, `quality.py:564`) | skip — too few pixels to save |
+| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `quality.py:586`) | skip — payoff below the probe cost |
+| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `quality.py:174`, checked at `:611`) | skip — an older codec is not re-encoded |
+| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py:109`, called at `quality.py:642`) | no crop; the encode proceeds uncropped |
+| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:591`) | skip — target unreachable |
+| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:674`, and again at the chosen CRF `:720`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
 Note gate 5 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
@@ -95,8 +95,8 @@ would only shrink *after* cropping gets a false "won't shrink".
 
 - **Never re-encodes to remove bars.** A crop is a setting on the encode, never a reason for one.
   Bar removal cannot make a file worth encoding that size alone did not.
-- **Never re-encodes a file that would grow.** Size is the only permission. This must be checked at
-  the **chosen** CRF, not only at the top of the range (see the gaps below).
+- **Never re-encodes a file that would grow.** Size is the only permission, checked at the **chosen**
+  CRF, not only at the top of the range.
 - **Never re-encodes an older codec.** H.264 is the floor; MPEG-2/VC-1/VC-1 are left alone.
 - **Never skips an encode because quality could not be measured.** An unmeasured file is reported as
   unmeasured, never silently encoded and never silently dropped.
@@ -113,21 +113,25 @@ The one place this document goes **beyond** the PS1 is bar removal: the PS1 only
 (`-DetectCrop`, a measurement aid), while ShrinkRay now applies it to every encode. That is a deliberate
 difference, not a drift — the PS1 was a CRF finder, and ShrinkRay also does the encode.
 
-## Where the current code disagrees
+## Where the code disagreed, and what closed it
 
-| # | Where | What it does | What this document says |
+Every row below was a real disagreement between this document and the code. All are now closed;
+the table is kept as the record of what the change had to fix.
+
+| # | Where | What it did | Closed by |
 |---|---|---|---|
-| 1 | `quality.py:1409-1445` | a modern codec with no bars returns "already efficient" before the search | every eligible file is probed; only size may skip |
-| 2 | `quality.py:1410` | bars are checked only when `--remove-bars` is on | bar detection is always on |
-| 3 | `__main__.py:382`, `:802`, `:1156`, `app.py:242`, `quality.py:215`, `:1257`, `:1874`, `watch.py:198` | `remove_bars` defaults to `False` in eight places | bar removal is not optional; remove the flag |
-| 4 | `quality.py:1196-1223` | the size gate probes only the top CRF, never the chosen one | the check must run at the chosen CRF |
-| 5 | `quality.py:2291` | `success=True` regardless of the actual size | a grown encode is not a success |
-| 6 | `__main__.py:727` | prints `"N% larger"` as a success line | a grown encode must not be reported as success |
-| 7 | `PRODUCT.md:129-133`, `AGENTS.md:46-47`, `README.md` | "size alone never triggers a re-encode" for a modern codec | size alone **does** trigger it |
-| 8 | `config.py:86` | `min_source_size_gb` defaults to `0.0` | a size floor must exist by default |
+| 1 | `quality.py` codec gate | a modern codec with no bars returned "already efficient" before the search | **#128** — the branch is gone; every eligible file is probed |
+| 2 | `quality.py` crop detection | bars were checked only when `--remove-bars` was on | **#128** — detection is unconditional |
+| 3 | `__main__.py`, `app.py`, `quality.py`, `watch.py` | `remove_bars` defaulted to `False` in eight places | **#128** — the flag is gone from code, CLI, API and the plan fingerprint |
+| 4 | `find_optimal_crf_and_skip` | the size gate probed only the top CRF, never the chosen one | **#129** — the chosen CRF is re-checked |
+| 5 | `encode_with_quality` | `success=True` regardless of the actual size | **#130** — a grown encode is a failure |
+| 6 | `__main__.py` encode report | printed `"N% larger"` as a success line | **#130** — the branch is removed |
+| 7 | `PRODUCT.md`, `AGENTS.md`, `README.md` | "size alone never triggers a re-encode" for a modern codec | corrected in the same change as this file |
+| 8 | `config.py` | `min_source_size_gb` defaulted to `0.0` | **#19** — the floor exists by default |
 
-Items 1-6 are code defects, tracked in [ISSUES.md](../ISSUES.md) §35 and §36; item 7 is corrected
-in the same change as this file.
+Item 3 also needed a schema migration: a plan stored while the flag existed was probed
+*without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
+Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
 
 ## The one open question
 

@@ -822,7 +822,6 @@ class TestEncodeLock(unittest.TestCase):
                         overwrite=False,
                         quality=True,
                         target_vmaf=95.0,
-                        remove_bars=False,
                         verify=False,
                         workers=1,
                         threads=None,

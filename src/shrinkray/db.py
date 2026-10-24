@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -96,7 +96,6 @@ CREATE TABLE IF NOT EXISTS plans (
     crf_high INTEGER NOT NULL,
     sample_count INTEGER NOT NULL,
     sample_seconds REAL NOT NULL,
-    remove_bars INTEGER NOT NULL,
     crop_sample_count INTEGER NOT NULL DEFAULT 3,
     vmaf_statistic TEXT NOT NULL DEFAULT 'min',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -307,6 +306,41 @@ MIGRATIONS = {
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_retained_file ON retained(file_id)",
+    ],
+    15: [
+        # bar removal is part of every re-encode, so remove_bars stopped being
+        # a decision input (issue #128). A plan stored while the flag existed
+        # was probed WITHOUT a crop when the flag was off, so reusing it would
+        # encode the film with its bars kept - the exact thing the rule forbids.
+        # Rebuilding the table drops every such row: the plans are re-probed on
+        # the next run, which is the correct answer, not a guess.
+        """
+        CREATE TABLE plans_v15 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            chosen_crf INTEGER,
+            achieved_vmaf REAL,
+            crop TEXT,
+            probes TEXT,
+            skipped_reason TEXT,
+            estimated_size INTEGER,
+            input_mtime REAL NOT NULL,
+            input_size INTEGER NOT NULL,
+            encoder TEXT NOT NULL,
+            encoder_preset TEXT NOT NULL,
+            target_vmaf REAL NOT NULL,
+            crf_low INTEGER NOT NULL,
+            crf_high INTEGER NOT NULL,
+            sample_count INTEGER NOT NULL,
+            sample_seconds REAL NOT NULL,
+            crop_sample_count INTEGER NOT NULL DEFAULT 3,
+            vmaf_statistic TEXT NOT NULL DEFAULT 'min',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """,
+        "DROP TABLE plans",
+        "ALTER TABLE plans_v15 RENAME TO plans",
+        "CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id)",
     ],
 }
 
@@ -602,7 +636,6 @@ def save_plan(
     crf_high: int,
     sample_count: int,
     sample_seconds: float,
-    remove_bars: bool,
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
 ) -> int:
@@ -631,7 +664,6 @@ def save_plan(
         crf_high (int): The search range's high bound (fingerprint).
         sample_count (int): Samples per probe (fingerprint).
         sample_seconds (float): Sample length (fingerprint).
-        remove_bars (bool): The remove_bars setting (fingerprint).
         crop_sample_count (int): The crop detector's sample count
             (fingerprint: more samples can only shrink the crop).
 
@@ -645,8 +677,8 @@ def save_plan(
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
             target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            remove_bars, crop_sample_count, vmaf_statistic
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            crop_sample_count, vmaf_statistic
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -665,7 +697,6 @@ def save_plan(
             crf_high,
             sample_count,
             sample_seconds,
-            int(remove_bars),
             crop_sample_count,
             vmaf_statistic,
         ),
@@ -722,7 +753,6 @@ def get_valid_plan(
     crf_range: tuple[int, int],
     sample_count: int,
     sample_seconds: float,
-    remove_bars: bool,
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
 ) -> sqlite3.Row | None:
@@ -743,7 +773,6 @@ def get_valid_plan(
         crf_range (tuple[int, int]): The pending encode's search range.
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
-        remove_bars (bool): The pending encode's remove_bars setting.
         crop_sample_count (int): The pending encode's crop sample count.
 
     Returns:
@@ -772,7 +801,6 @@ def get_valid_plan(
         or row["crf_high"] != crf_range[1]
         or row["sample_count"] != sample_count
         or abs(row["sample_seconds"] - sample_seconds) > 0.01
-        or bool(row["remove_bars"]) != remove_bars
         or int(row["crop_sample_count"]) != crop_sample_count
         or str(row["vmaf_statistic"]) != vmaf_statistic
     ):

@@ -693,7 +693,7 @@ def execute_plan(
     """Executes a plan job (probing only, no encodes).
 
     Args:
-        job (Job): The job (payload: path, target_vmaf, remove_bars).
+        job (Job): The job (payload: path, target_vmaf).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
@@ -734,7 +734,6 @@ def execute_plan(
                     "probe_encoder_preset", config.handbrake_probe_encoder_preset
                 ),
                 encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                remove_bars=payload.get("remove_bars", False),
                 cancel=cancel,
                 db_file=_db_file_of(connection),
                 encoder_threads=cap_threads(config.handbrake_max_threads),
@@ -778,7 +777,7 @@ def execute_encode(
 
     Args:
         job (Job): The job (payload: path, output_dir, quality, target_vmaf,
-            remove_bars, overwrite, workers).
+            overwrite, workers).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
@@ -838,7 +837,6 @@ def execute_encode(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset
                     ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    remove_bars=payload.get("remove_bars", False),
                     progress=progress,
                     cancel=cancel,
                     db_file=_db_file_of(connection),

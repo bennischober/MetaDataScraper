@@ -148,7 +148,6 @@
   )
   // per-run arming of the irreversible bar crop — never persisted, so a
   // fresh session always starts unarmed
-  let removeBars = $state(false)
 
   function persist() {
     localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
@@ -347,82 +346,15 @@
     }
   }
 
-  // ── the bars ceremony: the single gate for EVERY encode ──
-  // The confirmation carries the actual target list (never re-derived at
-  // confirm time) and is the only place an encode with bars armed passes
-  // through — movie page, bulk selection and ENCODE ALL all route here.
-  let pendingBarsTargets = $state<string[] | null>(null)
-  // a remove_bars RETRY replays the STORED payload after the same confirmation
-  // ceremony (issue #100): the confirm button enqueues this verbatim instead of
-  // rebuilding the payload from the live form state
-  let pendingRetryPayload: Record<string, unknown> | null = null
-  let barsConfirmEl: HTMLDivElement | null = $state(null)
-  let barsTrigger: HTMLElement | null = null
-  $effect(() => {
-    if (pendingBarsTargets) barsConfirmEl?.focus()
-  })
-  function closeBars() {
-    pendingBarsTargets = null
-    pendingRetryPayload = null
-    // the safe exit returns focus to wherever the encode was launched from
-    barsTrigger?.focus()
-    barsTrigger = null
-  }
-  function barsKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closeBars()
-      return
-    }
-    // keep Tab inside the alertdialog
-    if (e.key === 'Tab' && barsConfirmEl) {
-      const focusables = barsConfirmEl.querySelectorAll<HTMLElement>('button:not(:disabled)')
-      if (focusables.length < 2) return
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-  }
-  const barsAffectedList = $derived(
-    (pendingBarsTargets ?? []).filter((t) =>
-      scanPaths.some((p) => t.toLowerCase().startsWith(p.toLowerCase()))
-    )
-  )
-  // the ceremony names its targets honestly: a scan folder is NOT a movie —
-  // folder targets expand to the titles the library holds under them
-  const isMoviePath = (t: string) => /\.(mkv|mp4|avi|m4v|ts|webm|mov|wmv)$/i.test(t)
-  const barsMovieFiles = $derived((pendingBarsTargets ?? []).filter((t) => isMoviePath(t)))
-  const barsFolders = $derived((pendingBarsTargets ?? []).filter((t) => !isMoviePath(t)))
-  const barsTitlesInFolders = $derived(
-    movies.filter((m) =>
-      barsFolders.some((f) => m.path.toLowerCase().startsWith(f.toLowerCase()))
-    ).length
-  )
-
-  function requestEncode(paths: string[] | undefined, confirmed = false) {
-    const targets = paths ?? scanPaths
-    if (removeBars && !confirmed) {
-      // irreversible work demands explicit per-run confirmation naming
-      // the exact targets; the trigger is remembered so the safe exit
-      // (KEEP BARS / Escape) returns focus there
-      barsTrigger = document.activeElement as HTMLElement | null
-      pendingBarsTargets = targets
-      return
-    }
-    void enqueue('encode', paths, true)
-  }
+  // ── the encode-all confirmation: the single gate for a whole-library run ──
+  // Only ENCODE ALL asks, because it is the one action that can touch every
+  // title at once. Bar removal is not a choice any more (issue #128): every
+  // encode crops the bars it finds, so there is nothing to arm.
 
 
   async function enqueue(
     kind: 'scan' | 'plan' | 'encode',
     paths?: string[],
-    confirmed = false
   ) {
     if (pendingKind !== null) return
     if (kindQueued(kind)) {
@@ -436,14 +368,8 @@
       notice = paths ? 'select at least one movie' : 'at least one movie folder is required'
       return
     }
-    if (kind === 'encode' && !confirmed) {
-      // every encode routes through the ceremony
-      requestEncode(paths, false)
-      return
-    }
     pendingKind = kind
     persist()
-    pendingBarsTargets = null
     try {
       await api.enqueue({
         kind,
@@ -452,7 +378,6 @@
         output_dir: kind === 'encode' ? outputDir || undefined : undefined,
         quality: kind !== 'scan',
         target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
-        remove_bars: removeBars,
         workers: kind === 'scan' ? workers : null,
       })
       await refresh()
@@ -492,7 +417,7 @@
 
   // retry: re-enqueue the job with ITS OWN scope and parameters (never the
   // current form — a failed single-movie encode must not become a
-  // whole-library run); remove_bars routes through the ceremony
+  // whole-library run)
   async function retryJob(job: Job) {
     if (pendingKind !== null) return
     // a row of a removed kind is history only: it has no payload to replay
@@ -501,16 +426,7 @@
     // from the current form state would run the job with TODAY's knobs
     // while the history row records the original run - the row and the
     // execution would disagree. The payload IS the enqueue body.
-    const payload = job.payload as Record<string, unknown>
-    if (payload.remove_bars === true) {
-      // irreversible work keeps its explicit per-run ceremony, but the
-      // confirmation carries the STORED payload, not a form rebuild
-      barsTrigger = document.activeElement as HTMLElement | null
-      pendingRetryPayload = payload
-      pendingBarsTargets = jobPaths(job)
-      return
-    }
-    void replayJob(payload)
+    void replayJob(job.payload as Record<string, unknown>)
   }
 
   async function replayJob(payload: Record<string, unknown>) {
@@ -532,7 +448,7 @@
   // per-movie actions (encode/plan a single title from its page)
   async function encodeOne(path: string) {
     if (pendingKind !== null) return
-    requestEncode([path])
+    void enqueue('encode', [path])
   }
 
   // jobs → movie: a single-movie job row links to its title's detail page.
@@ -635,11 +551,6 @@
       </button>
     </nav>
     <div class="rail-foot">
-      {#if removeBars}
-        <span class="armed-chip mono" title="Remove-bars is armed for this session (set in Config). Encodes will crop bars after confirmation.">
-          ⚠ BARS ARMED
-        </span>
-      {/if}
       <button class="theme-toggle legend" onclick={() => (theme = theme === 'dark' ? 'light' : 'dark')}
         aria-label={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
@@ -726,7 +637,6 @@
           {movies}
           {selectedPaths}
           {targetVmaf}
-          {removeBars}
           scanning={kindQueued('scan')}
           pending={pendingKind !== null}
           runningMovie={runningProgress?.movie ?? null}
@@ -767,12 +677,10 @@
         <ConfigPage
           {scanPaths}
           {outputDir}
-          {removeBars}
           {targetVmaf}
           {workers}
           onpathsChange={(p) => { scanPaths = p; persist() }}
           onoutputChange={(o) => { outputDir = o; persist() }}
-          onbarsChange={(armed) => { removeBars = armed }}
           onvmafChange={(v) => { targetVmaf = v; persist() }}
           onworkersChange={(w) => { workers = w; persist() }}
         />
@@ -795,43 +703,8 @@
     </div>
     <div class="bars-buttons">
       <button class="mono deny" onclick={closeEncodeAll}>NOT NOW</button>
-      <button class="mono confirm primary" onclick={() => { pendingEncodeAll = false; requestEncode(undefined, true) }}>
+      <button class="mono confirm primary" onclick={() => { pendingEncodeAll = false; void enqueue('encode', undefined) }}>
         ENCODE ALL
-      </button>
-    </div>
-  </div>
-{/if}
-
-<!-- ══ irreversible-work confirmation strip (global; echoes the ACTUAL targets) ══ -->
-{#if pendingBarsTargets}
-  <div class="bars-confirm" role="alertdialog" aria-label="Confirm irreversible bar removal" tabindex="-1" bind:this={barsConfirmEl} onkeydown={barsKeydown}>
-    <div class="bars-text">
-      <strong>BARS WILL BE CROPPED PERMANENTLY.</strong>
-      {#if barsMovieFiles.length > 0}
-        {barsMovieFiles.length} movie{barsMovieFiles.length === 1 ? '' : 's'}: {barsMovieFiles.map((t) => t.split(/[\\/]/).pop()!.replace(/\.(mkv|mp4|avi|m4v|ts|webm|mov|wmv)$/i, '')).join(' · ')}
-      {/if}
-      {#if barsMovieFiles.length > 0 && barsFolders.length > 0}+{/if}
-      {#if barsFolders.length > 0}
-        {barsFolders.length} folder{barsFolders.length === 1 ? '' : 's'} ({barsTitlesInFolders} title{barsTitlesInFolders === 1 ? '' : 's'}): {barsFolders.join(' · ')}
-      {/if}
-      — there is no undo.
-    </div>
-    <div class="bars-buttons">
-      <button class="mono deny" onclick={closeBars}>KEEP BARS</button>
-      <button class="mono confirm" onclick={() => {
-        if (pendingRetryPayload) {
-          // a retried remove_bars job replays its STORED payload (issue #100)
-          const stored = pendingRetryPayload
-          pendingRetryPayload = null
-          pendingBarsTargets = null
-          void replayJob(stored)
-          return
-        }
-        const t = pendingBarsTargets!
-        pendingBarsTargets = null
-        enqueue('encode', t, true)
-      }}>
-        CROP {barsMovieFiles.length + barsTitlesInFolders} MOVIE{barsMovieFiles.length + barsTitlesInFolders === 1 ? '' : 'S'}
       </button>
     </div>
   </div>
@@ -936,16 +809,6 @@
        24px-minimum hit target */
     font-size: var(--fs-data);
     min-height: 24px;
-  }
-  .armed-chip {
-    color: var(--red);
-    border: 1px solid var(--red);
-    border-radius: var(--radius);
-    padding: 5px 10px;
-    font-size: 10px;
-    letter-spacing: 1px;
-    text-align: center;
-    background: repeating-linear-gradient(45deg, rgba(242, 114, 101, 0.1) 0 4px, transparent 4px 8px), var(--panel);
   }
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
   .watcher.on { color: var(--teal-ink); border-color: var(--teal); }

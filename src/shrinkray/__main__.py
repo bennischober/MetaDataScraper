@@ -379,14 +379,6 @@ def encode(
         max=100.0,
         help="VMAF quality floor for --quality mode.",
     ),
-    remove_bars: bool = typer.Option(
-        False,
-        "--remove-bars",
-        help=(
-            "Quality mode: detect stable baked-in black bars (letterbox) and "
-            "crop them away (irreversible, opt-in)."
-        ),
-    ),
     crop_samples: int = typer.Option(
         10,
         "--crop-samples",
@@ -504,7 +496,6 @@ def encode(
             overwrite,
             quality,
             target_vmaf,
-            remove_bars,
             verify,
             workers,
             threads,
@@ -630,7 +621,6 @@ def _record_encodes(
     overwrite: bool,
     quality: bool,
     target_vmaf: float,
-    remove_bars: bool,
     verify: bool,
     workers: int,
     threads: int | None,
@@ -654,7 +644,6 @@ def _record_encodes(
         overwrite (bool): Whether existing output files may be replaced.
         quality (bool): Use VMAF-driven quality mode.
         target_vmaf (float): VMAF quality floor for quality mode.
-        remove_bars (bool): Crop stable baked-in black bars (quality mode).
         verify (bool): Full-file VMAF verification after each encode.
         workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
@@ -712,7 +701,6 @@ def _record_encodes(
                             output_dir / movie.name,
                             target_vmaf=target_vmaf,
                             encoder=config.handbrake_encoder,
-                            remove_bars=remove_bars,
                             db_file=db_file,
                             encoder_threads=cap_threads(threads or config.handbrake_max_threads),
                             progress=quality_progress,
@@ -812,9 +800,6 @@ def plan(
         max=100.0,
         help="VMAF quality floor for the quality plan.",
     ),
-    remove_bars: bool = typer.Option(
-        False, "--remove-bars", help="Include black-bar removal in the plan."
-    ),
     crop_samples: int = typer.Option(
         10,
         "--crop-samples",
@@ -904,7 +889,6 @@ def plan(
                     movie,
                     target_vmaf=target_vmaf,
                     encoder=config.handbrake_encoder,
-                    remove_bars=remove_bars,
                     db_file=db_file,
                     encoder_threads=threads_cap,
                     probe_encoder_preset=probe_encoder_preset,
@@ -942,7 +926,7 @@ def plan(
                 f"{result.achieved_vmaf:.2f}" if result.achieved_vmaf else "",
                 f"{est_gb:.2f} GB",
                 f"{saved}%",
-                "bars removed" if remove_bars else "",
+                "bars removed" if result.crop is not None else "",
             )
 
         console.print(table)
@@ -1166,9 +1150,6 @@ def watch_mode(
         max=100.0,
         help="VMAF quality floor.",
     ),
-    remove_bars: bool = typer.Option(
-        False, "--remove-bars", help="Detect and crop stable black bars."
-    ),
     crop_samples: int = typer.Option(
         10,
         "--crop-samples",
@@ -1212,7 +1193,6 @@ def watch_mode(
             inbox,
             output_dir,
             target_vmaf=target_vmaf,
-            remove_bars=remove_bars,
             encoder=config.handbrake_encoder,
             probe_encoder_preset=config.handbrake_probe_encoder_preset,
             encoder_preset=config.handbrake_encoder_preset,
