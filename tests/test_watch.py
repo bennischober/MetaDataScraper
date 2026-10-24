@@ -362,8 +362,8 @@ class TestWatch(unittest.TestCase):
                     out,
                     once=True,
                     db_file=Path(tmp) / "test.db",
-                    probe_encoder_preset="faster",
-                    encoder_preset="slower",
+                    probe_encoder_preset="2",
+                    encoder_preset="8",
                 )
             self.assertEqual(seen, [Path(tmp) / "test.db"])
 
@@ -393,10 +393,10 @@ class TestWatch(unittest.TestCase):
                     inbox,
                     out,
                     once=True,
-                    probe_encoder_preset="faster",
-                    encoder_preset="slower",
+                    probe_encoder_preset="2",
+                    encoder_preset="8",
                 )
-            self.assertEqual(seen, [("faster", "slower")])
+            self.assertEqual(seen, [("2", "8")])
 
 
 class TestAdaptivePoll(unittest.TestCase):

@@ -102,7 +102,7 @@ class TestPlans(unittest.TestCase):
         file_id, movie = self._file()
         self._save(file_id)
         # any changed decision input invalidates
-        self.assertIsNone(self._lookup(movie, encoder_preset="slow"))
+        self.assertIsNone(self._lookup(movie, encoder_preset="6"))
         self.assertIsNone(self._lookup(movie, target_vmaf=93.0))
         self.assertIsNone(self._lookup(movie, crf_range=(16, 30)))
         self.assertIsNone(self._lookup(movie, sample_count=5))
@@ -166,8 +166,8 @@ class TestRecordPlan(unittest.TestCase):
             remove_bars=False,
             crop_sample_count=10,
             vmaf_statistic="mean",
-            encoder_preset="medium",
-            probe_encoder_preset="medium",
+            encoder_preset="5",
+            probe_encoder_preset="5",
             hdr=False,
             encoder="x265",
         )
@@ -209,8 +209,8 @@ class TestRecordPlan(unittest.TestCase):
             remove_bars=False,
             crop_sample_count=10,
             vmaf_statistic="mean",
-            encoder_preset="medium",
-            probe_encoder_preset="medium",
+            encoder_preset="5",
+            probe_encoder_preset="5",
             hdr=False,
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()

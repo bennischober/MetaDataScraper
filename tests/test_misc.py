@@ -111,12 +111,12 @@ class TestEncoderPresetConfig(unittest.TestCase):
     def test_default_presets_are_split(self):
         conf = config_helper.Conf({})
         # probe = measurement setting, final = output setting (issue #22)
-        self.assertEqual(conf.handbrake_probe_encoder_preset, "medium")
-        self.assertEqual(conf.handbrake_encoder_preset, "slow")
+        self.assertEqual(conf.handbrake_probe_encoder_preset, "5")
+        self.assertEqual(conf.handbrake_encoder_preset, "3")
 
     def test_config_value_overrides_default(self):
-        conf = config_helper.Conf({"handbrake": {"encoder_preset": "slow"}})
-        self.assertEqual(conf.handbrake_encoder_preset, "slow")
+        conf = config_helper.Conf({"handbrake": {"encoder_preset": "6"}})
+        self.assertEqual(conf.handbrake_encoder_preset, "6")
 
     def test_invalid_preset_is_rejected_at_load(self):
         # a value outside the encoder's vocabulary must never reach HandBrake
@@ -187,8 +187,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
         # hours-long healthy encodes:
         #   encode.py: the _encode_with_command non-streamed branch
         #   quality.py: the _run simple branch
-        "encode.py": (378,),
-        "quality.py": (422,),
+        "encode.py": (382,),
+        "quality.py": (429,),
     }
 
     def _run_calls(self, tree: ast.AST) -> list[ast.Call]:

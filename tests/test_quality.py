@@ -234,20 +234,20 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(plain[plain.index("--crop") + 1], "0:0:0:0")
 
     def test_build_encode_command_threads(self):
-        """The quality pipeline passes the cap via --encopts threads=N."""
+        """The quality pipeline passes the cap via --encopts pin=N."""
         command = quality.build_encode_command(
             "hb",
             Path("in.mkv"),
             Path("out.mkv"),
             20,
-            "x265",
+            "svt_av1",
             "medium",
             encoder_threads=6,
         )
         self.assertIn("--encopts", command)
-        self.assertIn("threads=6", command)
+        self.assertIn("pin=6", command)
         plain = quality.build_encode_command(
-            "hb", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
+            "hb", Path("in.mkv"), Path("out.mkv"), 20, "svt_av1", "medium"
         )
         self.assertNotIn("--encopts", plain)
 
@@ -287,16 +287,17 @@ class TestPlanReuse(unittest.TestCase):
             input_size=movie.stat().st_size,
             output_size=movie.stat().st_size // 2,
             skipped_reason=overrides.pop("skipped_reason", None),
-            encoder_preset="medium",
+            encoder_preset="3",
+            probe_encoder_preset="5",
             remove_bars=False,
             crop=None,
-            crf_range=overrides.pop("crf_range", (14, 32)),
+            crf_range=overrides.pop("crf_range", quality.DEFAULT_CRF_RANGE),
             sample_count=quality.sample_count_for(600.0, quality.DEFAULT_SAMPLE_EVERY),
             sample_seconds=10.0,
             hdr=overrides.pop("hdr", False),
-            encoder=overrides.pop("encoder", "x265"),
+            encoder=overrides.pop("encoder", "svt_av1"),
         )
-        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         record_plan = overrides.pop("record_plan", service.record_plan)
         record_plan(self.connection, movie, result, config)
 
@@ -358,7 +359,7 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(command[command.index("--quality") + 1], "21")
         # the caller (job worker / CLI) persists the result; the encodes row
         # carries the provenance
-        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         service.record_quality_results(self.connection, movie, result, config)
         row = self.connection.execute(
             "SELECT crf_source, plan_created_at FROM encodes ORDER BY id DESC LIMIT 1"
@@ -416,14 +417,14 @@ class TestPlanReuse(unittest.TestCase):
                 movie,
                 Path(self.tmp.name) / "out.mkv",
                 db_file=self.db_file,
-                probe_encoder_preset="medium",
-                encoder_preset="slow",
+                probe_encoder_preset="5",
+                encoder_preset="6",
             )
-        self.assertEqual(built, [("slow", "final")])  # final built ONCE at 'slow'
+        self.assertEqual(built, [("6", "final")])  # final built ONCE at '6'
         # both presets land on the result (provenance: which number produced
         # which measurement)
-        self.assertEqual(result.probe_encoder_preset, "medium")
-        self.assertEqual(result.encoder_preset, "slow")
+        self.assertEqual(result.probe_encoder_preset, "5")
+        self.assertEqual(result.encoder_preset, "6")
 
     def test_fingerprint_mismatch_runs_probe_path(self):
         movie = self._movie()
@@ -435,7 +436,7 @@ class TestPlanReuse(unittest.TestCase):
             # the plan fingerprint keys on the PROBE preset (issue #22): the
             # stored plan was probed at 'medium'; probing at 'veryslow' is a
             # mismatch => the plan is ignored and everything is measured
-            result, _ = self._encode(movie, probe_encoder_preset="veryslow")
+            result, _ = self._encode(movie, probe_encoder_preset="9")
         fake_probe.assert_called_once()
         self.assertEqual(result.chosen_crf, 20)
         self.assertEqual(result.crf_source, "probe")
@@ -450,7 +451,7 @@ class TestPlanReuse(unittest.TestCase):
             patch.object(quality, "_probe_movie") as fake_probe,
             patch.object(quality, "_tool_versions", return_value="hb 1.0"),
         ):
-            result, _ = self._encode(movie, encoder_preset="veryslow")
+            result, _ = self._encode(movie, encoder_preset="9")
         fake_probe.assert_not_called()
         self.assertEqual(result.crf_source, "plan")
 
@@ -520,11 +521,11 @@ class TestPlanReuse(unittest.TestCase):
             chosen_crf=18,
             achieved_vmaf=94.8,
             crf_range=quality.DEFAULT_HDR_CRF_RANGE,
-            encoder="x265_10bit",
+            encoder="svt_av1_10bit",
             hdr=True,
         )
         row = self.connection.execute("SELECT encoder FROM plans").fetchone()
-        self.assertEqual(row["encoder"], "x265_10bit")
+        self.assertEqual(row["encoder"], "svt_av1_10bit")
         # the encode side: same HDR file => the engine switches to 10-bit
         # and MUST find the plan under it
         with (
@@ -536,17 +537,17 @@ class TestPlanReuse(unittest.TestCase):
         fake_probe.assert_not_called()  # the plan replaces probing
         self.assertEqual(result.crf_source, "plan")
         self.assertEqual(result.chosen_crf, 18)
-        self.assertEqual(result.encoder, "x265_10bit")
+        self.assertEqual(result.encoder, "svt_av1_10bit")
 
 
 class TestProbeCache(unittest.TestCase):
     def test_probe_command_carries_probe_preset(self):
         """The probe encode's --encoder-preset is the PROBE preset (a
         measurement setting), not the final encode's (issue #22)."""
-        _score, encodes = self._probe(probe_encoder_preset="veryslow")
+        _score, encodes = self._probe(probe_encoder_preset="9")
         self.assertEqual(len(encodes), 1)
         command = encodes[0]
-        self.assertEqual(command[command.index("--encoder-preset") + 1], "veryslow")
+        self.assertEqual(command[command.index("--encoder-preset") + 1], "9")
 
     """The probe-encode cache (issue #24): per-sample measurements are
     content-addressed, so a re-run with the same inputs reuses them and a
@@ -584,7 +585,7 @@ class TestProbeCache(unittest.TestCase):
             "handbrake": "hb",
             "movie": self.movie,
             "sample_seconds": 10.0,
-            "encoder": "x265",
+            "encoder": "svt_av1",
             "probe_encoder_preset": "medium",
             "db_file": self.db_file,
         }
@@ -623,7 +624,7 @@ class TestProbeCache(unittest.TestCase):
                 "hb",
                 self.movie,
                 10.0,
-                "x265",
+                "svt_av1",
                 "medium",
                 db_file=None,
                 use_probe_cache=False,
@@ -657,7 +658,7 @@ class TestProbeCache(unittest.TestCase):
                 "hb",
                 self.movie,
                 10.0,
-                "x265",
+                "svt_av1",
                 "medium",
                 db_file=None,
                 use_probe_cache=False,
@@ -688,7 +689,7 @@ class TestProbeCache(unittest.TestCase):
                 "hb",
                 self.movie,
                 10.0,
-                "x265",
+                "svt_av1",
                 "medium",
                 db_file=None,
                 use_probe_cache=False,
@@ -718,8 +719,8 @@ class TestProbeCache(unittest.TestCase):
                 ),
             )
             common = {
-                "encoder": "x265",
-                "encoder_preset": "medium",
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
                 "target_vmaf": 95.0,
                 "crf_range": (14, 32),
                 "sample_count": 3,
@@ -744,8 +745,8 @@ class TestProbeCache(unittest.TestCase):
                 sample_seconds=10.0,
                 remove_bars=False,
                 target_vmaf=95.0,
-                encoder="x265",
-                encoder_preset="medium",
+                encoder="svt_av1",
+                encoder_preset="5",
             )
             self.assertIsNone(db.get_valid_plan(connection, movie, **common, vmaf_statistic="mean"))
             self.assertIsNotNone(
@@ -799,9 +800,9 @@ class TestProbeCache(unittest.TestCase):
 
     def test_cache_key_changes_with_encoder_and_preset(self):
         self._probe()
-        _score, encodes = self._probe(encoder="x265_10bit")
+        _score, encodes = self._probe(encoder="svt_av1_10bit")
         self.assertEqual(len(encodes), 1)  # different encoder => new key
-        _score2, encodes2 = self._probe(probe_encoder_preset="slow")
+        _score2, encodes2 = self._probe(probe_encoder_preset="6")
         self.assertEqual(len(encodes2), 1)  # different preset => new key
 
     def test_force_reprobe_bypasses_cache(self):
@@ -1068,8 +1069,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 estimated_size=None,
                 input_mtime=stat.st_mtime,
                 input_size=stat.st_size,
-                encoder="x265",
-                encoder_preset="medium",
+                encoder="svt_av1",
+                encoder_preset="5",
                 target_vmaf=95.0,
                 crf_low=14,
                 crf_high=32,
@@ -1079,8 +1080,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 crop_sample_count=3,
             )
             common = {
-                "encoder": "x265",
-                "encoder_preset": "medium",
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
                 "target_vmaf": 95.0,
                 "crf_range": (14, 32),
                 "sample_count": 3,

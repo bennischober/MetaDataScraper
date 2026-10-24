@@ -430,7 +430,8 @@ def encode(
         "--probe-encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the PROBE encodes "
-            "(a measurement setting; x264/x265 ladder). The final encode "
+            "(a measurement setting; SVT-AV1 speed 0-10, higher = slower). "
+            "The final encode "
             "runs --encoder-preset. Changing it invalidates stored plans "
             "(they are re-probed)."
         ),
@@ -440,7 +441,8 @@ def encode(
         "--encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the FINAL encode "
-            "(an output setting; x264/x265 ladder, e.g. slow). The probes "
+            "(an output setting; SVT-AV1 speed 0-10, higher = slower, "
+            "e.g. 3). The probes "
             "run --probe-encoder-preset."
         ),
     ),
@@ -751,7 +753,7 @@ def plan(
         "--probe-encoder-preset",
         help=(
             "Encoder speed preset for the probes (a measurement setting; "
-            "x264/x265 ladder). The plan's fingerprint keys on it."
+            "SVT-AV1 speed 0-10). The plan's fingerprint keys on it."
         ),
     ),
     encoder_preset: str = typer.Option(
