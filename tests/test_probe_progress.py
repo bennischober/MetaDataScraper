@@ -101,6 +101,30 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual(factor, 0.5)  # 4 bytes / 8 bytes
         self.assertEqual([e["detail"] for e in events], ["size probe (CRF 32)"])
 
+    def test_plan_extracts_samples_exactly_once(self):
+        """plan extracts the probe windows once, not once per phase.
+
+        Regression: find_optimal_crf_and_skip extracted its own samples for
+        the search and plan_quality extracted them again for the reported size
+        factor, so every window was decoded and written twice per plan (three
+        times before the size probe shared the search's list). The extraction is
+        a decode plus a write per window, so the multiplier is the whole cost.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(
+                    quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
+                ) as fake,
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                quality.plan_quality(src)
+        self.assertEqual(fake.call_count, 1)
+
     def test_plan_quality_threads_progress_to_pipeline(self):
         """plan_quality passes its progress callback into the probe pipeline
         (regression: plan jobs emitted one event per movie and then went

@@ -7,6 +7,15 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Changed
 
+- **`plan` extracts each probe window once instead of three times**: the
+  sample windows are extracted up front and the same list is handed to the CRF
+  search and to the reported size factor (issue #30). `find_optimal_crf_and_skip`
+  used to extract its own copy for the search while `plan_quality` extracted a
+  second one for the size estimate, and the size estimate used only the first
+  sample of that second list, so every window was decoded and written more than
+  once per plan. With the duration-based sample counts that multiplier applies
+  to a larger base cost. A fresh `encode` extracted twice for the same reason.
+
 - **The typing, lint and coverage bar is enforced, not aspirational**: every
   module under `src/shrinkray/` is now fully annotated and mypy runs with
   `disallow_untyped_defs`, `disallow_incomplete_defs`, `warn_return_any`,

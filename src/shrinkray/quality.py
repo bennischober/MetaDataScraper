@@ -1414,6 +1414,7 @@ def find_optimal_crf(
     encoder_threads: int | None = None,
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
+    samples: list[tuple[Path, float]] | None = None,
 ) -> tuple[int, float, list[SampleProbe]]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
@@ -1444,12 +1445,13 @@ def find_optimal_crf(
         RuntimeError: If sampling or probing failed.
         Cancelled: When the cancel event fires.
     """
-    samples: list[tuple[Path, float]] = [
-        (s.resolve(), offset)
-        for s, offset in extract_samples(
-            movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
-        )
-    ]
+    if samples is None:
+        samples = [
+            (s.resolve(), offset)
+            for s, offset in extract_samples(
+                movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
+            )
+        ]
 
     probes: list[SampleProbe] = []
 
@@ -1507,6 +1509,7 @@ def find_optimal_crf_and_skip(
     encoder_threads: int | None = None,
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
+    samples: list[tuple[Path, float]] | None = None,
 ) -> tuple[int, float, list[SampleProbe], bool]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
@@ -1538,12 +1541,13 @@ def find_optimal_crf_and_skip(
         tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
             that is True when the movie should NOT be re-encoded.
     """
-    samples: list[tuple[Path, float]] = [
-        (s.resolve(), offset)
-        for s, offset in extract_samples(
-            movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
-        )
-    ]
+    if samples is None:
+        samples = [
+            (s.resolve(), offset)
+            for s, offset in extract_samples(
+                movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
+            )
+        ]
 
     # highest CRF (smallest size) of the search range as the pessimistic
     # bound: if even the most aggressive setting cannot shrink the file,
@@ -1581,6 +1585,7 @@ def find_optimal_crf_and_skip(
         sample_seconds=sample_seconds,
         encoder=encoder,
         encoder_preset=encoder_preset,
+        samples=samples,
         crop=crop,
         hdr=hdr,
         cancel=cancel,
@@ -1606,6 +1611,7 @@ def plan_quality(
     encoder_threads: int | None = None,
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
+    samples: list[tuple[Path, float]] | None = None,
 ) -> QualityResult:
     """Probes a movie and predicts the outcome without encoding it.
 
@@ -1685,6 +1691,15 @@ def plan_quality(
     try:
         crop = detect_crop_rect(input_file, workdir) if remove_bars else None
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
+        # extract the windows once and hand the same list to the search and
+        # the reported size factor: each extraction decodes and writes every
+        # sample, so doing it per phase encoded each window three times
+        samples = [
+            (s.resolve(), offset)
+            for s, offset in extract_samples(
+                input_file, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
+            )
+        ]
         crf, achieved, probes, skip = find_optimal_crf_and_skip(
             input_file,
             workdir,
@@ -1702,11 +1717,12 @@ def plan_quality(
             encoder_threads=encoder_threads,
             progress=progress,
             use_probe_cache=use_probe_cache,
+            samples=samples,
         )
 
         input_size = input_file.stat().st_size
         factor = estimate_size_factor(
-            extract_samples(input_file, workdir, sample_count, sample_seconds, cancel=cancel),
+            samples,
             workdir,
             handbrake,
             crf,
