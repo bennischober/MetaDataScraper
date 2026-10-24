@@ -20,7 +20,7 @@ class TestWatch(unittest.TestCase):
         arrival (seen while younger than the grace period) was logged 'later'
         and then never reconsidered - silent starvation."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -38,9 +38,9 @@ class TestWatch(unittest.TestCase):
                 )
 
             with (
-                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.watch.STABLE_MIN_AGE", 3600.0),  # never stable
-                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.engine.watch.STABLE_MIN_AGE", 3600.0),  # never stable
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 watch_mod.watch(inbox, out, once=True)
                 self.assertEqual(seen, [])  # not stable => not encoded yet
@@ -58,7 +58,7 @@ class TestWatch(unittest.TestCase):
         the loop's `known` set does not contain it - so the next pass still
         sees the file (the old code consumed it on the first pass)."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -76,9 +76,9 @@ class TestWatch(unittest.TestCase):
                 return real_find(inbox_dir, extensions, known)
 
             with (
-                mock.patch("shrinkray.watch.STABLE_MIN_AGE", 3600.0),
-                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
-                mock.patch("shrinkray.watch.find_new_movies", side_effect=spy),
+                mock.patch("shrinkray.engine.watch.STABLE_MIN_AGE", 3600.0),
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.find_new_movies", side_effect=spy),
             ):
                 watch_mod.watch(inbox, out, once=True)
             self.assertIn("known", captured)
@@ -89,7 +89,7 @@ class TestWatch(unittest.TestCase):
         BEFORE any movie enters `known` (no probe-burning retry loop) and
         the movies stay eligible for a later pass."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -104,8 +104,8 @@ class TestWatch(unittest.TestCase):
                 return quality.QualityResult(input=m, output=o, success=True)
 
             with (
-                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.watch.disk_free_bytes", return_value=1_000_000),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.engine.watch.disk_free_bytes", return_value=1_000_000),
             ):
                 watch_mod.watch(inbox, out, once=True)
             # nothing was probed, nothing consumed
@@ -116,7 +116,7 @@ class TestWatch(unittest.TestCase):
         its own output (worst case: HandBrake writes its input's path) =>
         refused loudly at start."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -133,7 +133,7 @@ class TestWatch(unittest.TestCase):
         """The app's stop event ends the loop promptly (between passes and
         during the sleep) instead of leaving a daemon thread until exit."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -147,7 +147,7 @@ class TestWatch(unittest.TestCase):
 
     def test_find_new_movies(self):
 
-        from shrinkray.watch import find_new_movies
+        from shrinkray.engine.watch import find_new_movies
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp)
@@ -168,7 +168,7 @@ class TestWatch(unittest.TestCase):
 
     def test_acquire_and_release_lock(self):
 
-        from shrinkray.watch import acquire_lock, release_lock
+        from shrinkray.engine.watch import acquire_lock, release_lock
 
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "watch.lock"
@@ -184,7 +184,7 @@ class TestWatch(unittest.TestCase):
 
     def test_is_stable_min_age(self):
 
-        from shrinkray.watch import is_stable
+        from shrinkray.engine.watch import is_stable
 
         with tempfile.TemporaryDirectory() as tmp:
             fresh = Path(tmp) / "fresh.mkv"
@@ -195,7 +195,7 @@ class TestWatch(unittest.TestCase):
 
     def test_decide_too_short(self):
 
-        from shrinkray.watch import decide
+        from shrinkray.engine.watch import decide
 
         with tempfile.TemporaryDirectory() as tmp:
             # a real, very short movie file (valid media, below the minimum)
@@ -222,19 +222,19 @@ class TestWatch(unittest.TestCase):
                 capture_output=True,
                 check=True,
             )
-            self.assertEqual(decide(clip, 95.0, False, "x265"), "too short")
+            self.assertEqual(decide(clip, 95.0, "x265"), "too short")
 
         with tempfile.TemporaryDirectory() as tmp:
             # junk file (invalid media) => must not crash the decision
             junk = Path(tmp) / "junk.mkv"
             junk.write_bytes(b"not a movie")
-            self.assertEqual(decide(junk, 95.0, False, "x265"), "encode")
+            self.assertEqual(decide(junk, 95.0, "x265"), "encode")
 
     def test_watch_pass_encodes_with_quality(self):
         """The watch loop encodes via the quality engine (same skip rules,
         same CRF search as CLI/jobs) - not the old fixed-preset path."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
         from shrinkray.quality import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,8 +263,8 @@ class TestWatch(unittest.TestCase):
                 )
 
             with (
-                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 watch_mod.watch(inbox, out, once=True)
             # quality engine got the movie with the thread cap and wrote
@@ -276,7 +276,7 @@ class TestWatch(unittest.TestCase):
         """A quality skip (no size gain / unreachable) is surfaced as a
         skip log, not an encode error."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
         from shrinkray.quality import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,8 +299,8 @@ class TestWatch(unittest.TestCase):
                 )
 
             with (
-                mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality),
-                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 watch_mod.watch(inbox, out, once=True)
 
@@ -308,7 +308,7 @@ class TestWatch(unittest.TestCase):
         """A busy encode slot (CLI/job running) retries the movie on the
         next pass instead of failing it."""
 
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
         from shrinkray.engine.lock import EncodeBusyError
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -326,8 +326,8 @@ class TestWatch(unittest.TestCase):
                 raise EncodeBusyError(f"another encode is running in '{out}'")
 
             with (
-                mock.patch("shrinkray.watch.encode_with_quality", side_effect=busy),
-                mock.patch("shrinkray.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=busy),
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
                 # must not raise: the movie is eligible again next pass
                 watch_mod.watch(inbox, out, once=True)
@@ -336,7 +336,7 @@ class TestWatch(unittest.TestCase):
         """The db path given to watch() reaches encode_with_quality as
         db_file= (stall-telemetry wiring; the watchdog fix scoped it to
         the quality path only, watch mode was left without telemetry)."""
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -356,7 +356,7 @@ class TestWatch(unittest.TestCase):
             old = time.time() - 7200
             os.utime(movie, (old, old))
 
-            with mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality):
+            with mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality):
                 watch_mod.watch(
                     inbox,
                     out,
@@ -370,7 +370,7 @@ class TestWatch(unittest.TestCase):
     def test_presets_reach_encode_with_quality(self):
         """Both presets reach the engine from watch() (issue #22: the probe
         preset is a measurement setting, the final preset an output one)."""
-        from shrinkray import watch as watch_mod
+        from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -388,7 +388,7 @@ class TestWatch(unittest.TestCase):
             old = time.time() - 7200
             os.utime(movie, (old, old))
 
-            with mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality):
+            with mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality):
                 watch_mod.watch(
                     inbox,
                     out,
@@ -401,7 +401,7 @@ class TestWatch(unittest.TestCase):
 
 class TestAdaptivePoll(unittest.TestCase):
     def test_idle_growth_caps_at_max(self):
-        from shrinkray.watch import next_poll_interval
+        from shrinkray.engine.watch import next_poll_interval
 
         # idle polls double the interval up to 4x the base: 60 -> 120 -> 240 -> 240
         interval = 60.0
@@ -415,14 +415,14 @@ class TestAdaptivePoll(unittest.TestCase):
         self.assertEqual(interval, 240.0)
 
     def test_activity_resets_to_base(self):
-        from shrinkray.watch import next_poll_interval
+        from shrinkray.engine.watch import next_poll_interval
 
         # any new candidate (even skipped/unstable ones) resets to the base
         self.assertEqual(next_poll_interval(240.0, 60.0, True), 60.0)
         self.assertEqual(next_poll_interval(60.0, 60.0, True), 60.0)
 
     def test_non_default_base(self):
-        from shrinkray.watch import next_poll_interval
+        from shrinkray.engine.watch import next_poll_interval
 
         # growth is capped relative to the given base, not the default
         interval = 5.0
