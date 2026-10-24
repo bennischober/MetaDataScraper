@@ -31,6 +31,7 @@ from shrinkray.config import ENCODER_PRESETS, Conf, load_config
 from shrinkray.encode import cap_threads
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
+from shrinkray.quality import HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
 from shrinkray.watch import watch
 
@@ -1198,6 +1199,13 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "probe_encoder_preset": plan_row["encoder_preset"],
                 "target_vmaf": plan_row["target_vmaf"],
                 "stale": not file_ok,
+                # the HDR estimate bias note (issue #98): derived, not stored -
+                # the files row's hdr flag is the same one the plan used
+                "estimate_note": (
+                    HDR_ESTIMATE_NOTE
+                    if row["hdr"] and plan_row["estimated_size"] and not plan_row["skipped_reason"]
+                    else None
+                ),
             }
     return {
         "file": {

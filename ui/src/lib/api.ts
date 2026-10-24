@@ -136,6 +136,9 @@ export interface MoviePlan {
   probe_encoder_preset?: string | null
   target_vmaf: number | null
   stale: boolean
+  /** the HDR estimate bias note (issue #98): present only for HDR titles with
+   * a live estimate — the prediction comes from one easy-content window */
+  estimate_note?: string | null
 }
 
 export interface Movie {

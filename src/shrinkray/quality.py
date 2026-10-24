@@ -122,6 +122,18 @@ DEFAULT_TARGET_VMAF = 95.0
 # as an option. encoder_for() is the single source of this choice.
 DEFAULT_ENCODER = "svt_av1"
 HDR_ENCODER = "svt_av1_10bit"
+# HDR size estimates carry a measured, systematic bias (issue #98): the size
+# probe encodes ONE early window, and HDR samples skew toward easy content
+# (dark, static), so the predicted ratio lands far below the real one —
+# measured on an HDR 4K title: 19.1% real savings vs 78% predicted. The
+# estimate is still shown (it is the only prediction the pipeline has) but
+# every surface that shows it carries this note; the README documents the
+# same numbers. Quoted, never recomputed: the factor itself is a
+# measurement this codebase cannot remake without the original title.
+HDR_ESTIMATE_NOTE = (
+    "HDR estimate: measured on one easy-content window; real savings run "
+    "much lower (measured 19.1% real vs 78% predicted on an HDR 4K title)"
+)
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
 # 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
