@@ -179,6 +179,38 @@ existing video collection" and nothing more specific.
   letterboxing, HDR, an aspect-ratio change) — a stub-based test cannot.
   Never commit the media itself, and never reference these filenames in code,
   tests or docs: the set of files in the folder is the operator's business.
+- **Module layout (decision record, issue #63).** Three shallow subpackages
+  will hold the product, split by reason-to-change — this is the agreed target
+  every refactor PR moves toward, not a daily obligation:
+
+    ```
+    src/shrinkray/
+      __main__.py      CLI: parse arguments, call service/engine, render. No business logic.
+      config.py        pure data; loading it has no side effects
+      logger.py  db.py  telemetry.py  report.py  service.py
+      tools/           the subprocess boundary: the only code that runs an external binary
+        process.py       one runner: argument lists, timeout, stall watchdog, priority, termination
+        ffprobe.py  vmaf.py  handbrake.py
+      engine/          the product: "is this file bigger than its quality requires?"
+        scan.py  crop.py  samples.py  search.py  encoders.py  plan.py  pipeline.py  lock.py  watch.py
+      server/          the network surface: nothing else listens on a socket
+        app.py  routes_*.py  security.py  jobs.py
+    ```
+
+  **Imports only go downward** (entry points → service → engine → tools →
+  foundation), to be enforced by an `import-linter` layers contract as a
+  seventh gate command (`uv run lint-imports`) once the tree satisfies it.
+  Until then the rule is discipline: no new code may add an upward import
+  (`tools` importing `engine`, `engine` importing `server`, foundation
+  importing anything above itself) or a function-level `shrinkray` import
+  to dodge a cycle. Other standing rules from the record: **no
+  `helpers`/`utils`/`common` module** (a function lives with its concern
+  or its only caller — `helpers.py` dissolves into its callers);
+  **one implementation per external fact** (only `tools/ffprobe.py` runs and
+  parses ffprobe, only `engine/encoders.py` decides the encoder for HDR/SDR,
+  only `engine/crop.py` detects bars); **tests mirror the layout**
+  (`tests/engine/test_search.py`, ...). Full record with the phase order and
+  the move table: issue #63.
 - **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`,
   `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*

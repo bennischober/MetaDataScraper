@@ -156,7 +156,8 @@ decoration per user preference).
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light), an HTML report, and a per-module test
   suite as implementation evidence.
-- Engine modules: `src/shrinkray/{quality,encode,watch,jobs,db,app}.py`.
+- Engine modules: `src/shrinkray/{quality,encode,watch,jobs,db,app}.py`
+  (agreed target layout: `tools/`, `engine/`, `server/` subpackages — issue #63).
 
 ## Product Principles
 
