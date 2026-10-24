@@ -403,6 +403,7 @@ def _conf_to_dict(conf: Conf) -> dict:
         "eligibility": {
             "min_source_height": conf.min_source_height,
             "min_source_size_gb": conf.min_source_size_gb,
+            "candidate_codecs": conf.candidate_codecs,
         },
         "language": conf.language,
     }
@@ -1142,6 +1143,7 @@ def watch_control(
                     db_file=s.db_file,
                     min_source_height=load_config().min_source_height,
                     min_source_size_gb=load_config().min_source_size_gb,
+                    candidate_codecs=tuple(load_config().candidate_codecs),
                 )
             except Exception as e:  # the thread must never die silently
                 log_error(f"watch loop crashed: {e}")

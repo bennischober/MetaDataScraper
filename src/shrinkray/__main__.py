@@ -568,6 +568,7 @@ def _record_encodes(
                             encoder_preset=encoder_preset,
                             min_source_height=config.min_source_height,
                             min_source_size_gb=config.min_source_size_gb,
+                            candidate_codecs=tuple(config.candidate_codecs),
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(

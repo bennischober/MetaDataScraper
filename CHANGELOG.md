@@ -7,6 +7,18 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **The source-codec gate (PRODUCT.md's candidate rule)**: an H.264 source
+  is a candidate on size alone, while an HEVC or AV1 source is already
+  efficient and becomes a candidate only when it has black bars to remove
+  (issue #20). Anything older than H.264 is never re-encoded. An HEVC/AV1
+  source without `--remove-bars`, or with no bars actually detected, is
+  skipped as `already efficient`; the bars that justify its encode are
+  detected once by the gate and then applied, rather than sampled a second
+  time. `eligibility.candidate_codecs` (default `["h264"]`) names the
+  codecs that are candidates on size alone. An unreadable codec is probed
+  rather than excluded: an unknown value must never silently drop a file the
+  operator expected to be considered.
+
 - **A minimum-size gate**: `eligibility.min_source_size_gb` (default 0, off)
   skips a source below the configured size with the reason `below min size`,
   before sample extraction or any probe encode (issue #19). Probe cost is
