@@ -764,7 +764,7 @@ def encode_movies(
     # is writing a truncated in-flight output right now - without the slot,
     # the filter below would classify that file as debris and delete a live
     # encode's output.
-    from shrinkray.encode_lock import guard_encodes
+    from shrinkray.engine.lock import guard_encodes
 
     with guard_encodes(output_dir, holder="encode"):
         # filter inside the slot (deterministic, before any encoding); the

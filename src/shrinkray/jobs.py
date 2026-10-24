@@ -788,7 +788,7 @@ def execute_encode(
     """
     from shrinkray.config import load_config
     from shrinkray.encode import encode_movies
-    from shrinkray.encode_lock import EncodeBusyError
+    from shrinkray.engine.lock import EncodeBusyError
     from shrinkray.quality import encode_with_quality
     from shrinkray.service import (
         finished_movies,

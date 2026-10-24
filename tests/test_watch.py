@@ -309,7 +309,7 @@ class TestWatch(unittest.TestCase):
         next pass instead of failing it."""
 
         from shrinkray import watch as watch_mod
-        from shrinkray.encode_lock import EncodeBusyError
+        from shrinkray.engine.lock import EncodeBusyError
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"

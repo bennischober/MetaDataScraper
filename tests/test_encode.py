@@ -591,7 +591,7 @@ class TestEncodeLock(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_acquire_and_release(self):
-        from shrinkray.encode_lock import guard_encodes
+        from shrinkray.engine.lock import guard_encodes
 
         with guard_encodes(self.out, holder="test") as lock:
             self.assertTrue(lock.is_file())
@@ -600,7 +600,7 @@ class TestEncodeLock(unittest.TestCase):
         self.assertFalse(lock.exists())
 
     def test_second_claimant_is_rejected(self):
-        from shrinkray.encode_lock import EncodeBusyError, guard_encodes
+        from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 
         with guard_encodes(self.out), self.assertRaises(EncodeBusyError) as ctx:
             guard_encodes(self.out).__enter__()
@@ -608,7 +608,7 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_stale_lock_is_stolen(self):
         """A lock whose pid is dead is stolen (not honored forever)."""
-        from shrinkray.encode_lock import _lock_path, acquire_encode_slot
+        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
@@ -620,7 +620,7 @@ class TestEncodeLock(unittest.TestCase):
         lock.unlink()
 
     def test_garbage_lock_content_is_stolen(self):
-        from shrinkray.encode_lock import _lock_path, acquire_encode_slot
+        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
@@ -658,7 +658,7 @@ class TestEncodeLock(unittest.TestCase):
         """encode_movies propagates EncodeBusyError (no clobber, no swallow)."""
         import tempfile
 
-        from shrinkray.encode_lock import EncodeBusyError, guard_encodes
+        from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "movie.mkv"
