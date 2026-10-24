@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS encodes (
     chosen_crf INTEGER,
     achieved_vmaf REAL,
     encoder_preset TEXT,
+    probe_encoder_preset TEXT,
     encode_seconds REAL,
     probe_count INTEGER,
     probe_seconds REAL,
@@ -249,6 +250,15 @@ MIGRATIONS = {
         # VMAF reuses the probes already measured and a re-run of the same
         # plan does not re-encode them. force_reprobe bypasses this cache.
         "__probe_cache_table__",
+    ],
+    11: [
+        # two encoder presets (issue #22): the probe preset (a measurement
+        # setting) and the final preset (an output setting) are recorded
+        # separately, so a drift investigation can tell which number
+        # produced which measurement. plans.encoder_preset keeps holding
+        # the PROBE preset (a plan is a probe result; its fingerprint keys
+        # on the probe preset only).
+        "ALTER TABLE encodes ADD COLUMN probe_encoder_preset TEXT",
     ],
 }
 
@@ -555,7 +565,8 @@ def save_plan(
         input_mtime (float): The file's mtime at plan time (fingerprint).
         input_size (int): The file's size at plan time (fingerprint).
         encoder (str): The encoder used (fingerprint).
-        encoder_preset (str): The speed preset used (fingerprint).
+        encoder_preset (str): The PROBE's speed preset (fingerprint; a plan
+            is a probe result, issue #22).
         target_vmaf (float): The VMAF target (fingerprint).
         crf_low (int): The search range's low bound (fingerprint).
         crf_high (int): The search range's high bound (fingerprint).
@@ -661,7 +672,8 @@ def get_valid_plan(
         connection (sqlite3.Connection): The database connection.
         path (Path): The movie file path.
         encoder (str): The encoder of the pending encode.
-        encoder_preset (str): The speed preset of the pending encode.
+        encoder_preset (str): The PROBE's speed preset of the pending
+            encode (a plan is a probe result, issue #22).
         target_vmaf (float): The VMAF target of the pending encode.
         crf_range (tuple[int, int]): The pending encode's search range.
         sample_count (int): The pending encode's sample count.
@@ -724,6 +736,7 @@ def add_encode(
     chosen_crf: int | None = None,
     achieved_vmaf: float | None = None,
     encoder_preset: str | None = None,
+    probe_encoder_preset: str | None = None,
     encode_seconds: float | None = None,
     probe_count: int | None = None,
     probe_seconds: float | None = None,
@@ -753,6 +766,11 @@ def add_encode(
         saved_percent (float): Saved percentage.
         chosen_crf (int | None): The CRF chosen by the quality search, if any.
         achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
+        encoder_preset (str | None): The FINAL encode's speed preset
+            (an output setting, issue #22).
+        probe_encoder_preset (str | None): The PROBE's speed preset (a
+            measurement setting, issue #22) — which preset produced the
+            measurements this encode's CRF decision rests on.
         input_bitrate (float | None): Source bitrate in MBit/s (drift data).
         output_bitrate (float | None): Encode bitrate in MBit/s (drift data).
         source_file (str | None): The absolute path of the encode's input.
@@ -773,13 +791,14 @@ def add_encode(
         """
         INSERT INTO encodes (
             file_id, preset, encoder, input_size, output_size, saved_percent,
-            chosen_crf, achieved_vmaf, encoder_preset, encode_seconds,
+            chosen_crf, achieved_vmaf, encoder_preset, probe_encoder_preset,
+            encode_seconds,
             probe_count, probe_seconds, hdr, source_width, source_height,
             source_codec, source_duration, tool_versions,
             input_bitrate, output_bitrate, source_file, output_file, generation,
             crf_source, plan_created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -791,6 +810,7 @@ def add_encode(
             chosen_crf,
             achieved_vmaf,
             encoder_preset,
+            probe_encoder_preset,
             encode_seconds,
             probe_count,
             probe_seconds,

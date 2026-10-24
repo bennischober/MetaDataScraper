@@ -127,6 +127,10 @@ def record_plan(
     # result is the single source of truth for all of them (the engine's
     # plan-reuse lookup matches on exactly this fingerprint)
     encoder = result.encoder or config.handbrake_encoder
+    # the plan fingerprint keys on the PROBE preset (issue #22 decision): a
+    # stored plan is a probe result, its CRF depends on the probe preset
+    # only - the plans.encoder_preset column holds the probe preset
+    probe_preset = result.probe_encoder_preset or result.encoder_preset or "medium"
     return db.save_plan(
         connection,
         row["id"],
@@ -141,7 +145,7 @@ def record_plan(
         stat.st_mtime,
         stat.st_size,
         encoder,
-        result.encoder_preset or "medium",
+        probe_preset,
         result.target_vmaf,
         result.crf_range[0],
         result.crf_range[1],
@@ -161,6 +165,7 @@ def save_encode(
     chosen_crf: int | None = None,
     achieved_vmaf: float | None = None,
     encoder_preset: str | None = None,
+    probe_encoder_preset: str | None = None,
     encode_seconds: float | None = None,
     probe_count: int | None = None,
     probe_seconds: float | None = None,
@@ -189,7 +194,10 @@ def save_encode(
         output_size (int): Output size in bytes.
         chosen_crf (int | None): The CRF chosen by the quality search, if any.
         achieved_vmaf (float | None): The VMAF measured at the chosen CRF.
-        encoder_preset (str | None): The speed preset used (benchmark data).
+        encoder_preset (str | None): The FINAL encode's speed preset (an
+            output setting, issue #22).
+        probe_encoder_preset (str | None): The PROBE's speed preset (a
+            measurement setting, issue #22).
         encode_seconds (float | None): Wall time of the encode (benchmark).
         probe_count (int | None): Number of probes in the search (benchmark).
         probe_seconds (float | None): Wall time of the probing (benchmark).
@@ -224,6 +232,7 @@ def save_encode(
         chosen_crf=chosen_crf,
         achieved_vmaf=achieved_vmaf,
         encoder_preset=encoder_preset,
+        probe_encoder_preset=probe_encoder_preset,
         encode_seconds=encode_seconds,
         probe_count=probe_count,
         probe_seconds=probe_seconds,
@@ -350,6 +359,7 @@ def record_quality_results(
             chosen_crf=result.chosen_crf,
             achieved_vmaf=result.achieved_vmaf,
             encoder_preset=result.encoder_preset,
+            probe_encoder_preset=result.probe_encoder_preset,
             encode_seconds=result.encode_seconds,
             probe_count=len(result.probes),
             probe_seconds=result.probe_seconds,

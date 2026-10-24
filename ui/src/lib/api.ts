@@ -70,6 +70,8 @@ export interface EncodeInfo {
   saved_percent: number | null
   /** schema v5 benchmark metrics */
   encoder_preset?: string | null
+  /** schema v11: the PROBE's speed preset (measurement, issue #22) */
+  probe_encoder_preset?: string | null
   encode_seconds?: number | null
   probe_count?: number | null
   probe_seconds?: number | null
@@ -118,6 +120,8 @@ export interface MoviePlan {
   created_at: string | null
   encoder: string | null
   encoder_preset: string | null
+  /** the plan was probed at this preset (a measurement setting, issue #22) */
+  probe_encoder_preset?: string | null
   target_vmaf: number | null
   stale: boolean
 }

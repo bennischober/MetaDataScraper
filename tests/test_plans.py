@@ -165,6 +165,7 @@ class TestRecordPlan(unittest.TestCase):
             sample_seconds=10.0,
             remove_bars=False,
             encoder_preset="medium",
+            probe_encoder_preset="medium",
             hdr=False,
             encoder="x265",
         )
@@ -205,6 +206,7 @@ class TestRecordPlan(unittest.TestCase):
             sample_seconds=10.0,
             remove_bars=False,
             encoder_preset="medium",
+            probe_encoder_preset="medium",
             hdr=False,
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
