@@ -1,5 +1,7 @@
 import subprocess
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 from rich.progress import (
     BarColumn,
@@ -31,7 +33,7 @@ def convert_unit(size_in_bytes: int, unit: SIZE_UNIT) -> float:
 
 
 # function to sanitize decimal numbers for excel
-def sanitize_number(number) -> str:
+def sanitize_number(number: object) -> str:
     """Converts a number to a string with ',' as decimal separator (excel friendly).
 
     Integers are converted without decimal places (e.g. 0 => '0').
@@ -49,7 +51,7 @@ def sanitize_number(number) -> str:
     return parts[0] + "," + parts[1]
 
 
-def generate_string(item, separator=";", useCat=False) -> str:
+def generate_string(item: dict[str, Any], separator: str = ";", useCat: bool = False) -> str:
     """Function that generates an output string (row) with the given dictionary data.
 
     Args:
@@ -94,7 +96,7 @@ def generate_string(item, separator=";", useCat=False) -> str:
     return separator.join(row) + "\n"
 
 
-def timestr_to_int(time) -> int:
+def timestr_to_int(time: str | None) -> int:
     """Converts a 'HH:MM:SS' string into seconds.
 
     Args:
@@ -118,7 +120,7 @@ def timestr_to_int(time) -> int:
         return 0
 
 
-def calc_time(lhs, rhs) -> str | None:
+def calc_time(lhs: str | None, rhs: str | None) -> str | None:
     """Adds two 'HH:MM:SS' time strings and returns the sum.
 
     Args:
@@ -163,7 +165,7 @@ def calc_time(lhs, rhs) -> str | None:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def get_other_codecs(other_codecs) -> str:
+def get_other_codecs(other_codecs: list[dict[str, Any]]) -> str:
     """Converts the other codecs list into a comma separated string of codec names.
 
     Args:
@@ -175,7 +177,12 @@ def get_other_codecs(other_codecs) -> str:
     return ", ".join(codec["name"] for codec in other_codecs)
 
 
-def check_black_bars(file, dimensions, min_width=100, min_height=100) -> int:
+def check_black_bars(
+    file: Path,
+    dimensions: dict[str, Any],
+    min_width: int = 100,
+    min_height: int = 100,
+) -> int:
     """Checks if a movie has (relevant) black bars by using the ffmpeg cropdetect filter.
 
     Some frames in the middle of the movie are checked against the codec data

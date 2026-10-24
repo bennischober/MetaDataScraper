@@ -6,9 +6,14 @@ caching the results in the database. It has no presentation logic —
 printing tables and writing output files belongs to the CLI layer.
 """
 
+from __future__ import annotations
+
 import os
+import sqlite3
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
@@ -22,6 +27,9 @@ from shrinkray.helpers import (
 )
 from shrinkray.logger import log, log_warning
 from shrinkray.media import get_data
+
+if TYPE_CHECKING:
+    from shrinkray.config import Conf
 
 UNCATEGORIZED = "Uncategorized"
 
@@ -172,7 +180,7 @@ def movie_record_from_data(filename: Path, data: dict) -> MovieRecord:
     )
 
 
-def record_from_cache(row) -> dict:
+def record_from_cache(row: sqlite3.Row) -> dict:
     """Converts a cached database row into the movie data dictionary used by the output.
 
     Size and compression rate are recomputed from the row data since they
@@ -218,7 +226,7 @@ def record_from_cache(row) -> dict:
 
 
 def process_movie(
-    filename: Path, root: Path, config, compute_hash: bool = False
+    filename: Path, root: Path, config: Conf, compute_hash: bool = False
 ) -> tuple[dict | None, str | None]:
     """Collects the metadata of a single movie file.
 
@@ -272,13 +280,13 @@ def process_movie(
 
 def scan_movies(
     root: Path,
-    config,
+    config: Conf,
     workers: int | None = None,
-    connection=None,
+    connection: sqlite3.Connection | None = None,
     rescan: bool = False,
     compute_hash: bool = False,
     exclude: Path | None = None,
-    on_movie=None,
+    on_movie: Callable[[int, dict | None, str | None], None] | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 

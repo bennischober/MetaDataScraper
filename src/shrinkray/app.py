@@ -17,7 +17,7 @@ import sys
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -351,7 +351,7 @@ def get_config() -> dict:
         conf = Conf()
         return _conf_to_dict(conf)
     with open(config_path, encoding="utf-8") as f:
-        return json.load(f)
+        return cast("dict[str, Any]", json.load(f))
 
 
 def _config_path(s: AppState) -> Path:

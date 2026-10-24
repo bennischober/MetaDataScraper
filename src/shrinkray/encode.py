@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,9 @@ from shrinkray.logger import log, log_error
 from shrinkray.media import FFPROBE_TIMEOUT
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
+
+# the engine's live-progress callback: stage detail and counters, never persisted
+ProgressCallback = Callable[[dict], None]
 
 
 def cap_threads(max_threads: int | None) -> int | None:
@@ -315,7 +319,7 @@ def _encode_with_command(
     input_file: Path,
     output_file: Path,
     command: list[str],
-    progress=None,
+    progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
 ) -> EncodeResult:
@@ -741,7 +745,7 @@ def encode_file(
     preset: str = "Fast 1080p30",
     encoder: str = "x265",
     overwrite: bool = False,
-    progress=None,
+    progress: ProgressCallback | None = None,
 ) -> EncodeResult:
     """Re-encodes a movie file with HandBrakeCLI to reduce its file size.
 
@@ -781,7 +785,7 @@ def encode_movies(
     overwrite: bool = False,
     workers: int | None = None,
     max_threads: int | None = None,
-    progress=None,
+    progress: ProgressCallback | None = None,
     db_file: Path | None = None,
 ) -> list[EncodeResult]:
     """Re-encodes multiple movie files into an output directory.
@@ -803,8 +807,9 @@ def encode_movies(
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
             With workers > 1 the cap only applies when it is tighter than
             the per-encode CPU share.
-        progress (callable | None): Callback progress(dict) for live updates
-            of the running encode's percentage.
+        progress (ProgressCallback | None): The caller's live-progress
+            callback (the resident app's SSE channel); the rich bar is drawn
+            alongside it.
         db_file (Path | None): The sqlite database file - enables the stall
             watchdog's failure-bundle telemetry (None: no telemetry).
 
@@ -885,7 +890,7 @@ def _encode_pending(
     encoder: str,
     workers: int,
     max_threads: int | None,
-    progress,
+    progress: ProgressCallback | None,
     results: list[EncodeResult],
     db_file: Path | None = None,
 ) -> list[EncodeResult]:
@@ -937,22 +942,29 @@ def _encode_pending(
             movie, output_file, command, progress=percent_callback, db_file=db_file
         )
 
-    with Progress() as progress:
-        task = progress.add_task("Encoding movies", total=len(pending))
+    with Progress() as bar:
+        task = bar.add_task("Encoding movies", total=len(pending))
 
         def percent_callback(data: dict) -> None:
             """Feeds engine percent events into the rich bar (a rich Progress
             is not callable itself - passing it as the callback crashed on
-            the first HandBrake percent line)."""
+            the first HandBrake percent line).
+
+            The caller's own callback (the resident app's live progress) gets
+            the same events: a job that streams a percent must not fall silent
+            because the CLI also draws a bar.
+            """
+            if progress is not None:
+                progress(data)
             if "percent" in data:
-                progress.update(task, completed=float(data["percent"]))
+                bar.update(task, completed=float(data["percent"]))
 
         if workers == 1:
             for movie, output_file in pending:
                 result = run_one(movie, output_file, None)
-                _report_encode(progress, result)
+                _report_encode(bar, result)
                 results.append(result)
-                progress.advance(task)
+                bar.advance(task)
         else:
             # work-queue scheduling: every started encode holds a slot with a
             # fair share of the CPU; when a slot frees, the next movie starts
@@ -988,9 +1000,9 @@ def _encode_pending(
                             with lock:
                                 running.remove(budget)
                             result = fut.result()
-                            _report_encode(progress, result)
+                            _report_encode(bar, result)
                             results.append(result)
-                            progress.advance(task)
+                            bar.advance(task)
 
                         future.add_done_callback(done)
                         futures.append(future)

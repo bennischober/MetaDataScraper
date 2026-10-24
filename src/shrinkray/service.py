@@ -5,13 +5,21 @@ movie set: batch resume, skip recording and result persistence. It has no
 presentation logic — the CLI prints, this module decides and records.
 """
 
+from __future__ import annotations
+
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
 from shrinkray.encode import probe_duration_seconds as probe_duration
+
+if TYPE_CHECKING:
+    from shrinkray.config import Conf
+    from shrinkray.encode import EncodeResult
+    from shrinkray.quality import QualityResult
 
 
 @dataclass
@@ -31,7 +39,7 @@ class EncodeOutcome:
     error: str | None = None
 
 
-def ensure_file_row(connection, movie) -> int:
+def ensure_file_row(connection: sqlite3.Connection, movie: Path) -> int:
     """Returns the file id for the movie, storing a minimal row if needed.
 
     Args:
@@ -55,7 +63,7 @@ def ensure_file_row(connection, movie) -> int:
     return db.upsert_file(connection, record)
 
 
-def derive_generation(connection, movie: Path) -> int:
+def derive_generation(connection: sqlite3.Connection, movie: Path) -> int:
     """Determines the generation of a movie by its encode ancestry.
 
     The encodes table chains generations via output_file: a row's
@@ -84,7 +92,9 @@ def derive_generation(connection, movie: Path) -> int:
     return 1
 
 
-def record_plan(connection, movie, result, config) -> int | None:
+def record_plan(
+    connection: sqlite3.Connection, movie: Path, result: QualityResult, config: Conf
+) -> int | None:
     """Persists a plan decision for one movie (the encode-path "quicksave").
 
     Stores the LATEST decision per file (upsert): the chosen CRF with its
@@ -233,7 +243,9 @@ def save_encode(
     )
 
 
-def save_verification(connection, encode_id: int, result) -> None:
+def save_verification(
+    connection: sqlite3.Connection, encode_id: int, result: QualityResult
+) -> None:
     """Attaches a quality result's verification data to its encode row.
 
     Args:
@@ -242,13 +254,13 @@ def save_verification(connection, encode_id: int, result) -> None:
         result (QualityResult): The engine result (verified_vmaf and
             verified_subsample are read from it; None => no-op).
     """
-    if getattr(result, "verified_vmaf", None) is None:
+    if result.verified_vmaf is None:
         return
     db.record_verification(
         connection,
         encode_id,
         float(result.verified_vmaf),
-        getattr(result, "verified_subsample", None),
+        result.verified_subsample,
     )
 
 
@@ -264,7 +276,9 @@ def save_skip(connection: sqlite3.Connection, movie: Path, reason: str) -> None:
     db.add_skip(connection, file_id, reason)
 
 
-def finished_movies(connection, movies: list, output_dir) -> set[str]:
+def finished_movies(
+    connection: sqlite3.Connection, movies: list[Path], output_dir: Path
+) -> set[str]:
     """Determines which movies are already encoded (batch resume check).
 
     A movie counts as finished when the database holds a real encode (not a
@@ -305,7 +319,9 @@ def finished_movies(connection, movies: list, output_dir) -> set[str]:
     return finished
 
 
-def record_quality_results(connection, movie, result, config) -> EncodeOutcome:
+def record_quality_results(
+    connection: sqlite3.Connection, movie: Path, result: QualityResult, config: Conf
+) -> EncodeOutcome:
     """Persists the result of one quality-mode encode (or skip).
 
     Args:
@@ -358,7 +374,9 @@ def record_quality_results(connection, movie, result, config) -> EncodeOutcome:
     return EncodeOutcome(movie=str(movie), error=result.error)
 
 
-def record_fixed_results(connection, results: list, config) -> list[EncodeOutcome]:
+def record_fixed_results(
+    connection: sqlite3.Connection, results: list[EncodeResult], config: Conf
+) -> list[EncodeOutcome]:
     """Persists the results of a fixed-preset run.
 
     An encode that did NOT shrink the file is recorded as a skip ('no size
@@ -417,7 +435,7 @@ class DoctorFinding:
     detail: str | None = None
 
 
-def doctor(connection, probe_all: bool = False) -> list[DoctorFinding]:
+def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[DoctorFinding]:
     """Checks the library's health: db reality vs disk reality.
 
     Composes existing primitives into one report (B6): dead paths,

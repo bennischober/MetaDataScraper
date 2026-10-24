@@ -68,26 +68,14 @@ check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
-known-first-party = ["shrinkray"]
-
-# disallow_untyped_defs is rolled out one module at a time (issue #40): each
-# module gets its entry only once every function is annotated, so a partially
-# annotated module cannot regress while the rest are still being converted.
-[[tool.mypy.overrides]]
-module = [
-    "shrinkray.__main__",
-    "shrinkray.app",
-    "shrinkray.config",
-    "shrinkray.db",
-    "shrinkray.encode_lock",
-    "shrinkray.jobs",
-    "shrinkray.logger",
-    "shrinkray.media",
-    "shrinkray.report",
-    "shrinkray.telemetry",
-    "shrinkray.watch",
-]
 disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+# every module is annotated, so the strict flags above apply to all of them;
+# the per-module rollout list is gone (issue #40)
 
 [[tool.mypy.overrides]]
 module = "tests.*"
