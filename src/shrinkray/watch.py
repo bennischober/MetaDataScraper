@@ -21,7 +21,7 @@ from shrinkray.encode import (
     find_handbrake,
     probe_duration_seconds,
 )
-from shrinkray.encode_lock import EncodeBusyError, guard_encodes
+from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.logger import log, log_error
 from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled, encode_with_quality
 

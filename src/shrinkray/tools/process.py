@@ -470,3 +470,33 @@ class Cancelled(Exception):
     artifacts (probe files, half-written output) are the caller's to
     clean up (the sample workdir is removed by its own finally).
     """
+
+
+def process_exists(pid: int) -> bool:
+    """Checks whether a process id is alive right now.
+
+    POSIX: kill(pid, 0) (no signal delivered, existence only).
+    Windows: a tasklist probe (OpenProcess semantics via subprocess).
+
+    Args:
+        pid (int): The process id to probe.
+
+    Returns:
+        bool: True if a process with this pid exists.
+    """
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            # a Windows process exists iff tasklist finds its pid; decode
+            # lossily (the console codepage is not utf-8)
+            listing = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                timeout=10,
+            )
+            return str(pid) in listing.stdout.decode(errors="replace")
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
