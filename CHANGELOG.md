@@ -5,6 +5,34 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The decision statistic is the mean, not the minimum**: `probe_crf`
+  aggregates the per-sample VMAF means with the mean instead of the
+  minimum (issue #15). A minimum over samples is monotone non-increasing
+  in the sample count: every window added can only lower it or leave it
+  unchanged, which made it structurally hostile to the denser sampling #14
+  introduced - the better the coverage, the more likely one pathological
+  window sank the whole score, pushed the search to the floor CRF and
+  reported "target unreachable" for a film that was perfectly encodable.
+  `achieved_vmaf` is now documented as the mean across probe windows,
+  which is a better predictor of overall viewing quality; a user comparing
+  runs across the change should know it is not the same statistic. What the
+  mean gives up is stated plainly: "every probed window meets the target" is
+  no longer literally true. Denser sampling makes a genuinely bad scene more
+  likely to be observed and to move the average, but does not eliminate it.
+
+- **A skip now carries its evidence**: `SkipEncode` carries the best CRF,
+  the VMAF measured there and the probe count, and `save_skip` stores them
+  on the encode row. Previously an `encode` skip dropped that evidence, so the
+  next run could not tell "already probed at the floor and failed" from
+  "never probed" and re-probed the same window every time.
+
+- **A plan recorded under `min` is not reused as a `mean` one**: the
+  aggregation is part of the plan fingerprint (schema v13), because a plan
+  made under the minimum was a different decision. Existing rows default to
+  `min`, which is what they actually measured.
+
 ### Added
 
 - **Probe density is duration-based (`sample_every`)**: `quality.sample_every`

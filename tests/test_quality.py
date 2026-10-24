@@ -596,6 +596,163 @@ class TestProbeCache(unittest.TestCase):
             score = quality.probe_crf(**{**defaults, **kwargs})
         return score, encodes
 
+    def test_probe_crf_returns_the_mean_of_samples(self):
+        """probe_crf aggregates with the MEAN, not the minimum.
+
+        A minimum is monotone non-increasing in the sample count: every window
+        added can only lower it or leave it unchanged, which makes it
+        structurally hostile to denser sampling (issue #14). The mean buys
+        robustness against one pathological window.
+        """
+        scores = iter([96.0, 96.0, 90.0])
+
+        def fake_run(command, cancel=None):
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
+        with (
+            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(quality, "_run", side_effect=fake_run),
+            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+        ):
+            score = quality.probe_crf(
+                samples,
+                20,
+                self.workdir,
+                "hb",
+                self.movie,
+                10.0,
+                "x265",
+                "medium",
+                db_file=None,
+                use_probe_cache=False,
+            )
+        # the mean is 94.0, not the minimum (90.0)
+        self.assertAlmostEqual(score, 94.0)
+
+    def test_outlier_no_longer_makes_the_target_unreachable(self):
+        """One bad window no longer poisons the decision.
+
+        Under min, a single low window at the floor CRF made the search
+        report 'target unreachable' for a film that is encodable.
+        """
+        low = [96.0, 96.0, 60.0]
+        scores = iter(low)
+
+        def fake_run(command, cancel=None):
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
+        with (
+            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(quality, "_run", side_effect=fake_run),
+            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+        ):
+            score = quality.probe_crf(
+                samples,
+                20,
+                self.workdir,
+                "hb",
+                self.movie,
+                10.0,
+                "x265",
+                "medium",
+                db_file=None,
+                use_probe_cache=False,
+            )
+        self.assertAlmostEqual(score, (96.0 + 96.0 + 60.0) / 3)
+
+    def test_uniformly_failing_samples_still_skip(self):
+        """A film that misses the target everywhere still skips.
+
+        The mean must not mask a film whose every window fails.
+        """
+        scores = iter([80.0, 81.0, 82.0])
+
+        def fake_run(command, cancel=None):
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
+        with (
+            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(quality, "_run", side_effect=fake_run),
+            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+        ):
+            score = quality.probe_crf(
+                samples,
+                20,
+                self.workdir,
+                "hb",
+                self.movie,
+                10.0,
+                "x265",
+                "medium",
+                db_file=None,
+                use_probe_cache=False,
+            )
+        self.assertLess(score, 95.0)
+
+    def test_stale_min_plan_is_not_reused(self):
+        """A plan recorded under the min statistic is not reused as a mean one.
+
+        The statistic is part of the plan fingerprint (issue #15): a plan made
+        under min was a different decision.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "test.db"
+            connection = db.connect(db_file)
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            stat = movie.stat()
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=stat.st_mtime,
+                    size=stat.st_size,
+                    name="movie",
+                    category="Cat",
+                ),
+            )
+            common = {
+                "encoder": "x265",
+                "encoder_preset": "medium",
+                "target_vmaf": 95.0,
+                "crf_range": (14, 32),
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+                "remove_bars": False,
+            }
+            db.save_plan(
+                connection,
+                file_id,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=None,
+                input_mtime=stat.st_mtime,
+                input_size=stat.st_size,
+                vmaf_statistic="min",
+                crf_low=14,
+                crf_high=32,
+                sample_count=3,
+                sample_seconds=10.0,
+                remove_bars=False,
+                target_vmaf=95.0,
+                encoder="x265",
+                encoder_preset="medium",
+            )
+            self.assertIsNone(db.get_valid_plan(connection, movie, **common, vmaf_statistic="mean"))
+            self.assertIsNotNone(
+                db.get_valid_plan(connection, movie, **common, vmaf_statistic="min")
+            )
+            connection.close()
+
     def test_cache_hit_skips_encode_and_measurement(self):
         score, encodes = self._probe()
         self.assertEqual(score, 95.5)

@@ -47,6 +47,11 @@ from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
 
+# the decision statistic (issue #15): the mean of the per-sample
+# VMAF means, not the minimum. A minimum is monotone non-increasing
+# in the sample count, which punishes denser sampling (#14).
+VMAF_STATISTIC = "mean"
+
 # cropdetect windows per movie: with the bars common to every sample the
 # crop is monotone non-increasing in the sample count, so more samples only
 # ever shrink it. That is the safe direction for an irreversible crop, and it
@@ -320,8 +325,10 @@ class QualityResult:
         target_vmaf (float): The effective VMAF quality floor that was met:
             the requested one, or the HDR override when the movie is HDR.
         chosen_crf (int | None): The CRF selected by the bisect.
-        achieved_vmaf (float | None): The worst per-sample VMAF measured at
-            the chosen CRF (None if no probe was possible).
+        achieved_vmaf (float | None): The mean per-sample VMAF measured at
+            the chosen CRF (None if no probe was possible). Not the worst
+            window: a mean is robust against a single pathological sample,
+            which is why the decision statistic is the mean (issue #15).
         probes (list[SampleProbe]): All CRF probes performed during the search.
         input_size (int): Size of the input file in bytes.
         output_size (int): Size of the output file in bytes.
@@ -362,6 +369,9 @@ class QualityResult:
     sample_count: int = DEFAULT_SAMPLE_COUNT
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT
+    # which aggregation produced achieved_vmaf: "mean" is the decision
+    # statistic (issue #15), "min" marks a plan measured before it
+    vmaf_statistic: str = "mean"
     # provenance of the CRF decision ('plan' when reused from a stored
     # plan, 'probe' when measured now, None when not applicable)
     crf_source: str | None = None
@@ -1306,10 +1316,18 @@ def probe_crf(
     encoder_threads: int | None = None,
     use_probe_cache: bool = True,
 ) -> float:
-    """Encodes all samples at one CRF and returns their worst VMAF score.
+    """Encodes all samples at one CRF and returns their mean VMAF score.
 
-    The worst (minimum) per-sample mean governs the decision so that every
-    probed segment meets the target quality.
+    The MEAN of the per-sample means governs the decision. A minimum over
+    samples is monotone non-increasing in the sample count: every window
+    added can only lower it or leave it unchanged, which makes it
+    structurally hostile to denser sampling (#14) - the better the
+    coverage, the more likely one pathological window sinks the whole
+    score and the film is reported 'unreachable' when it is encodable.
+
+    What the mean gives up: 'every probed window meets the target' is no
+    longer literally true. Denser sampling reduces how likely a genuinely
+    bad scene hides behind good ones, but does not eliminate it.
 
     Per-sample measurements are cached (probe_cache table, content-addressed
     via probe_cache_key): a sample whose identity, encode settings and
@@ -1340,7 +1358,7 @@ def probe_crf(
             (force_reprobe: the caller asked to measure everything fresh).
 
     Returns:
-        float: The lowest per-sample VMAF mean at this CRF.
+        float: The mean per-sample VMAF mean at this CRF.
 
     Raises:
         RuntimeError: If a sample encode or VMAF measurement failed.
@@ -1398,7 +1416,7 @@ def probe_crf(
         _store_probe(connection, key, score)
         encoded.unlink()
         scores.append(score)
-    return min(scores)
+    return sum(scores) / len(scores)
 
 
 def estimate_size_factor(
@@ -2177,6 +2195,7 @@ def _lookup_plan(
             sample_seconds=sample_seconds,
             remove_bars=remove_bars,
             crop_sample_count=crop_sample_count,
+            vmaf_statistic=VMAF_STATISTIC,
         )
     finally:
         connection.close()
@@ -2280,10 +2299,18 @@ def _probe_movie(
             use_probe_cache=use_probe_cache,
         )
         if skip:
-            raise SkipEncode("re-encode would not shrink the file")
+            raise SkipEncode(
+                "re-encode would not shrink the file",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probe_count=len(probes),
+            )
         if achieved < target_vmaf and crf == crf_range[0]:
             raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})"
+                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probe_count=len(probes),
             )
         return crf, achieved, probes, crop
     finally:
@@ -2291,7 +2318,30 @@ def _probe_movie(
 
 
 class SkipEncode(Exception):
-    """Raised when the probing decides a movie should not be encoded."""
+    """Raised when the probing decides a movie should not be encoded.
+
+    The skip carries its evidence - the best CRF, the VMAF measured
+    there and how many probes were spent - so a later run can tell
+    'already probed at the floor and failed' from 'never probed'
+    instead of re-deriving the same verdict every run.
+
+    Attributes:
+        chosen_crf (int | None): The best CRF the search reached.
+        achieved_vmaf (float | None): The VMAF measured there.
+        probe_count (int): How many CRF probes were spent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        chosen_crf: int | None = None,
+        achieved_vmaf: float | None = None,
+        probe_count: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.chosen_crf = chosen_crf
+        self.achieved_vmaf = achieved_vmaf
+        self.probe_count = probe_count
 
 
 class Cancelled(Exception):
@@ -2637,6 +2687,11 @@ def encode_with_quality(
                 success=False,
                 target_vmaf=target_vmaf,
                 error=f"skipped: {e}",
+                chosen_crf=e.chosen_crf,
+                achieved_vmaf=e.achieved_vmaf,
+                probes=[],
+                input_size=input_file.stat().st_size,
+                output_size=input_file.stat().st_size,
                 skipped_reason=(
                     "target unreachable" if "unreachable" in str(e) else "no size gain"
                 ),
