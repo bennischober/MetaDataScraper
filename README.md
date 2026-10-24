@@ -102,7 +102,7 @@ Installs uv, the GPL ffmpeg build, HandBrake and the repository to
 ```powershell
 cd ~\.shrinkray
 uv run shrinkray scan 'D:\Movies'
-uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 ```
 
@@ -116,7 +116,7 @@ uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 uvx shrinkray scan 'D:\Movies'
 
 # shrink it (quality-measured, black bars removed)
-uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality --remove-bars
+uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 ```
 
 > [!TIP]
@@ -244,7 +244,7 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 
 # with options
 uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
-    --quality --remove-bars --target-vmaf 96
+    --quality --target-vmaf 96
 ```
 
 | Option | Effect |
@@ -254,7 +254,7 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | swap the verified output into the source's path, renaming the original aside (never deleted) instead of writing to the output directory |
-| `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
+| `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
 | `--workers / -w N` | concurrent encodes, each capped to a CPU share (default: sequential — one x265 encode already uses all cores) |
@@ -267,7 +267,7 @@ and remembered — future runs do not re-probe them.
 ### `plan` — look before you leap
 
 ```bash
-uv run shrinkray plan 'D:\Movies' --remove-bars
+uv run shrinkray plan 'D:\Movies'
 ```
 
 Runs the same probing pipeline as a quality encode (samples, CRF search, bar
@@ -335,7 +335,7 @@ the next start.
 ### `watch` — one-shot folder watcher
 
 ```bash
-uv run shrinkray watch-mode 'D:\Downloads' 'D:\Encoded' --remove-bars
+uv run shrinkray watch-mode 'D:\Downloads' 'D:\Encoded'
 ```
 
 The standalone variant of the app's watch loop: polls the inbox folder for

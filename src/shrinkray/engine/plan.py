@@ -60,7 +60,6 @@ def _lookup_plan(
     crf_range: tuple[int, int],
     sample_count: int,
     sample_seconds: float,
-    remove_bars: bool,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
 ) -> sqlite3.Row | None:
     """Consults the plan cache for a valid plan of this movie+settings.
@@ -79,7 +78,6 @@ def _lookup_plan(
         crf_range (tuple[int, int]): The pending encode's (HDR-overridden) range.
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
-        remove_bars (bool): The pending encode's remove_bars setting.
         crop_sample_count (int): The pending encode's crop sample count.
 
     Returns:
@@ -100,7 +98,6 @@ def _lookup_plan(
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
-            remove_bars=remove_bars,
             crop_sample_count=crop_sample_count,
             vmaf_statistic=VMAF_STATISTIC,
         )

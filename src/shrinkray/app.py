@@ -223,7 +223,6 @@ class JobRequest(BaseModel):
         output_dir (str | None): Output directory (encode only).
         quality (bool): Use VMAF-driven quality mode (encode/plan).
         target_vmaf (float): The VMAF quality floor.
-        remove_bars (bool): Crop stable baked-in black bars.
         overwrite (bool): Re-encode already encoded movies.
         verify (bool): Full-file VMAF verification after each quality encode.
         workers (int | None): Concurrent encodes (fixed mode).
@@ -239,7 +238,6 @@ class JobRequest(BaseModel):
     output_dir: str | None = None
     quality: bool = False
     target_vmaf: float = Field(95.0, ge=1.0, le=100.0)
-    remove_bars: bool = False
     overwrite: bool = False
     verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
@@ -715,7 +713,6 @@ def create_job(request: JobRequest) -> dict:
         payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))
         payload["quality"] = request.quality
         payload["target_vmaf"] = request.target_vmaf
-        payload["remove_bars"] = request.remove_bars
         payload["overwrite"] = request.overwrite
         payload["workers"] = request.workers
         payload["verify"] = request.verify
@@ -739,7 +736,6 @@ def create_job(request: JobRequest) -> dict:
             payload["probe_encoder_preset"] = request.probe_encoder_preset
     elif request.kind == JobKind.PLAN:
         payload["target_vmaf"] = request.target_vmaf
-        payload["remove_bars"] = request.remove_bars
         if request.encoder_preset is not None:
             if request.encoder_preset not in ENCODER_PRESETS:
                 raise HTTPException(

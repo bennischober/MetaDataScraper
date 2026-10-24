@@ -214,8 +214,7 @@ existing video collection" and nothing more specific.
    **Swap-in-place is the intended shape** (encode to a temp file, verify it,
    then move it into the original's path with the original renamed aside), but
    it is **not implemented yet** — today `encode` writes to a separate output
-   directory. `--remove-bars` stays explicit and opt-in; never enable it on
-   your own.
+   directory. Bar removal is part of every encode, never a flag; do not add one.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.

@@ -105,7 +105,7 @@ def is_stable(path: Path) -> bool:
     return size_1 == size_2
 
 
-def decide(movie: Path, target_vmaf: float, remove_bars: bool, encoder: str) -> str:
+def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
     """Decides what to do with a movie without encoding it.
 
     Applies only the CHEAP pre-checks (duration minimum, binary presence);
@@ -119,7 +119,6 @@ def decide(movie: Path, target_vmaf: float, remove_bars: bool, encoder: str) -> 
         target_vmaf (float): The VMAF quality floor (unused here since the
             quality search owns the skip rules; kept for signature
             compatibility).
-        remove_bars (bool): Unused here (same reason).
         encoder (str): The video encoder (unused here, same reason).
 
     Returns:
@@ -195,7 +194,6 @@ def watch(
     inbox: Path,
     output_dir: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
-    remove_bars: bool = False,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
     encoder_preset: str = "3",
@@ -219,7 +217,6 @@ def watch(
         inbox (Path): The directory to watch for new movies.
         output_dir (Path): Directory for the encoded files.
         target_vmaf (float): The VMAF quality floor.
-        remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
             setting, issue #22).
@@ -298,7 +295,7 @@ def watch(
                     log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                     continue
                 known.add(str(movie.resolve()))
-                decision = decide(movie, target_vmaf, remove_bars, encoder)
+                decision = decide(movie, target_vmaf, encoder)
                 if decision != "encode":
                     log(f"Skipping '{movie.name}': {decision}.")
                     continue
@@ -316,7 +313,6 @@ def watch(
                             movie,
                             output_dir / movie.name,
                             target_vmaf=target_vmaf,
-                            remove_bars=remove_bars,
                             encoder=encoder,
                             probe_encoder_preset=probe_encoder_preset,
                             encoder_preset=encoder_preset,

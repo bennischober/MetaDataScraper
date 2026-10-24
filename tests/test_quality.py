@@ -291,7 +291,6 @@ class TestPlanReuse(unittest.TestCase):
             skipped_reason=overrides.pop("skipped_reason", None),
             encoder_preset="3",
             probe_encoder_preset="5",
-            remove_bars=False,
             crop=None,
             crf_range=overrides.pop("crf_range", quality.DEFAULT_CRF_RANGE),
             sample_count=quality.sample_count_for(600.0, quality.DEFAULT_SAMPLE_EVERY),
@@ -817,7 +816,6 @@ class TestProbeCache(unittest.TestCase):
                 "crf_range": (14, 32),
                 "sample_count": 3,
                 "sample_seconds": 10.0,
-                "remove_bars": False,
             }
             db.save_plan(
                 connection,
@@ -835,7 +833,6 @@ class TestProbeCache(unittest.TestCase):
                 crf_high=32,
                 sample_count=3,
                 sample_seconds=10.0,
-                remove_bars=False,
                 target_vmaf=95.0,
                 encoder="svt_av1",
                 encoder_preset="5",
@@ -1270,7 +1267,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 crf_high=32,
                 sample_count=3,
                 sample_seconds=10.0,
-                remove_bars=True,
                 crop_sample_count=3,
             )
             common = {
@@ -1280,7 +1276,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 "crf_range": (14, 32),
                 "sample_count": 3,
                 "sample_seconds": 10.0,
-                "remove_bars": True,
             }
             self.assertIsNotNone(
                 db.get_valid_plan(connection, movie, **common, crop_sample_count=3)
@@ -1330,11 +1325,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
-    def test_codec_gate_skips_hevc_without_remove_bars(self):
-        """A modern codec is already efficient: size alone never triggers it.
+    def test_hevc_without_bars_is_probed_and_encoded(self):
+        """A modern codec is probed on size alone, exactly like H.264 (issue #128).
 
-        PRODUCT.md makes an HEVC or AV1 source a candidate only when it has
-        bars to remove, so without --remove-bars it is left alone.
+        HEVC is *more* efficient than H.264, so it needs a higher size bar to
+        clear - not a different rule. A 40 GB HEVC remux is precisely the file
+        this tool exists for, and the old gate never probed it at all unless the
+        operator remembered --remove-bars.
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"
@@ -1343,44 +1340,23 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "probe_duration_seconds", return_value=600.0),
                 patch.object(quality, "source_height", return_value=2160),
                 patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "extract_samples") as fake_extract,
-                patch.object(quality, "find_handbrake") as fake_hb,
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "detect_crop_rect", return_value=None),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src)
-        self.assertFalse(result.success)
-        self.assertEqual(result.skipped_reason, "already efficient")
-        fake_extract.assert_not_called()
-        fake_hb.assert_not_called()
+        self.assertTrue(result.success, result.error)
+        self.assertIsNone(result.skipped_reason)
+        # no bars is a normal outcome, not a skip: the encode proceeds uncropped
+        self.assertIsNone(result.crop)
 
-    def test_codec_gate_skips_hevc_without_bars_when_opted_in(self):
-        """Opting in to bar removal is not enough on its own: no bars, no encode.
+    def test_hevc_with_bars_gets_the_crop_on_probe_and_encode(self):
+        """Bars are removed as part of every re-encode, with no flag (issue #128).
 
-        The H.265 arm needs bars to be *detected*, because the crop is the
-        only justification for re-encoding an already-efficient source.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "movie.mkv"
-            src.write_bytes(b"x" * 8)
-            with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "detect_crop_rect", return_value=None),
-                patch.object(quality, "extract_samples") as fake_extract,
-                patch.object(quality, "find_handbrake") as fake_hb,
-            ):
-                result = quality.plan_quality(src, remove_bars=True)
-        self.assertFalse(result.success)
-        self.assertEqual(result.skipped_reason, "already efficient")
-        self.assertIn("no black bars", result.error or "")
-        fake_extract.assert_not_called()
-        fake_hb.assert_not_called()
-
-    def test_codec_gate_admits_hevc_with_detected_bars(self):
-        """An HEVC source with bars is a candidate, and the bars are cropped.
-
-        Without this the gate would admit a file whose only justification it
-        then does not act on.
+        The crop must reach the size estimate - otherwise the prediction describes
+        an uncropped output and the size gate compares the wrong number.
         """
         bars = (20, 20, 0, 0)
         with tempfile.TemporaryDirectory() as tmp:
@@ -1390,17 +1366,43 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "probe_duration_seconds", return_value=600.0),
                 patch.object(quality, "source_height", return_value=2160),
                 patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "detect_crop_rect", return_value=bars) as fake_crop,
                 patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "detect_crop_rect", return_value=bars) as fake_crop,
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_size,
                 patch.object(quality, "probe_crf", return_value=95.0),
             ):
-                result = quality.plan_quality(src, remove_bars=True)
-        self.assertTrue(result.success)
-        # detected once by the gate, not sampled again by the pipeline
-        self.assertEqual(fake_crop.call_count, 1)
+                result = quality.plan_quality(src)
+        self.assertTrue(result.success, result.error)
         self.assertEqual(result.crop, bars)
+        # the size estimate was made against the CROPPED output
+        self.assertEqual(fake_size.call_args.kwargs["crop"], bars)
+        # detected once by the pipeline, never pre-detected by a gate
+        self.assertEqual(fake_crop.call_count, 1)
+
+    def test_hevc_with_no_size_gain_is_skipped_by_size_not_codec(self):
+        """A modern codec that cannot shrink is skipped for the size reason.
+
+        The verdict must come from the size gate, not from a codec rule: 'already
+        efficient' no longer exists as a reason (issue #128).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "source_codec", return_value="hevc"),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(quality, "detect_crop_rect", return_value=None),
+                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(quality, "estimate_size_factor", return_value=1.3),
+            ):
+                result = quality.plan_quality(src)
+        self.assertFalse(result.success)
+        self.assertNotEqual(result.skipped_reason, "already efficient")
+        self.assertEqual(result.skipped_reason, "no size gain")
+        self.assertIn("would not shrink", result.error or "")
 
     def test_min_source_size_gate_skips_before_probing(self):
         """A source below the size floor is skipped before any probe runs.

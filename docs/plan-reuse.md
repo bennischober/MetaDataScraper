@@ -29,7 +29,7 @@ approximation.
 3. **Fingerprint validation** — reuse ONLY when ALL match; ANY mismatch
    => normal probing path (fail-safe to re-probe, never guess):
    input mtime+size, encoder, encoder_preset, target_vmaf, crf_range,
-   sample_count, sample_seconds, remove_bars.
+   sample_count, sample_seconds, crop_sample_count, vmaf_statistic.
    Deliberately EXCLUDED: `encoder_threads` (does not change output
    bytes). HDR: `encode_with_quality()` overrides target_vmaf/crf_range
    for HDR before the lookup — the lookup derives from the OVERRIDDEN
@@ -52,14 +52,17 @@ approximation.
   skipped_reason, estimated_size (the size prediction; NULL for skips),
   input_mtime, input_size, encoder, encoder_preset,
   target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-  remove_bars, created_at.
+  crop_sample_count, vmaf_statistic, created_at.
 - `encodes` gains `crf_source` (nullable TEXT: 'plan' | 'probe') and
   `plan_created_at` (nullable TEXT).
 
 ## Pitfalls (from the review)
 
-- The crop rect is only valid under the same `remove_bars` setting (the
-  fingerprint covers it; `crop=None` is passed when remove_bars is False).
+- The crop rect is always applied now: bar removal is part of every
+  re-encode (issue #128), so there is no setting under which a stored plan's
+  `crop` would be wrong. Migration 15 dropped every plan stored while the
+  `remove_bars` flag existed, because those were probed without a crop when
+  the flag was off - reusing one would have kept the bars.
 - Plans for soft-missing files are ignored (mtime+size guard covers a
   rescanned file; no lookup when the file no longer exists).
 - `achieved_vmaf` from a plan is SAMPLE-based; `--verify` (full-file) is

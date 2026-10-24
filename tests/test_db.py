@@ -226,6 +226,83 @@ class TestDb(unittest.TestCase):
             self.assertIn("generation", columns)
             migrated.close()
 
+    def test_migration_v15_drops_plans_probed_without_bars(self):
+        """A pre-v15 plan is discarded, never reused (issue #128).
+
+        Bar removal became part of every re-encode, so a plan stored while the
+        flag existed was probed WITHOUT a crop when the flag was off. Reusing it
+        would encode the film with its bars kept - the exact thing the rule
+        forbids. Dropping the rows makes the next run re-probe, which is correct;
+        keeping them would be silently wrong on a real library.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v14.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (14);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE encodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    preset TEXT NOT NULL,
+                    encoder TEXT NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    output_size INTEGER NOT NULL,
+                    saved_percent REAL NOT NULL
+                );
+                CREATE TABLE plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    chosen_crf INTEGER,
+                    achieved_vmaf REAL,
+                    crop TEXT,
+                    probes TEXT,
+                    skipped_reason TEXT,
+                    estimated_size INTEGER,
+                    input_mtime REAL NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    encoder TEXT NOT NULL,
+                    encoder_preset TEXT NOT NULL,
+                    target_vmaf REAL NOT NULL,
+                    crf_low INTEGER NOT NULL,
+                    crf_high INTEGER NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    sample_seconds REAL NOT NULL,
+                    remove_bars INTEGER NOT NULL,
+                    crop_sample_count INTEGER NOT NULL DEFAULT 3,
+                    vmaf_statistic TEXT NOT NULL DEFAULT 'mean',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('D:/Movies/a.mkv', 1.0, 1, 'movie', 'Cat');
+                INSERT INTO plans (
+                    file_id, chosen_crf, achieved_vmaf, input_mtime, input_size,
+                    encoder, encoder_preset, target_vmaf, crf_low, crf_high,
+                    sample_count, sample_seconds, remove_bars
+                ) VALUES (1, 21, 95.4, 1.0, 1, 'svt_av1', '5', 95.0, 14, 32, 3, 10.0, 0);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            # the stale plan is gone, so nothing can be reused uncropped
+            self.assertEqual(migrated.execute("SELECT COUNT(*) FROM plans").fetchone()[0], 0)
+            columns = {row["name"] for row in migrated.execute("PRAGMA table_info(plans)")}
+            self.assertNotIn("remove_bars", columns)
+            migrated.close()
+
     def test_derive_generation_chain(self):
         """Encoding an encode chains generation N+1 via source_file."""
 
@@ -508,7 +585,6 @@ class TestDb(unittest.TestCase):
                     crf_high=32,
                     sample_count=3,
                     sample_seconds=10.0,
-                    remove_bars=False,
                 )
                 self.connection.commit()
                 planned = client.get("/api/movie", params={"path": movie_path})
@@ -543,7 +619,6 @@ class TestDb(unittest.TestCase):
                     crf_high=32,
                     sample_count=3,
                     sample_seconds=10.0,
-                    remove_bars=False,
                 )
                 self.connection.commit()
                 skipped = client.get("/api/movie", params={"path": movie_path})
@@ -604,7 +679,6 @@ class TestDb(unittest.TestCase):
                         crf_high=32,
                         sample_count=3,
                         sample_seconds=10.0,
-                        remove_bars=False,
                     )
                     self.connection.commit()
                     body = client.get("/api/movie", params={"path": movie_path}).json()

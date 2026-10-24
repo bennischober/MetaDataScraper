@@ -154,7 +154,6 @@ def record_plan(
         result.crf_range[1],
         result.sample_count,
         result.sample_seconds,
-        result.remove_bars,
         result.crop_sample_count,
         result.vmaf_statistic,
     )
