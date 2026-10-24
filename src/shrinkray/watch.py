@@ -197,7 +197,8 @@ def watch(
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     remove_bars: bool = False,
     encoder: str = "x265",
-    encoder_preset: str = "medium",
+    probe_encoder_preset: str = "medium",
+    encoder_preset: str = "slow",
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
     max_threads: int | None = None,
@@ -220,6 +221,10 @@ def watch(
         target_vmaf (float): The VMAF quality floor.
         remove_bars (bool): Detect and crop stable black bars.
         encoder (str): The video encoder.
+        probe_encoder_preset (str): The PROBE's speed preset (a measurement
+            setting, issue #22).
+        encoder_preset (str): The FINAL encode's speed preset (an output
+            setting, issue #22).
         poll_interval (float): Seconds between inbox checks (grows while the
             inbox stays idle, resets on any new candidate).
         once (bool): One pass and return (for tests).
@@ -313,6 +318,7 @@ def watch(
                             target_vmaf=target_vmaf,
                             remove_bars=remove_bars,
                             encoder=encoder,
+                            probe_encoder_preset=probe_encoder_preset,
                             encoder_preset=encoder_preset,
                             encoder_threads=cap_threads(max_threads),
                             db_file=db_file,

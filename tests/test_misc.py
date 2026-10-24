@@ -108,9 +108,11 @@ class TestEncoderPresetConfig(unittest.TestCase):
     preset must be configurable, validated, and reachable from every entry
     point — before this, 'medium' was a constant no caller could override."""
 
-    def test_default_is_medium(self):
+    def test_default_presets_are_split(self):
         conf = config_helper.Conf({})
-        self.assertEqual(conf.handbrake_encoder_preset, "medium")
+        # probe = measurement setting, final = output setting (issue #22)
+        self.assertEqual(conf.handbrake_probe_encoder_preset, "medium")
+        self.assertEqual(conf.handbrake_encoder_preset, "slow")
 
     def test_config_value_overrides_default(self):
         conf = config_helper.Conf({"handbrake": {"encoder_preset": "slow"}})
@@ -141,7 +143,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         #   encode.py: the _encode_with_command non-streamed branch
         #   quality.py: the _run simple branch
         "encode.py": (378,),
-        "quality.py": (406,),
+        "quality.py": (407,),
     }
 
     def _run_calls(self, tree: ast.AST) -> list[ast.Call]:

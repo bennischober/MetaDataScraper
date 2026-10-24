@@ -335,6 +335,7 @@ class QualityResult:
     error: str | None = None
     skipped_reason: str | None = None
     encoder_preset: str | None = None
+    probe_encoder_preset: str | None = None
     encode_seconds: float | None = None
     probe_seconds: float | None = None
     verified_vmaf: float | None = None
@@ -514,8 +515,8 @@ def probe_cache_key(
         seconds (float): The sample window's length in seconds.
         crf (int): The probed CRF.
         encoder (str): The effective video encoder.
-        encoder_preset (str): The encoder speed preset.
-        crop (tuple | None): The crop rect applied to probes.
+        encoder_preset (str): The PROBE's speed preset (a measurement
+            setting, issue #22).
         hdr (bool): Whether the VMAF measurement tone-maps both sides.
         encoder_threads (int | None): The thread cap of the probe encode.
         tool_versions (str): The tool version string (HandBrake, libvmaf).
@@ -763,7 +764,7 @@ def build_encode_command(
         output_file (Path): The target file.
         crf (int): The CRF quality value.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        encoder_preset (str): The encoder speed preset to encode at.
         crop (tuple | None): Crop bars (top, bottom, left, right) to remove
             baked-in black bars. None keeps the source resolution.
         encoder_threads (int | None): Thread limit for the encoder
@@ -1260,7 +1261,7 @@ def probe_crf(
     movie: Path,
     sample_seconds: float,
     encoder: str,
-    encoder_preset: str,
+    probe_encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -1287,7 +1288,9 @@ def probe_crf(
         movie (Path): The source movie (cache identity: size + mtime).
         sample_seconds (float): The sample window's length in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting; the final encode's preset is a separate
+            value, issue #22).
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
@@ -1316,7 +1319,7 @@ def probe_crf(
             sample_seconds,
             crf,
             encoder,
-            encoder_preset,
+            probe_encoder_preset,
             crop,
             hdr,
             encoder_threads,
@@ -1338,7 +1341,7 @@ def probe_crf(
             encoded,
             crf,
             encoder,
-            encoder_preset,
+            probe_encoder_preset,
             crop=crop,
             encoder_threads=encoder_threads,
         )
@@ -1369,7 +1372,7 @@ def estimate_size_factor(
     movie: Path,
     sample_seconds: float,
     encoder: str,
-    encoder_preset: str,
+    probe_encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
@@ -1398,7 +1401,8 @@ def estimate_size_factor(
         movie (Path): The source movie (cache identity: size + mtime).
         sample_seconds (float): The sample window's length in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22).
         crop (tuple | None): Crop bars applied to the probe encode.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file (caching; None => uncached).
@@ -1427,7 +1431,7 @@ def estimate_size_factor(
         sample_seconds,
         crf,
         encoder,
-        encoder_preset,
+        probe_encoder_preset,
         crop,
         hdr=False,
         encoder_threads=encoder_threads,
@@ -1448,7 +1452,7 @@ def estimate_size_factor(
         encoded,
         crf,
         encoder,
-        encoder_preset,
+        probe_encoder_preset,
         crop=crop,
         encoder_threads=encoder_threads,
     )
@@ -1478,7 +1482,7 @@ def find_optimal_crf(
     sample_count: int = DEFAULT_SAMPLE_COUNT,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
-    encoder_preset: str = "medium",
+    probe_encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -1499,7 +1503,8 @@ def find_optimal_crf(
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22).
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
@@ -1539,7 +1544,7 @@ def find_optimal_crf(
             movie,
             sample_seconds,
             encoder,
-            encoder_preset,
+            probe_encoder_preset,
             crop=crop,
             hdr=hdr,
             cancel=cancel,
@@ -1573,7 +1578,7 @@ def find_optimal_crf_and_skip(
     sample_count: int = DEFAULT_SAMPLE_COUNT,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
-    encoder_preset: str = "medium",
+    probe_encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -1598,7 +1603,8 @@ def find_optimal_crf_and_skip(
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22).
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
         hdr (bool): Tone-map both sides for the VMAF measurement.
@@ -1632,7 +1638,7 @@ def find_optimal_crf_and_skip(
         movie,
         sample_seconds,
         encoder,
-        encoder_preset,
+        probe_encoder_preset,
         crop=crop,
         cancel=cancel,
         db_file=db_file,
@@ -1656,7 +1662,7 @@ def find_optimal_crf_and_skip(
         sample_count=sample_count,
         sample_seconds=sample_seconds,
         encoder=encoder,
-        encoder_preset=encoder_preset,
+        probe_encoder_preset=probe_encoder_preset,
         samples=samples,
         crop=crop,
         hdr=hdr,
@@ -1676,7 +1682,8 @@ def plan_quality(
     sample_count: int = DEFAULT_SAMPLE_COUNT,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
-    encoder_preset: str = "medium",
+    probe_encoder_preset: str = "medium",
+    encoder_preset: str = "slow",
     remove_bars: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
@@ -1704,7 +1711,12 @@ def plan_quality(
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'; for HDR the engine
             switches to the 10-bit variant and the result carries it.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22); the plan's fingerprint keys
+            on this value.
+        encoder_preset (str): The FINAL encode's speed preset (an output
+            setting, issue #22); plan never encodes, so this is recorded
+            on the result for provenance only.
         remove_bars (bool): Detect and crop stable black bars (opt-in).
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file, used to locate the logs
@@ -1924,7 +1936,7 @@ def plan_quality(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=effective_encoder,
-            encoder_preset=encoder_preset,
+            probe_encoder_preset=probe_encoder_preset,
             crop=crop,
             hdr=hdr,
             cancel=cancel,
@@ -1944,7 +1956,7 @@ def plan_quality(
             input_file,
             sample_seconds,
             effective_encoder,
-            encoder_preset,
+            probe_encoder_preset,
             crop=crop,
             cancel=cancel,
             db_file=db_file,
@@ -1967,6 +1979,7 @@ def plan_quality(
                 error="skipped: re-encode would not shrink the file",
                 skipped_reason="no size gain",
                 encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
                 remove_bars=remove_bars,
                 crop=crop,
                 crf_range=crf_range,
@@ -1992,6 +2005,7 @@ def plan_quality(
                 ),
                 skipped_reason="target unreachable",
                 encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
                 remove_bars=remove_bars,
                 crop=crop,
                 crf_range=crf_range,
@@ -2013,6 +2027,7 @@ def plan_quality(
             output_size=int(input_size * factor),
             error=None,
             encoder_preset=encoder_preset,
+            probe_encoder_preset=probe_encoder_preset,
             remove_bars=remove_bars,
             crop=crop,
             crf_range=crf_range,
@@ -2123,7 +2138,7 @@ def _probe_movie(
     sample_count: int,
     sample_seconds: float,
     encoder: str,
-    encoder_preset: str,
+    probe_encoder_preset: str,
     remove_bars: bool,
     hdr: bool = False,
     cancel: threading.Event | None = None,
@@ -2144,7 +2159,8 @@ def _probe_movie(
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22).
         remove_bars (bool): Detect and crop stable black bars.
         crop (tuple[int, int, int, int] | None): A crop the caller already
             detected (the codec gate's), applied instead of sampling again.
@@ -2203,7 +2219,7 @@ def _probe_movie(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=encoder,
-            encoder_preset=encoder_preset,
+            probe_encoder_preset=probe_encoder_preset,
             crop=crop,
             hdr=hdr,
             cancel=cancel,
@@ -2258,7 +2274,8 @@ def encode_with_quality(
     sample_count: int = DEFAULT_SAMPLE_COUNT,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     encoder: str = "x265",
-    encoder_preset: str = "medium",
+    probe_encoder_preset: str = "medium",
+    encoder_preset: str = "slow",
     remove_bars: bool = False,
     progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
@@ -2286,7 +2303,10 @@ def encode_with_quality(
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'x265'.
-        encoder_preset (str): The encoder speed preset, e.g. 'medium'.
+        probe_encoder_preset (str): The PROBE's speed preset (a measurement
+            setting, issue #22); the probes and the plan fingerprint use it.
+        encoder_preset (str): The FINAL encode's speed preset (an output
+            setting, issue #22).
         remove_bars (bool): Detect and crop stable black bars (opt-in, the
             crop is irreversible).
         progress (callable | None): Callback progress(dict) for live updates
@@ -2466,11 +2486,14 @@ def encode_with_quality(
     # OVERRIDDEN target/range so HDR consistency falls out of the same rule.
     plan = None
     if db_file is not None and not force_reprobe:
+        # the plan fingerprint keys on the PROBE preset (issue #22 decision):
+        # a stored plan is a probe result, its CRF depends on the probe
+        # preset only - changing the final preset reuses the plan
         plan = _lookup_plan(
             db_file,
             input_file,
             encoder=effective_encoder,
-            encoder_preset=encoder_preset,
+            encoder_preset=probe_encoder_preset,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
             sample_count=sample_count,
@@ -2506,6 +2529,7 @@ def encode_with_quality(
                 error=f"skipped: {reason}",
                 skipped_reason=reason,
                 encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
                 remove_bars=remove_bars,
                 crop=None,
                 crf_range=crf_range,
@@ -2540,7 +2564,7 @@ def encode_with_quality(
                 sample_count,
                 sample_seconds,
                 effective_encoder,
-                encoder_preset,
+                probe_encoder_preset,
                 remove_bars,
                 hdr=hdr,
                 cancel=cancel,
@@ -2564,6 +2588,7 @@ def encode_with_quality(
                     "target unreachable" if "unreachable" in str(e) else "no size gain"
                 ),
                 encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
                 remove_bars=remove_bars,
                 crf_range=crf_range,
                 sample_count=sample_count,
@@ -2579,6 +2604,9 @@ def encode_with_quality(
     handbrake = find_handbrake()
     if handbrake is None:  # already checked in _probe_movie, for mypy
         raise RuntimeError(f"'{HANDBRAKE_BINARY}' not found!")
+    # the FINAL encode runs the final preset (an output setting, issue #22):
+    # the artifact is what gets kept, so it spends the time; the probes ran
+    # at the probe preset (a measurement setting)
     command = build_encode_command(
         handbrake,
         input_file,
@@ -2668,6 +2696,7 @@ def encode_with_quality(
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
         encoder_preset=encoder_preset,
+        probe_encoder_preset=probe_encoder_preset,
         encode_seconds=_time.perf_counter() - run_started,
         probe_seconds=probe_seconds,
         hdr=hdr,

@@ -713,6 +713,9 @@ def execute_plan(
                 movie,
                 target_vmaf=payload.get("target_vmaf", 95.0),
                 encoder=config.handbrake_encoder,
+                probe_encoder_preset=payload.get(
+                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                ),
                 encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
                 remove_bars=payload.get("remove_bars", False),
                 cancel=cancel,
@@ -813,6 +816,9 @@ def execute_encode(
                     output_dir / movie.name,
                     target_vmaf=payload.get("target_vmaf", 95.0),
                     encoder=config.handbrake_encoder,
+                    probe_encoder_preset=payload.get(
+                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                    ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
                     remove_bars=payload.get("remove_bars", False),
                     progress=progress,

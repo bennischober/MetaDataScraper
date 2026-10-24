@@ -164,6 +164,7 @@ class JobRequest(BaseModel):
     overwrite: bool = False
     verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
+    probe_encoder_preset: str | None = None
     encoder_preset: str | None = None
     rescan: bool = False
     hash: bool = False
@@ -566,6 +567,14 @@ def create_job(request: JobRequest) -> dict:
                     f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
                 )
             payload["encoder_preset"] = request.encoder_preset
+        if request.probe_encoder_preset is not None:
+            if request.probe_encoder_preset not in ENCODER_PRESETS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"probe_encoder_preset: '{request.probe_encoder_preset}' is not "
+                    f"a valid speed preset (valid: {', '.join(ENCODER_PRESETS)})",
+                )
+            payload["probe_encoder_preset"] = request.probe_encoder_preset
     elif request.kind == JobKind.PLAN:
         payload["target_vmaf"] = request.target_vmaf
         payload["remove_bars"] = request.remove_bars
@@ -577,6 +586,14 @@ def create_job(request: JobRequest) -> dict:
                     f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
                 )
             payload["encoder_preset"] = request.encoder_preset
+        if request.probe_encoder_preset is not None:
+            if request.probe_encoder_preset not in ENCODER_PRESETS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"probe_encoder_preset: '{request.probe_encoder_preset}' is not "
+                    f"a valid speed preset (valid: {', '.join(ENCODER_PRESETS)})",
+                )
+            payload["probe_encoder_preset"] = request.probe_encoder_preset
     else:  # scan
         payload["rescan"] = request.rescan
         payload["hash"] = request.hash
@@ -713,7 +730,8 @@ def snapshot(
                     SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                            f.size, f.hdr, f.missing_scans, f.missing_since,
                            e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
-                           e.saved_percent, e.encoder_preset, e.encode_seconds,
+                           e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
+                           e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
                            e.generation, e.input_bitrate, e.output_bitrate
                     FROM files f
@@ -850,7 +868,8 @@ def library(
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
-                   e.saved_percent, e.encoder_preset, e.encode_seconds,
+                   e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
+                   e.encode_seconds,
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
@@ -880,6 +899,7 @@ def library(
                 "output_size": r["output_size"],
                 "saved_percent": r["saved_percent"],
                 "encoder_preset": r["encoder_preset"],
+                "probe_encoder_preset": r["probe_encoder_preset"],
                 "encode_seconds": r["encode_seconds"],
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
@@ -942,6 +962,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "output_size": r["output_size"],
                 "saved_percent": r["saved_percent"],
                 "encoder_preset": r["encoder_preset"],
+                "probe_encoder_preset": r["probe_encoder_preset"],
                 "encode_seconds": r["encode_seconds"],
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
@@ -1014,6 +1035,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "created_at": plan_row["created_at"],
                 "encoder": plan_row["encoder"],
                 "encoder_preset": plan_row["encoder_preset"],
+                "probe_encoder_preset": plan_row["encoder_preset"],
                 "target_vmaf": plan_row["target_vmaf"],
                 "stale": not file_ok,
             }

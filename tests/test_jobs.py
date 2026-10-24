@@ -133,6 +133,7 @@ class TestJobs(unittest.TestCase):
             error=None,
             skipped_reason=None,
             encoder_preset="medium",
+            probe_encoder_preset="medium",
             remove_bars=False,
             crop=None,
             crf_range=(14, 32),
@@ -190,6 +191,7 @@ class TestJobs(unittest.TestCase):
             error=None,
             skipped_reason=None,
             encoder_preset="slow",
+            probe_encoder_preset="slow",
             remove_bars=False,
             crop=None,
             crf_range=(14, 32),
@@ -219,7 +221,20 @@ class TestJobs(unittest.TestCase):
             _patch("shrinkray.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
-        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "medium")
+        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "slow")
+        # the probe preset is a separate payload key (issue #22)
+        job3 = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.PLAN,
+                payload={"paths": [str(movie)], "probe_encoder_preset": "faster"},
+            )
+        )
+        with (
+            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan3,
+            _patch("shrinkray.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job3, self.connection, threading.Event())
+        self.assertEqual(fake_plan3.call_args.kwargs.get("probe_encoder_preset"), "faster")
 
     def test_encode_single_file_payload(self):
         """A per-movie encode payload (a FILE path, as the UI's detail page
