@@ -140,6 +140,17 @@ export interface Movie {
   encode: EncodeInfo | null
 }
 
+export interface RetainedFile {
+  source_path: string
+  retained_path: string
+  size_before: number
+  size_after: number
+  created_at: string
+  /** false when the operator already deleted it: the row stays as the
+   * record of what was swapped, the file itself is their business. */
+  present: boolean
+}
+
 export interface Status {
   queue: Job[]
   watcher: 'running' | 'stopped'
@@ -325,6 +336,9 @@ export const api = {
     return (await response.json()) as Movie[]
   },
   library: () => request<Movie[]>('/api/library'),
+  /** The originals a swap retained (issue #35): what the operator may
+   * delete themselves, in their own file manager. */
+  retained: () => request<RetainedFile[]>('/api/retained'),
   jobs: (limit = 50) => request<Job[]>(`/api/jobs?limit=${limit}`),
   job: (id: number) => request<Job>(`/api/jobs/${id}`),
   /** One movie's full record: file facts + the COMPLETE encode history. */

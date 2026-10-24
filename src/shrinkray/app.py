@@ -587,6 +587,35 @@ def update_config(data: dict) -> dict:
     return data
 
 
+@app.get("/api/retained")
+def retained_list(conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
+    """Lists the originals a swap retained (issue #35).
+
+    The list is what tells the operator which files they may delete. ShrinkRay
+    never removes them: the deletion is their own action, in their own file
+    manager, once they are satisfied with the result.
+
+    Args:
+        conn: The database connection (db_access dependency).
+
+    Returns:
+        list[dict]: One entry per retained original, newest first.
+    """
+    s = get_state()
+    rows = s.with_lock(lambda c: db.list_retained(c))
+    return [
+        {
+            "source_path": row["source_path"],
+            "retained_path": row["retained_path"],
+            "size_before": row["size_before"],
+            "size_after": row["size_after"],
+            "created_at": row["created_at"],
+            "present": Path(row["retained_path"]).exists(),
+        }
+        for row in rows
+    ]
+
+
 @app.get("/api/status")
 def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     """Returns the app status: queue depth, running job, watcher state.
@@ -1331,6 +1360,26 @@ def _default_roots() -> list[Path]:
     return roots or [Path.cwd()]
 
 
+def _recover_interrupted_swaps() -> None:
+    """Resolves swaps interrupted by a crash, per allowlisted root.
+
+    An unattended daemon will be killed mid-swap eventually, so the recovery
+    path is part of the feature, not a follow-up. Each root is inspected once
+    at startup; `replace.recover_directory` restores an interrupted original
+    and discards only its own orphaned staging copies.
+    """
+    from shrinkray.replace import recover_directory
+
+    for root in _allowed_roots:
+        try:
+            outcomes = recover_directory(root)
+        except OSError as error:
+            log_error(f"swap recovery could not inspect '{root}': {error}")
+            continue
+        for name, outcome in outcomes.items():
+            log(f"swap recovery: '{name}' {outcome}")
+
+
 def run_app(
     db_file: Path,
     host: str = "127.0.0.1",
@@ -1367,6 +1416,7 @@ def run_app(
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
     state.config_file = config_file
+    _recover_interrupted_swaps()
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
 

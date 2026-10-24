@@ -7,6 +7,25 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **Swap in place with a retained original** (issue #35): `encode --replace`
+  moves a verified output into its source's path and renames the original
+  aside as `<name>.shrinkray-original` - **kept, never deleted**. The
+  library is sacred: ShrinkRay has no code path that removes a source, and
+  the only `unlink` in `replace.py` removes a staging file it created
+  itself.
+
+- **A retention ledger** (schema v14, `retained` table) records what each
+  swap replaced: source path, retained path, the encode that superseded it and
+  both sizes. `shrinkray retained list` and the dashboard's Retained page read
+  it, so the operator can reclaim that space manually, in their own file
+  manager. There is deliberately no delete button.
+
+- **Crash recovery for an interrupted swap**: the swap is two
+  same-directory renames, so after a crash at any instant the source path
+  holds either the original or the new file, never neither. `shrinkray retained
+  recover --dir <folder>` resolves the leftovers, and the app does it for every
+  allowlisted root at startup.
+
 - **Optional bearer-token authentication for the dashboard** (issue #36).
   `SHRINKRAY_TOKEN` turns auth on; every route then requires
   `Authorization: Bearer <token>`, the SSE stream also accepts `?token=`

@@ -425,6 +425,15 @@ def encode(
             "(a plan normally lets the encode skip probing)."
         ),
     ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help=(
+            "Swap each verified encode into its source's path, renaming the "
+            "original aside and keeping it (never deleted). Off by default: "
+            "without it the output is written to the output directory."
+        ),
+    ),
     probe_encoder_preset: str = typer.Option(
         DEFAULT_PROBE_ENCODER_PRESET,
         "--probe-encoder-preset",
@@ -502,9 +511,68 @@ def encode(
             crop_samples,
             sample_every,
             sample_count,
+            replace,
         )
     finally:
         connection.close()
+
+
+def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | None:
+    """Returns the encode id that most recently superseded a source.
+
+    The ledger row points at the encode it replaced, so the operator can trace
+    a retained original back to the decision that produced its replacement.
+
+    Args:
+        connection: The database connection.
+        source: The library file.
+
+    Returns:
+        int | None: The newest encode's id, or None when the file has no row.
+    """
+    row = connection.execute("SELECT id FROM files WHERE path = ?", (str(source),)).fetchone()
+    if row is None:
+        return None
+    latest = db.get_latest_encode(connection, int(row["id"]))
+    return int(latest["id"]) if latest is not None else None
+
+
+def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Path) -> None:
+    """Swaps a verified encode into the source's path, retaining the original.
+
+    The swap gate is the check the encode already passed: the output exists,
+    is non-empty and matches the source's duration. `--verify`'s full-file VMAF
+    is recorded but is deliberately NOT a gate (a failed measurement is
+    reported as unmeasured; it never invalidates an encode), so a gate that
+    depends on it would silently skip every swap on a host without libvmaf.
+
+    A swap failure never loses the source: `replace.swap` renames the
+    original back when the second rename fails, and recovery handles a crash.
+
+    Args:
+        connection: The database connection.
+        source: The library file the output replaces.
+        output: The verified encoded file.
+    """
+    from shrinkray import replace as replace_module
+
+    size_before = source.stat().st_size
+    size_after = output.stat().st_size
+    try:
+        staged = replace_module.stage(output, source)
+        retained = replace_module.swap(source, staged)
+    except replace_module.SwapError as error:
+        log_error(f"Not replacing '{source.name}': {error}")
+        return
+    db.add_retained(
+        connection, source, retained, _latest_encode_id(connection, source), size_before, size_after
+    )
+    output.unlink(missing_ok=True)
+    console.print(
+        f"[green]Replaced '{source.name}': the original is retained at "
+        f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
+        f"when you are satisfied (see `shrinkray retained list`).[/green]"
+    )
 
 
 def _quality_progress_callback(progress: Progress, task: "TaskID") -> Callable[[dict], None]:
@@ -559,6 +627,7 @@ def _record_encodes(
     crop_samples: int = 10,
     sample_every: float = DEFAULT_SAMPLE_EVERY,
     sample_count: int = DEFAULT_SAMPLE_COUNT,
+    replace: bool = False,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -649,22 +718,26 @@ def _record_encodes(
                                 f"[green]Verified '{movie.name}': full-file VMAF "
                                 f"{result.verified_vmaf:.2f}[/green]"
                             )
-                    if result.success:
-                        saved = result.saved_percent
-                        change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
-                        console.print(
-                            f"[green]Encoded '{movie.name}': "
-                            f"{result.input_size / (1024**3):.2f} GB -> "
-                            f"{result.output_size / (1024**3):.2f} GB ({change}) "
-                            f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
-                        )
-                        record_quality_results(connection, movie, result, config)
-                    elif result.skipped_reason is not None:
-                        # guardrail skip => record it so future runs do not re-probe
-                        console.print(f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]")
-                        record_quality_results(connection, movie, result, config)
-                    else:
-                        log_error(f"Encoding '{movie.name}' failed: {result.error}")
+                        if result.success:
+                            saved = result.saved_percent
+                            change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
+                            console.print(
+                                f"[green]Encoded '{movie.name}': "
+                                f"{result.input_size / (1024**3):.2f} GB -> "
+                                f"{result.output_size / (1024**3):.2f} GB ({change}) "
+                                f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
+                            )
+                            record_quality_results(connection, movie, result, config)
+                            if replace:
+                                _swap_into_place(connection, movie, output_dir / movie.name)
+                        elif result.skipped_reason is not None:
+                            # guardrail skip => record it so future runs do not re-probe
+                            console.print(
+                                f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]"
+                            )
+                            record_quality_results(connection, movie, result, config)
+                        else:
+                            log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except _EncodeCancelled as e:
             # the disk watchdog fired (free space hit the floor mid-encode)
             # or the job/user cancel event set in - the partial output is
@@ -695,6 +768,10 @@ def _record_encodes(
 
     # record the encodes of this run in the database
     record_fixed_results(connection, results, config)
+    if replace:
+        for fixed_result in results:
+            if fixed_result.success:
+                _swap_into_place(connection, fixed_result.input, fixed_result.output)
 
 
 @app.command()
@@ -857,6 +934,68 @@ def plan(
                 f"{total_input / 1024**3:.2f} GB -> {total_output / 1024**3:.2f} GB "
                 f"({round((1 - total_output / total_input) * 100, 1)}% saved)[/green]"
             )
+    finally:
+        connection.close()
+
+
+@app.command("retained")
+def retained(
+    action: str = typer.Argument(
+        "list",
+        help="'list' (default) shows every retained original, or 'recover' to resolve an interrupted swap.",
+    ),
+    directory: Path = typer.Option(
+        None,
+        "--dir",
+        help="recover: the directory to inspect (default: the whole allowlist is not scanned; pass a folder).",
+    ),
+    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
+) -> None:
+    """Lists the originals a swap retained, or resolves an interrupted swap.
+
+    ShrinkRay never deletes a source. A replaced original is renamed aside and
+    listed here; deleting it is the operator's own action, in their own file
+    manager, once they are satisfied with the result.
+    """
+    if action == "recover":
+        if directory is None:
+            log_error("recover needs --dir: the folder to inspect.")
+            raise typer.Exit(1)
+        from shrinkray.replace import recover_directory
+
+        outcomes = recover_directory(directory)
+        if not outcomes:
+            console.print(f"[green]No interrupted swap in '{directory}'.[/green]")
+            return
+        for name, outcome in outcomes.items():
+            console.print(f"{name}: {outcome}")
+        return
+    if action != "list":
+        log_error(f"Unknown action '{action}': use 'list' or 'recover'.")
+        raise typer.Exit(1)
+    if not db_file.is_file():
+        log_error(f"Database '{db_file}' not found! Run a scan first.")
+        raise typer.Exit(1)
+    connection = db.connect(db_file)
+    try:
+        rows = db.list_retained(connection)
+        if not rows:
+            console.print("No retained originals: nothing has been swapped in place yet.")
+            return
+        total = sum(int(row["size_before"]) for row in rows)
+        for row in rows:
+            missing = "" if Path(row["retained_path"]).exists() else " (already removed)"
+            console.print(
+                f"{row['retained_path']}  "
+                f"{int(row['size_before']) / (1024**3):.2f} GB -> "
+                f"{int(row['size_after']) / (1024**3):.2f} GB  "
+                f"{row['created_at']}{missing}"
+            )
+        console.print(
+            f"\n[green]{len(rows)} retained original(s), "
+            f"{total / (1024**3):.2f} GB reclaimable.[/green] "
+            "ShrinkRay never deletes them: remove them yourself when satisfied."
+        )
     finally:
         connection.close()
 
