@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from shrinkray import db
+from shrinkray import db, resources
 from shrinkray.db import MovieRecord
 from shrinkray.helpers import (
     SIZE_UNIT,
@@ -366,7 +366,7 @@ def scan_movies(
                 progress.advance(task)
         else:
             if workers is None:
-                workers = min(8, (os.cpu_count() or 2))
+                workers = min(8, resources.cpu_count())
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
                     executor.submit(

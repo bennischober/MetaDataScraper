@@ -1,5 +1,5 @@
 {
-  "name": "MetaDataScraper",
+  "name": "ShrinkRay",
   "image": "mcr.microsoft.com/devcontainers/base:1.0-noble",
   "features": {
     "ghcr.io/devcontainers-extra/features/uv:1": {},

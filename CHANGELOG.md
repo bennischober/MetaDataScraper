@@ -7,6 +7,23 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **A container image for development and headless runs** (issue #34): one
+  `Dockerfile` with a `runtime` target (the deployment shape) and a `dev`
+  target that runs the gate inside the image, plus a `docker-compose.yml`.
+  The toolchain is pinned by version **and** sha256 - stock Debian/Ubuntu
+  `ffmpeg` is built without libvmaf, so quality mode cannot run on it at all,
+  and an unpinned build makes stored VMAF scores incomparable across
+  machines. The build fails unless `ffmpeg -h filter=libvmaf` succeeds and both
+  version strings match the pins.
+
+- **`resources.cpu_count()` respects a container's CPU quota.** `--cpus=2`
+  on a 24-core host must plan 2 workers, not 24. Measured: inside a 2-CPU
+  container `os.cpu_count()` *and* `os.process_cpu_count()` both still report
+  24, so the quota is read from the cgroup (`cpu.max` on v2,
+  `cpu.cfs_quota_us`/`cpu.cfs_period_us` on v1) with the machine count as
+  the fallback. Without it a quota-limited container plans a 24-way parallel
+  encode inside its quota and the encodes thrash.
+
 - **Swap in place with a retained original** (issue #35): `encode --replace`
   moves a verified output into its source's path and renames the original
   aside as `<name>.shrinkray-original` - **kept, never deleted**. The

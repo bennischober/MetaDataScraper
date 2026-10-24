@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -243,3 +244,53 @@ def rss_mib() -> float | None:
         return peak / 1024
     except (OSError, ValueError):
         return None
+
+
+def cpu_count() -> int:
+    """Returns the CPUs this process may actually use (at least 1).
+
+    os.cpu_count() reports the machine's cores, not the process's share. In a
+    container with --cpus=4 on a 24-core host it returns 24, so a plan would
+    start 24 parallel encodes inside a 4-CPU quota: they thrash and the
+    watchdog's timing assumptions stop holding.
+
+    Measured, not assumed: inside a container limited to 2 CPUs,
+    os.cpu_count() AND os.process_cpu_count() both still report the host's 24,
+    so the quota has to be read from the cgroup directly. cpu.max carries it on
+    v2 ("<quota> <period>", "max" = unlimited) and cpu.cfs_quota_us /
+    cpu.cfs_period_us on v1. Where neither is readable (bare metal, macOS,
+    Windows) the machine's core count is the right answer.
+
+    Returns:
+        int: The usable CPU count, never less than 1.
+    """
+    quota = _cgroup_cpu_quota()
+    if quota is not None:
+        return max(1, quota)
+    return max(1, os.cpu_count() or 1)
+
+
+def _cgroup_cpu_quota() -> int | None:
+    """Returns how many whole CPUs a cgroup quota permits.
+
+    Returns:
+        int | None: The permitted whole CPUs, or None when unlimited or
+        unreadable.
+    """
+    try:
+        parts = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+    except OSError:
+        parts = []
+    if len(parts) == 2 and parts[0] != "max":
+        try:
+            return int(parts[0]) // int(parts[1])
+        except (ValueError, ZeroDivisionError):
+            return None
+    try:
+        quota = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read_text())
+        period = int(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read_text())
+    except (OSError, ValueError):
+        return None
+    if quota <= 0:
+        return None
+    return quota // period

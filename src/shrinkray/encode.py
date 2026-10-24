@@ -1,5 +1,4 @@
 import json
-import os
 import queue
 import re
 import shutil
@@ -918,7 +917,7 @@ def _encode_pending(
     # short jobs, not an idle half machine next to one capped long encode
     pending.sort(key=lambda pair: -(probe_duration_seconds(pair[0]) or 0))
 
-    cpu = os.cpu_count() or 8
+    cpu = resources.cpu_count()
 
     def run_one(movie: Path, output_file: Path, threads: int | None) -> EncodeResult:
         handbrake = find_handbrake()
