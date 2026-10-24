@@ -102,6 +102,9 @@ from shrinkray.engine.search import (
     bisect_crf as bisect_crf,
 )
 from shrinkray.engine.search import (
+    check_chosen_crf_shrinks as check_chosen_crf_shrinks,
+)
+from shrinkray.engine.search import (
     estimate_size_factor as estimate_size_factor,
 )
 from shrinkray.engine.search import (
@@ -275,11 +278,6 @@ class QualityResult:
         if self.input_size <= 0 or self.output_size <= 0:
             return 0.0
         return round((1 - self.output_size / self.input_size) * 100, 2)
-
-
-# the sample extraction recipe, part of the probe cache key: a change to
-# how samples are extracted changes their encoded bytes (and thus every
-# probe's VMAF), so cached scores must not survive it (see #16)
 
 
 def source_codec(movie: Path) -> str | None:
@@ -1335,6 +1333,42 @@ def encode_with_quality(
             achieved_vmaf=achieved,
             probes=probes,
             error=encode_result.error,
+        )
+
+    # the size gate that matters: the probe estimate is a prediction from a few
+    # samples, this is the ground truth. The product rule is that a re-encode
+    # happens only when the file gets smaller, so a grown output is a failure to
+    # report - not a success with a negative saved_percent. Reported before the
+    # verification pass: measuring a file that is about to be discarded would
+    # spend minutes on a number nobody keeps.
+    final_input_size = input_file.stat().st_size
+    final_output_size = output_file.stat().st_size
+    if final_output_size >= final_input_size:
+        output_file.unlink(missing_ok=True)
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            chosen_crf=crf,
+            achieved_vmaf=achieved,
+            probes=probes,
+            error=(
+                f"skipped: the encode did not shrink the file "
+                f"({final_input_size} -> {final_output_size} bytes)"
+            ),
+            skipped_reason="output not smaller",
+            encoder_preset=encoder_preset,
+            probe_encoder_preset=probe_encoder_preset,
+            remove_bars=remove_bars,
+            crop=crop,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            crf_source=crf_source,
+            plan_created_at=plan_created_at,
+            hdr=hdr,
+            encoder=effective_encoder,
         )
     # success path: skip the verification below (already done)
     verified_vmaf: float | None = None

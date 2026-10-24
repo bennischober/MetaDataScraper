@@ -542,6 +542,96 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(result.chosen_crf, 18)
         self.assertEqual(result.encoder, "svt_av1_10bit")
 
+    def _encode_growing(self, movie: Path, factor: float = 1.5):
+        """Runs _encode with a fake final encode that writes a LARGER file.
+
+        The engine's size gate is the thing under test, so the fake must
+        produce a grown artifact exactly as a real encode can (the probe
+        estimate is a prediction; the full encode is the ground truth).
+        """
+        from shrinkray.encode import EncodeResult
+
+        output = Path(self.tmp.name) / "out.mkv"
+
+        def fake_encode_command(input_file, output_file, command, **kwargs):
+            output_file.write_bytes(b"y" * int(input_file.stat().st_size * factor))
+            return EncodeResult(
+                input=input_file,
+                output=output_file,
+                success=True,
+                input_size=input_file.stat().st_size,
+                output_size=output_file.stat().st_size,
+            )
+
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(
+                quality,
+                "_source_snapshot",
+                return_value={
+                    "width": None,
+                    "height": None,
+                    "codec": None,
+                    "duration": None,
+                    "bitrate": None,
+                },
+            ),
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(quality, "_encode_with_command", side_effect=fake_encode_command),
+        ):
+            result = quality.encode_with_quality(movie, output, db_file=self.db_file)
+        return result, output
+
+    def test_a_grown_encode_is_a_failure_not_a_success(self):
+        """Issue #130: the product rule is that a re-encode happens only when
+        the file gets smaller. A grown output must be reported as a skip, not as
+        a success with a negative saved_percent."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, _output = self._encode_growing(movie, factor=1.5)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "output not smaller")
+        self.assertIsNone(result.verified_vmaf)
+
+    def test_a_grown_encode_names_both_sizes(self):
+        """The reason must carry the numbers, so the operator can see how far
+        off the estimate was without re-running anything."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, _ = self._encode_growing(movie, factor=2.0)
+        self.assertIn("did not shrink", result.error)
+        self.assertIn("bytes", result.error)
+
+    def test_a_grown_output_is_discarded(self):
+        """The grown artifact must be removed, or it sits next to the source as
+        a second copy of the film - the duplication the product excludes."""
+        movie = self._movie()
+        self._store_plan(movie)
+        _result, output = self._encode_growing(movie, factor=1.5)
+        self.assertFalse(output.exists(), "a grown output must be deleted")
+        self.assertTrue(movie.exists(), "the source must be untouched")
+
+    def test_an_identical_size_is_also_a_failure(self):
+        """Equal size is not a shrink: the operator gains nothing and pays a
+        generation loss, so it counts as grown."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, output = self._encode_growing(movie, factor=1.0)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "output not smaller")
+        self.assertFalse(output.exists())
+
+    def test_a_smaller_encode_still_succeeds(self):
+        """The regression guard: the new gate must not reject the normal case."""
+        movie = self._movie()
+        self._store_plan(movie)
+        result, output = self._encode_growing(movie, factor=0.5)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+        self.assertGreater(result.saved_percent, 0)
+        self.assertTrue(output.exists())
+
 
 class TestProbeCache(unittest.TestCase):
     def test_probe_command_carries_probe_preset(self):
@@ -864,6 +954,105 @@ class TestProbeCache(unittest.TestCase):
         factor, encodes = self._size_factor()
         self.assertEqual(len(encodes), 1)  # not served from the vmaf entry
         self.assertEqual(factor, 0.5)
+
+
+class TestChosenCrfSizeGate(unittest.TestCase):
+    """Issue #129: the search must check size at the CRF it chose, not only at
+    the top of the range.
+
+    The top-of-range probe (crf_range[1], 45) is a *bound*: it answers "can any
+    CRF shrink this file?". The chosen CRF sits far below it, so the file there
+    is much bigger and can still grow. These tests drive the two calls to
+    different answers, which a flat mock cannot do.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp.name) / "work"
+        self.workdir.mkdir()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 100)
+        self.sample = self.workdir / "sample.mkv"
+        self.sample.write_bytes(b"y" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_search(self, factors: dict[int, float]):
+        """Runs find_optimal_crf_and_skip with estimate_size_factor keyed by CRF.
+
+        A dict (rather than a constant) is the point: it lets the top-of-range
+        probe and the chosen-CRF probe disagree, which is the case under test.
+        """
+        seen: list[int] = []
+
+        def fake_estimate(*args, **kwargs):
+            crf = args[3]
+            seen.append(crf)
+            return factors[crf]
+
+        with (
+            patch.object(engine_search, "estimate_size_factor", side_effect=fake_estimate),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+        ):
+            result = quality.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+            )
+        return result, seen
+
+    def test_a_growth_at_the_chosen_crf_is_skipped(self):
+        """The top of the range shrinks, the chosen CRF does not: skip.
+
+        This is the case the old code missed entirely - it would have encoded the
+        file at CRF 22 and made it bigger.
+        """
+        result, seen = self._run_search({45: 0.5, 22: 1.2})
+        _crf, _vmaf, _probes, skip = result
+        self.assertTrue(skip, "a grown chosen CRF must be skipped")
+        self.assertIn(45, seen, "the bound probe must still run")
+        self.assertIn(22, seen, "the chosen CRF must be checked")
+
+    def test_a_shrink_at_both_points_is_encoded(self):
+        """The regression guard: the new gate must not reject a normal file."""
+        result, seen = self._run_search({45: 0.4, 22: 0.7})
+        _crf, _vmaf, _probes, skip = result
+        self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
+        self.assertIn(22, seen)
+
+    def test_the_early_exit_still_skips_the_search(self):
+        """When the bound itself cannot shrink, the search never runs.
+
+        The bound is the whole point of the top-of-range probe: if CRF 45 cannot
+        shrink the file, nothing in the range can, so the bisect is wasted work.
+        """
+        with (
+            patch.object(engine_search, "estimate_size_factor", return_value=1.3),
+            patch.object(engine_search, "find_optimal_crf") as fake_search,
+        ):
+            result = quality.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+            )
+        fake_search.assert_not_called()
+        self.assertTrue(result[3], "the early exit must report a skip")
+
+    def test_the_chosen_check_is_a_separate_measurement(self):
+        """The chosen-CRF size probe is not served by the VMAF cache.
+
+        The VMAF cache is keyed kind='vmaf' and the size cache kind='size', so
+        reusing a VMAF probe's bytes as a size measurement would need a shared
+        cache entry - a separate optimization, not this fix. Asserting the two CRFs
+        were both measured keeps that honest.
+        """
+        _result, seen = self._run_search({45: 0.5, 22: 1.2})
+        self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
+        self.assertEqual(seen.count(45), 1)
+        self.assertEqual(seen.count(22), 1)
 
 
 class TestSubprocessTimeouts(unittest.TestCase):

@@ -697,7 +697,99 @@ def find_optimal_crf_and_skip(
         progress=progress,
         use_probe_cache=use_probe_cache,
     )
+    # the bound above answered "can ANY CRF in the range shrink this file?".
+    # The product asks a narrower question: would THIS file, at the CRF the
+    # search picked, actually get smaller? The chosen CRF sits far below the
+    # range's top, so the file there is much bigger and can still grow.
+    chosen_factor = check_chosen_crf_shrinks(
+        samples,
+        workdir,
+        handbrake,
+        chosen,
+        movie,
+        sample_seconds,
+        encoder,
+        probe_encoder_preset,
+        crop=crop,
+        cancel=cancel,
+        db_file=db_file,
+        encoder_threads=encoder_threads,
+        progress=progress,
+        use_probe_cache=use_probe_cache,
+    )
+    if chosen_factor >= 1.0:
+        log(
+            f"Skipping '{movie.name}': re-encode would not shrink it "
+            f"(probe factor {chosen_factor:.2f} at the chosen CRF {chosen})."
+        )
+        return chosen, achieved, probes, True
     return chosen, achieved, probes, False
+
+
+def check_chosen_crf_shrinks(
+    samples: list[tuple[Path, float]],
+    workdir: Path,
+    handbrake: str,
+    chosen: int,
+    movie: Path,
+    sample_seconds: float,
+    encoder: str,
+    probe_encoder_preset: str,
+    crop: tuple[int, int, int, int] | None = None,
+    cancel: threading.Event | None = None,
+    db_file: Path | None = None,
+    encoder_threads: int | None = None,
+    progress: ProgressCallback | None = None,
+    use_probe_cache: bool = True,
+) -> float:
+    """Returns the size factor at the CRF the search actually chose.
+
+    The top-of-range probe (crf_range[1]) is a *bound*: it answers "can any CRF
+    in the range shrink this file?". It is not the question the product asks.
+    crf_range[1] is far below the VMAF target, so the file there is tiny; the
+    chosen CRF is much lower and the file much bigger. A title can pass the bound
+    and still grow at the CRF that gets encoded.
+
+    This costs one sample encode. It cannot reuse the search's probes: the VMAF
+    cache is keyed kind="vmaf" and the size cache kind="size", so a VMAF probe's
+    encoded bytes are not addressable as a size measurement. Folding the two into
+    one cache entry is a separate optimization; the correctness check ships first.
+
+    Args:
+        samples (list[tuple[Path, float]]): The sample windows.
+        workdir (Path): Working directory for probe files.
+        handbrake (str): Path to the HandBrakeCLI binary.
+        chosen (int): The CRF the search selected.
+        movie (Path): The source movie (cache identity).
+        sample_seconds (float): The sample window's length in seconds.
+        encoder (str): The video encoder, e.g. 'svt_av1'.
+        probe_encoder_preset (str): The PROBE's speed preset.
+        crop (tuple | None): Crop bars applied to the probe encode.
+        cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
+        encoder_threads (int | None): Thread limit for the probe encode.
+        progress (ProgressCallback | None): Live-progress callback.
+        use_probe_cache (bool): False bypasses the probe cache.
+
+    Returns:
+        float: The encoded/source size ratio at the chosen CRF.
+    """
+    return estimate_size_factor(
+        samples,
+        workdir,
+        handbrake,
+        chosen,
+        movie,
+        sample_seconds,
+        encoder,
+        probe_encoder_preset,
+        crop=crop,
+        cancel=cancel,
+        db_file=db_file,
+        encoder_threads=encoder_threads,
+        progress=progress,
+        use_probe_cache=use_probe_cache,
+    )
 
 
 class SkipEncode(Exception):
