@@ -368,6 +368,15 @@ def encode(
             "crop them away (irreversible, opt-in)."
         ),
     ),
+    crop_samples: int = typer.Option(
+        10,
+        "--crop-samples",
+        min=1,
+        help=(
+            "cropdetect windows per movie (more samples can only shrink "
+            "the crop, the safe direction for an irreversible crop)."
+        ),
+    ),
     verify: bool = typer.Option(
         False,
         "--verify",
@@ -452,6 +461,7 @@ def encode(
             replan,
             probe_encoder_preset,
             encoder_preset,
+            crop_samples,
         )
     finally:
         connection.close()
@@ -506,6 +516,7 @@ def _record_encodes(
     replan: bool = False,
     probe_encoder_preset: str = DEFAULT_PROBE_ENCODER_PRESET,
     encoder_preset: str = DEFAULT_ENCODER_PRESET,
+    crop_samples: int = 10,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -587,6 +598,7 @@ def _record_encodes(
                             min_source_height=config.min_source_height,
                             min_source_size_gb=config.min_source_size_gb,
                             candidate_codecs=tuple(config.candidate_codecs),
+                            crop_sample_count=crop_samples,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -664,6 +676,12 @@ def plan(
     ),
     remove_bars: bool = typer.Option(
         False, "--remove-bars", help="Include black-bar removal in the plan."
+    ),
+    crop_samples: int = typer.Option(
+        10,
+        "--crop-samples",
+        min=1,
+        help="cropdetect windows per movie (more samples can only shrink the crop).",
     ),
     threads: int = typer.Option(
         0,
@@ -926,6 +944,12 @@ def watch_mode(
     ),
     remove_bars: bool = typer.Option(
         False, "--remove-bars", help="Detect and crop stable black bars."
+    ),
+    crop_samples: int = typer.Option(
+        10,
+        "--crop-samples",
+        min=1,
+        help="cropdetect windows per movie (more samples can only shrink the crop).",
     ),
     poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
 ) -> None:
