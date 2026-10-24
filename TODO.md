@@ -17,7 +17,7 @@ is tracked as a GitHub issue and none of it is implemented yet.
       the old `--replace` plan, which trashed the source; ShrinkRay must have no
       code path that deletes a source. Needs: the replace step, the retained-file
       ledger in the db, the UI list, and a `--keep-original` default.
-- [ ] **Remove the dedupe subsystem** - GitHub issue #37. `dedupe.py`,
+- [x] **Remove the dedupe subsystem** - GitHub issue #37. `dedupe.py`,
       `/api/duplicates`, `/api/duplicates/delete` (the only destructive route),
       `DuplicatesPage.svelte`, `test_dedupe.py`, and the `send2trash` dependency
       (used only there). Deduplication is not something that happens in the

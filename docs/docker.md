@@ -43,8 +43,8 @@ fresh" cost. Details below.
    this is the classic PUID/PGID dance (linuxserver-style images solve
    it with s6 / entrypoint user-fixing). Needs a deliberate design.
 2. **Trash/recycle semantics break.** No longer applicable: ShrinkRay does not
-   delete source files at all, and the only `send2trash` user (the duplicates
-   delete route) is being removed. Retained originals are ordinary files on the
+   delete source files at all, and the last `send2trash` user (the duplicates
+   delete route) is gone with issue #37. Retained originals are ordinary files on the
    library volume, so they work in a container without a host trash mount. This
    also simplifies the swap-in-place design — the original is renamed aside, not
    trashed.

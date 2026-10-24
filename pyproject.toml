@@ -11,9 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.143.0",
     "loguru>=0.7.3",
-    "rapidfuzz>=3.14.5",
     "rich>=15.0.0",
-    "send2trash>=2.1.0",
     "typer>=0.27.3",
     "uvicorn>=0.54.0",
 ]
@@ -30,7 +28,6 @@ dev = [
     "pytest-cov>=7.1.0",
     "requests>=2.34.2",
     "ruff>=0.14",
-    "types-send2trash>=2.1.0.20260408",
 ]
 
 [project.urls]
@@ -82,7 +79,6 @@ module = [
     "shrinkray.app",
     "shrinkray.config",
     "shrinkray.db",
-    "shrinkray.dedupe",
     "shrinkray.encode_lock",
     "shrinkray.jobs",
     "shrinkray.logger",
