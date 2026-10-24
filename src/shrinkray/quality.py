@@ -53,6 +53,15 @@ from shrinkray.engine.crop import (
 from shrinkray.engine.crop import (
     parse_crop_line as parse_crop_line,
 )
+from shrinkray.engine.plan import (
+    _lookup_plan as _lookup_plan,
+)
+from shrinkray.engine.plan import (
+    _plan_crop as _plan_crop,
+)
+from shrinkray.engine.plan import (
+    _plan_probes as _plan_probes,
+)
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT as DEFAULT_SAMPLE_COUNT,
 )
@@ -76,6 +85,15 @@ from shrinkray.engine.search import (
 )
 from shrinkray.engine.search import (
     DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF,
+)
+from shrinkray.engine.search import (
+    VMAF_STATISTIC as VMAF_STATISTIC,
+)
+from shrinkray.engine.search import (
+    SampleProbe as SampleProbe,
+)
+from shrinkray.engine.search import (
+    SkipEncode as SkipEncode,
 )
 from shrinkray.logger import log, log_error
 from shrinkray.tools.handbrake import (
@@ -117,10 +135,8 @@ from shrinkray.tools.vmaf import (
 
 FFMPEG_BINARY = "ffmpeg"
 
-# the decision statistic (issue #15): the mean of the per-sample
-# VMAF means, not the minimum. A minimum is monotone non-increasing
-# in the sample count, which punishes denser sampling (#14).
-VMAF_STATISTIC = "mean"
+# the decision statistic (issue #15) lives in engine/search.py; quality
+# re-imports it below
 
 # PRODUCT.md's source-codec rule: an H.264 source is a candidate on size
 # alone, while a modern codec (HEVC/AV1) is already efficient and is only
@@ -160,14 +176,6 @@ DEFAULT_HDR_TARGET_VMAF = 94.5
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
 # a sub-sampled pass minutes, the score stays honest
 VERIFY_SUBSAMPLE_THRESHOLD_BYTES = 2 * 1024**3
-
-
-@dataclass
-class SampleProbe:
-    """One CRF probe: the measured quality across all samples."""
-
-    crf: int
-    vmaf: float
 
 
 @dataclass
@@ -1425,98 +1433,6 @@ def plan_quality(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def _plan_crop(plan: sqlite3.Row) -> tuple[int, int, int, int] | None:
-    """Parses a stored plan's crop rect ('top,bottom,left,right').
-
-    Args:
-        plan (sqlite3.Row): The plan row.
-
-    Returns:
-        tuple[int, int, int, int] | None: The crop rect, or None.
-    """
-    raw = plan["crop"]
-    if not raw:
-        return None
-    parts = [int(v) for v in str(raw).split(",")]
-    if len(parts) != 4:
-        return None
-    return (parts[0], parts[1], parts[2], parts[3])
-
-
-def _plan_probes(plan: sqlite3.Row) -> list[SampleProbe]:
-    """Restores a stored plan's probe list from its JSON column.
-
-    Args:
-        plan (sqlite3.Row): The plan row.
-
-    Returns:
-        list[SampleProbe]: The probes that backed the plan's decision.
-    """
-    try:
-        pairs = json.loads(plan["probes"] or "[]")
-    except (TypeError, ValueError):
-        return []
-    return [SampleProbe(crf=int(c), vmaf=float(v)) for c, v in pairs]
-
-
-def _lookup_plan(
-    db_file: Path,
-    input_file: Path,
-    *,
-    encoder: str,
-    encoder_preset: str,
-    target_vmaf: float,
-    crf_range: tuple[int, int],
-    sample_count: int,
-    sample_seconds: float,
-    remove_bars: bool,
-    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
-) -> sqlite3.Row | None:
-    """Consults the plan cache for a valid plan of this movie+settings.
-
-    Opens a short-lived read connection (the engine stays connection-free;
-    db_file already locates the logs dir, so it already knows the db).
-    Any mismatch, missing file row or vanished movie returns None — the
-    caller re-probes, never guesses.
-
-    Args:
-        db_file (Path): The database file.
-        input_file (Path): The movie to encode.
-        encoder (str): The pending encode's effective encoder.
-        encoder_preset (str): The pending encode's preset.
-        target_vmaf (float): The pending encode's (HDR-overridden) target.
-        crf_range (tuple[int, int]): The pending encode's (HDR-overridden) range.
-        sample_count (int): The pending encode's sample count.
-        sample_seconds (float): The pending encode's sample length.
-        remove_bars (bool): The pending encode's remove_bars setting.
-        crop_sample_count (int): The pending encode's crop sample count.
-
-    Returns:
-        sqlite3.Row | None: The valid plan row, or None.
-    """
-    from shrinkray import db as _db
-
-    if not input_file.is_file():
-        return None
-    connection = _db.connect(db_file)
-    try:
-        return _db.get_valid_plan(
-            connection,
-            input_file,
-            encoder=encoder,
-            encoder_preset=encoder_preset,
-            target_vmaf=target_vmaf,
-            crf_range=crf_range,
-            sample_count=sample_count,
-            sample_seconds=sample_seconds,
-            remove_bars=remove_bars,
-            crop_sample_count=crop_sample_count,
-            vmaf_statistic=VMAF_STATISTIC,
-        )
-    finally:
-        connection.close()
-
-
 def _probe_movie(
     input_file: Path,
     target_vmaf: float,
@@ -1631,33 +1547,6 @@ def _probe_movie(
         return crf, achieved, probes, crop
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-
-
-class SkipEncode(Exception):
-    """Raised when the probing decides a movie should not be encoded.
-
-    The skip carries its evidence - the best CRF, the VMAF measured
-    there and how many probes were spent - so a later run can tell
-    'already probed at the floor and failed' from 'never probed'
-    instead of re-deriving the same verdict every run.
-
-    Attributes:
-        chosen_crf (int | None): The best CRF the search reached.
-        achieved_vmaf (float | None): The VMAF measured there.
-        probe_count (int): How many CRF probes were spent.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        chosen_crf: int | None = None,
-        achieved_vmaf: float | None = None,
-        probe_count: int = 0,
-    ) -> None:
-        super().__init__(message)
-        self.chosen_crf = chosen_crf
-        self.achieved_vmaf = achieved_vmaf
-        self.probe_count = probe_count
 
 
 def _check_cancel(cancel: threading.Event | None) -> None:
