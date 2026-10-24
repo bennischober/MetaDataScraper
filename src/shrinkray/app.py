@@ -29,12 +29,12 @@ from pydantic import BaseModel, Field
 from shrinkray import __version__, db
 from shrinkray.config import ENCODER_PRESETS, Conf, load_config
 from shrinkray.encode import cap_threads
+from shrinkray.engine.watch import watch
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
 from shrinkray.quality import HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
 from shrinkray.tools.process import apply_config
-from shrinkray.watch import watch
 
 app = FastAPI(title="ShrinkRay", version=__version__)
 

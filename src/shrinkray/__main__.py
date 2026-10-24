@@ -1184,7 +1184,7 @@ def watch_mode(
     library only changes when you swap the files yourself. Stop with Ctrl+C;
     the running encode finishes first.
     """
-    from shrinkray.watch import watch
+    from shrinkray.engine.watch import watch
 
     config = load_config(config_file=config_file)
     apply_config(config)
