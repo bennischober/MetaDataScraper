@@ -7,6 +7,16 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **A minimum-size gate**: `eligibility.min_source_size_gb` (default 0, off)
+  skips a source below the configured size with the reason `below min size`,
+  before sample extraction or any probe encode (issue #19). Probe cost is
+  roughly constant per file while the payoff scales with the file's size, so
+  the smallest files have the worst cost/benefit ratio; the gate reads one
+  stat and decides from it. It is off by default because the right floor is a
+  property of the operator's library, not a universal truth: a 3 GB movie can
+  still save 1.5 GB, and a 20 GB movie that is already efficient saves
+  nothing.
+
 - **A minimum-resolution gate**: `eligibility.min_source_height` (default
   1080, matching the floor PRODUCT.md states) skips a source whose height is
   below it with the reason `resolution too low`, before any sample extraction
