@@ -392,11 +392,6 @@ export function fmtGb(bytes: number | null | undefined): string {
 }
 
 /** Formats a saved percentage ('—' for none, +X% for growth). */
-export function fmtSaved(percent: number | null | undefined): string {
-  if (percent === null || percent === undefined) return '—'
-  return percent <= 0 ? `+${Math.abs(percent).toFixed(1)}%` : `${percent.toFixed(1)}%`
-}
-
 /** Formats an ISO timestamp as a short "when" (time today, date+time before).
  * The backend stores UTC ('datetime now' in sqlite is UTC); naive strings
  * get Z appended here at the API boundary — the one place that decides. */

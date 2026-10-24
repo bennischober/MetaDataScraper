@@ -229,21 +229,21 @@
               />
             </th>
             <th aria-sort={ariaSort('name')}>
-              <button class="sort legend" onclick={() => toggleSort('name')}>Title{sortMark('name')}</button>
+              <button class="sort legend" onclick={() => toggleSort('name')} aria-pressed={sortKey === 'name'}>Title{sortMark('name')}</button>
             </th>
             <th aria-sort={ariaSort('category')}>
-              <button class="sort legend" onclick={() => toggleSort('category')}>Category{sortMark('category')}</button>
+              <button class="sort legend" onclick={() => toggleSort('category')} aria-pressed={sortKey === 'category'}>Category{sortMark('category')}</button>
             </th>
             <th class="num" aria-sort={ariaSort('size')}>
-              <button class="sort legend" onclick={() => toggleSort('size')}>Size{sortMark('size')}</button>
+              <button class="sort legend" onclick={() => toggleSort('size')} aria-pressed={sortKey === 'size'}>Size{sortMark('size')}</button>
             </th>
             <th class="legend">Decision</th>
             <th class="legend num">CRF</th>
             <th class="num" aria-sort={ariaSort('vmaf')}>
-              <button class="sort legend" onclick={() => toggleSort('vmaf')}>VMAF{sortMark('vmaf')}</button>
+              <button class="sort legend" onclick={() => toggleSort('vmaf')} aria-pressed={sortKey === 'vmaf'}>VMAF{sortMark('vmaf')}</button>
             </th>
             <th class="num" aria-sort={ariaSort('saved')}>
-              <button class="sort legend" onclick={() => toggleSort('saved')}>Saved{sortMark('saved')}</button>
+              <button class="sort legend" onclick={() => toggleSort('saved')} aria-pressed={sortKey === 'saved'}>Saved{sortMark('saved')}</button>
             </th>
           </tr>
         </thead>
@@ -430,7 +430,11 @@
     letter-spacing: inherit;
     text-transform: inherit;
     cursor: pointer;
-    padding: 0;
+    /* a11y pass: the button is the hit target - 24px minimum and readable
+       interactive type even though the th label is legend-sized */
+    font-size: var(--fs-data);
+    min-height: 24px;
+    padding: 2px 0;
     width: 100%;
     text-align: inherit;
   }
