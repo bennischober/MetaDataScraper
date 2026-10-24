@@ -574,6 +574,15 @@ class TestDb(unittest.TestCase):
             self.assertIn("max_threads", body["handbrake"])
             self.assertIn("resources", body)
             self.assertIn("idle_priority", body["resources"])
+            # EVERY model field is present - the hand-written dict had
+            # already drifted (stall_minutes was never shown, issue #61)
+            self.assertIn("stall_minutes", body["handbrake"])
+            self.assertIn("probe_encoder_preset", body["handbrake"])
+            self.assertIn("encoder_preset", body["handbrake"])
+            self.assertIn("crop_sample_count", body["ffmpeg"])
+            # the canonical key name (the deprecated 'seperator' is gone
+            # from the API's output)
+            self.assertIn("separator", body["file"]["output"])
             # the removed integrations key (issue #43) is gone from the API
             self.assertNotIn("integrations", body)
             # PUT round-trips the new sections (the app's contract is PUT)
