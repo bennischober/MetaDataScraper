@@ -22,6 +22,7 @@ from shrinkray.config import (
     load_config,
 )
 from shrinkray.encode import cap_threads
+from shrinkray.engine.scan import find_movies, get_category, get_name, scan_movies
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
 from shrinkray.quality import (
@@ -33,7 +34,6 @@ from shrinkray.quality import (
     Cancelled as _EncodeCancelled,
 )
 from shrinkray.report import generate_report
-from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
 from shrinkray.tools.process import apply_config
 
 if TYPE_CHECKING:
