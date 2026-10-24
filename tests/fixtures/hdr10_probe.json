@@ -1,0 +1,12 @@
+{
+  "codec_name": "hevc",
+  "pix_fmt": "yuv420p10le",
+  "bits_per_raw_sample": null,
+  "color_space": "bt2020nc",
+  "color_transfer": "smpte2084",
+  "color_primaries": "bt2020",
+  "width": 320,
+  "height": 180,
+  "duration": "2.000000",
+  "avg_frame_rate": "25/1"
+}
