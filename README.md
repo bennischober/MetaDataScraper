@@ -245,6 +245,13 @@ size estimate comes from the short probe samples, so treat it as a ballpark;
 the probing predicts the decision, the encode measures it — the chosen CRF
 can differ by ±1 between runs.
 
+**HDR estimates are biased optimistic.** The size probe encodes one early
+window, and HDR samples skew toward easy content (dark, static shots), so the
+predicted savings land far above the real ones — measured on an HDR 4K title:
+19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
+`plan` command, the dashboard's plan display) carries this note; plan an HDR
+title expecting the real number to be much smaller than the prediction.
+
 ### `report` — the library as one page
 
 ```bash

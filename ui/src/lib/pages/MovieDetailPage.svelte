@@ -388,6 +388,9 @@
               </div>
               {#if plan.estimated_size != null && planEst != null}
                 <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)} → {fmtGb(plan.estimated_size)} (est.)</span></div>
+                {#if plan.estimate_note}
+                  <div class="fact"><span class="legend">NOTE</span><span class="mono dim">{plan.estimate_note}</span></div>
+                {/if}
               {/if}
               {#if plan.crf != null}
                 <div class="fact"><span class="legend">CRF</span><span class="mono">{plan.crf}</span></div>

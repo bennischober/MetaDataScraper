@@ -555,6 +555,72 @@ class TestDb(unittest.TestCase):
                 app_module.state = None
                 app_module._allowed_roots = []
 
+    def test_movie_detail_estimate_note(self):
+        """The HDR estimate bias note (issue #98): /api/movie derives
+        estimate_note for an HDR title with a live estimate, and omits it
+        for SDR titles and skip verdicts — the estimate's provenance is
+        visible wherever the estimate is shown."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+        from shrinkray.quality import HDR_ESTIMATE_NOTE
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                for hdr_flag, label in ((1, "hdr-title"), (0, "sdr-title")):
+                    movie_path = str(Path(media_tmp) / f"{label}.mkv")
+                    Path(movie_path).write_bytes(b"x" * 1000)
+                    file_id = db.upsert_file(
+                        self.connection,
+                        db.MovieRecord(
+                            path=Path(movie_path),
+                            mtime=100.0,
+                            size=1000,
+                            name=label,
+                            category="Cat",
+                            hdr=hdr_flag,
+                        ),
+                    )
+                    db.save_plan(
+                        self.connection,
+                        file_id,
+                        chosen_crf=21,
+                        achieved_vmaf=95.0,
+                        crop=None,
+                        probes=[],
+                        skipped_reason=None,
+                        estimated_size=450,
+                        input_mtime=Path(movie_path).stat().st_mtime,
+                        input_size=Path(movie_path).stat().st_size,
+                        encoder="svt_av1",
+                        encoder_preset="5",
+                        target_vmaf=95.0,
+                        crf_low=14,
+                        crf_high=32,
+                        sample_count=3,
+                        sample_seconds=10.0,
+                        remove_bars=False,
+                    )
+                    self.connection.commit()
+                    body = client.get("/api/movie", params={"path": movie_path}).json()
+                    note = body["plan"]["estimate_note"]
+                    if hdr_flag:
+                        self.assertEqual(note, HDR_ESTIMATE_NOTE)
+                        # the note carries the measured evidence, not a guess
+                        self.assertIn("19.1%", note)
+                        self.assertIn("78%", note)
+                    else:
+                        self.assertIsNone(note)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+                app_module._allowed_roots = []
+
     def test_config_endpoint_roundtrip(self):
         """GET /api/config returns the engine's full config shape (including
         the resource-politeness and integration sections) so the UI can edit

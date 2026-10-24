@@ -27,6 +27,7 @@ from shrinkray.logger import log, log_error
 from shrinkray.quality import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
+    HDR_ESTIMATE_NOTE,
 )
 from shrinkray.quality import (
     Cancelled as _EncodeCancelled,
@@ -934,6 +935,9 @@ def plan(
                 f"{total_input / 1024**3:.2f} GB -> {total_output / 1024**3:.2f} GB "
                 f"({round((1 - total_output / total_input) * 100, 1)}% saved)[/green]"
             )
+        if any(r.hdr and r.skipped_reason is None for r in plans):
+            # the HDR estimate bias (issue #98): say so where the estimate is shown
+            console.print(f"[yellow]{HDR_ESTIMATE_NOTE}[/yellow]")
     finally:
         connection.close()
 
