@@ -14,6 +14,7 @@ from rich.progress import Progress
 
 from shrinkray import resources
 from shrinkray.logger import log, log_error
+from shrinkray.media import FFPROBE_TIMEOUT
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
 
@@ -209,9 +210,15 @@ def probe_duration_seconds(path: Path) -> float | None:
                 str(path),
             ],
             capture_output=True,
+            timeout=FFPROBE_TIMEOUT,
         )
-    except OSError:
-        # ffprobe not installed (e.g. CI) => duration unknown
+    except (OSError, subprocess.SubprocessError) as e:
+        # OSError: ffprobe not installed (e.g. CI). TimeoutExpired: the file
+        # sits behind a mount that went stale (NFS/SMB that went away) and
+        # ffprobe blocks in the kernel — without a timeout the calling
+        # thread would hang forever and the watch loop/job worker would
+        # stall silently (issue #62). Duration unknown => caller skips.
+        log(f"ffprobe could not read '{path}' within {FFPROBE_TIMEOUT}s: {e}")
         return None
     if proc.returncode != 0:
         return None
@@ -356,6 +363,14 @@ def _encode_with_command(
     stderr_chunks: list[bytes] = []
     try:
         if progress is None:
+            # Fallback decision (issue #62): when the operator disables the
+            # stall watchdog (handbrake.stall_minutes = 0) AND no progress /
+            # cancellation is requested, this blocking run intentionally has
+            # no timeout — encodes legitimately take hours, so a fixed
+            # timeout would kill healthy work, and the operator has
+            # explicitly opted out of stall protection. "Watchdog off"
+            # means no protection; the streaming path below is the protected
+            # shape and is what every product entry point uses.
             proc = subprocess.run(command, capture_output=True, **resources.spawn_kwargs())
             returncode = proc.returncode
             stderr_bytes = proc.stderr

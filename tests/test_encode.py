@@ -8,6 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 from shrinkray import config as config_helper
 from shrinkray import db, encode, quality
@@ -953,6 +954,30 @@ class TestEncodeLock(unittest.TestCase):
             ):
                 encode.encode_movies([source], Path(tmp) / "enc")
         self.assertIn("no space left", str(ctx.exception))
+
+
+class TestSubprocessTimeouts(unittest.TestCase):
+    """probe_duration_seconds turns a TimeoutExpired into its documented
+    failure path (None, logged) instead of hanging forever (issue #62: a
+    stale NFS/SMB mount blocks the kernel read with no timeout)."""
+
+    def test_probe_duration_timeout_returns_none_and_logs(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch(
+                    "shrinkray.encode.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
+                ),
+                patch("shrinkray.encode.log") as logged,
+            ):
+                self.assertIsNone(encode.probe_duration_seconds(movie))
+            self.assertTrue(logged.called)
+            self.assertIn("movie.mkv", logged.call_args.args[0])
+            self.assertIn("60", logged.call_args.args[0])
 
 
 if __name__ == "__main__":

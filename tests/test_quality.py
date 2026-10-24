@@ -554,5 +554,67 @@ class TestProbeCache(unittest.TestCase):
         self.assertEqual(factor, 0.5)
 
 
+class TestSubprocessTimeouts(unittest.TestCase):
+    """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
+    documented failure path instead of hanging the thread forever (issue
+    #62: a stale NFS/SMB mount blocks the kernel read with no timeout)."""
+
+    def test_detect_vmaf_style_timeout_raises_documented_error(self):
+        import subprocess
+
+        # the style is detected once and cached module-wide; other tests in
+        # the suite may have populated the cache, so reset it around this
+        # test (and restore it — the real value stays valid)
+        saved = quality._vmaf_style
+        quality._vmaf_style = None
+        try:
+            with (
+                patch(
+                    "shrinkray.quality.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
+                ),
+                self.assertRaises(RuntimeError) as ctx,
+            ):
+                quality.detect_vmaf_style()
+            self.assertIn("60s", str(ctx.exception))
+            # a failed detection must not be cached: the next call probes again
+            self.assertIsNone(quality._vmaf_style)
+        finally:
+            quality._vmaf_style = saved
+
+    def test_detect_crop_rect_timeout_returns_none(self):
+        import subprocess
+
+        movie = Path(tempfile.mkdtemp()) / "no-such-file.mkv"
+        try:
+            with patch(
+                "shrinkray.quality.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
+            ) as mocked:
+                self.assertIsNone(quality.detect_crop_rect(movie, None, count=3))
+            # exactly the ffprobe frame-size call was made (not the
+            # cropdetect _run); the duration probe inside uses -show_format
+            self.assertIn("-show_format", mocked.call_args.args[0])
+        finally:
+            movie.parent.rmdir()
+
+    def test_extract_samples_timeout_raises_documented_error(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch(
+                    "shrinkray.quality.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
+                ),
+                self.assertRaises(RuntimeError) as ctx,
+            ):
+                quality.extract_samples(movie, Path(tmp) / "work", count=3, seconds=10.0)
+        self.assertIn("timed out after 60s", str(ctx.exception))
+        self.assertIn("movie.mkv", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

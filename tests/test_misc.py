@@ -1,8 +1,10 @@
 """Helper and config-hygiene tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import ast
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from shrinkray import config as config_helper
@@ -122,6 +124,52 @@ class TestEncoderPresetConfig(unittest.TestCase):
             config_helper.Conf({"handbrake": {"encoder_preset": "Fast 1080p30"}})
         self.assertIn("encoder_preset", str(ctx.exception))
         self.assertIn("Fast 1080p30", str(ctx.exception))
+
+
+class TestSubprocessTimeouts(unittest.TestCase):
+    """AGENTS.md: every subprocess call sets a timeout (issue #62). Enforced
+    by AST, not re-audited: a new subprocess.run without timeout= fails the
+    suite. The allowlist is the two watchdog-off fallback branches, whose
+    operators explicitly opted out of stall protection (the code comments
+    at those sites record the decision)."""
+
+    ALLOWLIST: ClassVar[dict[str, tuple[int, ...]]] = {
+        # (module filename, line numbers) of intentional no-timeout runs —
+        # the blocking fallbacks used only when the stall watchdog is OFF
+        # and no progress/cancel is requested; a fixed timeout would kill
+        # hours-long healthy encodes:
+        #   encode.py: the _encode_with_command non-streamed branch
+        #   quality.py: the _run simple branch
+        "encode.py": (374,),
+        "quality.py": (386,),
+    }
+
+    def _run_calls(self, tree: ast.AST) -> list[ast.Call]:
+        calls: list[ast.Call] = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "run"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in {"subprocess", "_subprocess"}
+            ):
+                calls.append(node)
+        return calls
+
+    def test_every_subprocess_run_has_timeout(self):
+        src_root = Path(__file__).resolve().parents[1] / "src" / "shrinkray"
+        offenders: list[str] = []
+        for py in sorted(src_root.glob("*.py")):
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+            allowed_lines = self.ALLOWLIST.get(py.name, ())
+            for call in self._run_calls(tree):
+                if any(kw.arg == "timeout" for kw in call.keywords):
+                    continue
+                if call.lineno in allowed_lines:
+                    continue
+                offenders.append(f"{py.name}:{call.lineno}")
+        self.assertEqual(offenders, [], "subprocess.run without timeout= in:")
 
 
 if __name__ == "__main__":

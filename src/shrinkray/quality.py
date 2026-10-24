@@ -39,6 +39,7 @@ from shrinkray.encode import (
     stall_timeout_seconds,
 )
 from shrinkray.logger import log, log_error
+from shrinkray.media import FFPROBE_TIMEOUT
 from shrinkray.telemetry import save_failure
 
 FFMPEG_BINARY = "ffmpeg"
@@ -75,10 +76,12 @@ def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
         proc = subprocess.run(
             [binary, "-hide_banner", "-h", "filter=libvmaf"],
             capture_output=True,
+            timeout=FFPROBE_TIMEOUT,
         )
-    except OSError as e:
+    except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(
-            f"ffmpeg ('{binary}') not found! Install a build with libvmaf support."
+            f"ffmpeg ('{binary}') not found or did not answer within "
+            f"{FFPROBE_TIMEOUT}s! Install a build with libvmaf support. ({e})"
         ) from e
     options = proc.stdout.decode(errors="replace")
     if "libvmaf" not in options and "libvmaf" not in proc.stderr.decode(errors="replace"):
@@ -216,18 +219,26 @@ def detect_crop_rect(
     if duration is None:
         return None
 
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            str(movie),
-        ],
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                str(movie),
+            ],
+            capture_output=True,
+            timeout=FFPROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        # OSError: ffprobe missing. TimeoutExpired: stale mount blocking the
+        # kernel read — without a timeout the watch loop/job worker stalls
+        # forever with no error (issue #62). No frame size => no crop.
+        log(f"ffprobe could not read '{movie}' within {FFPROBE_TIMEOUT}s: {e}")
+        return None
     try:
         stream = next(
             s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
@@ -365,8 +376,13 @@ def _run(
         tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
     """
     if cancel is None and stall_timeout_seconds() is None:
-        # neither cancellation nor stall watching is possible: the simple
-        # blocking run (used when both protections are explicitly off)
+        # Neither cancellation nor stall watching is possible: the simple
+        # blocking run (used when both protections are explicitly off).
+        # Fallback decision (issue #62): no timeout here on purpose — the
+        # probes this runs are minutes-long encodes, a fixed timeout would
+        # kill healthy work, and the operator has explicitly disabled stall
+        # protection. "Watchdog off" means no protection; the streaming
+        # Popen path below is the protected shape.
         proc = subprocess.run(command, capture_output=True, cwd=cwd, **resources.spawn_kwargs())
         return proc.returncode, proc.stderr.decode(errors="replace").strip()
     popen = subprocess.Popen(
@@ -593,18 +609,25 @@ def extract_samples(
         Cancelled: When the cancel event fires.
     """
     _check_cancel(cancel)
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            str(movie),
-        ],
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(movie),
+            ],
+            capture_output=True,
+            timeout=FFPROBE_TIMEOUT,
+        )
+    except subprocess.SubprocessError as e:
+        # TimeoutExpired: a stale mount (NFS/SMB that went away) blocks the
+        # read in the kernel — without a timeout this call would hang the
+        # job worker/watch loop forever with no error (issue #62).
+        raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s for '{movie}': {e}") from e
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe failed for '{movie}'")
     duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
