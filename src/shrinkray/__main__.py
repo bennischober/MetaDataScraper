@@ -24,7 +24,13 @@ from shrinkray.config import (
 from shrinkray.encode import cap_threads
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
-from shrinkray.quality import Cancelled as _EncodeCancelled
+from shrinkray.quality import (
+    DEFAULT_SAMPLE_COUNT,
+    DEFAULT_SAMPLE_EVERY,
+)
+from shrinkray.quality import (
+    Cancelled as _EncodeCancelled,
+)
 from shrinkray.report import generate_report
 from shrinkray.scanner import find_movies, get_category, get_name, scan_movies
 
@@ -377,6 +383,21 @@ def encode(
             "the crop, the safe direction for an irreversible crop)."
         ),
     ),
+    sample_every: float = typer.Option(
+        600.0,
+        "--sample-every",
+        min=0.0,
+        help=(
+            "Seconds of runtime per probe window (coverage stays a fixed "
+            "fraction of the file; 0 falls back to --sample-count)."
+        ),
+    ),
+    sample_count: int = typer.Option(
+        3,
+        "--sample-count",
+        min=1,
+        help="Probe windows, overriding --sample-every when set explicitly.",
+    ),
     verify: bool = typer.Option(
         False,
         "--verify",
@@ -462,6 +483,8 @@ def encode(
             probe_encoder_preset,
             encoder_preset,
             crop_samples,
+            sample_every,
+            sample_count,
         )
     finally:
         connection.close()
@@ -517,6 +540,8 @@ def _record_encodes(
     probe_encoder_preset: str = DEFAULT_PROBE_ENCODER_PRESET,
     encoder_preset: str = DEFAULT_ENCODER_PRESET,
     crop_samples: int = 10,
+    sample_every: float = DEFAULT_SAMPLE_EVERY,
+    sample_count: int = DEFAULT_SAMPLE_COUNT,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -599,6 +624,8 @@ def _record_encodes(
                             min_source_size_gb=config.min_source_size_gb,
                             candidate_codecs=tuple(config.candidate_codecs),
                             crop_sample_count=crop_samples,
+                            sample_every=sample_every,
+                            sample_count=sample_count,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -682,6 +709,21 @@ def plan(
         "--crop-samples",
         min=1,
         help="cropdetect windows per movie (more samples can only shrink the crop).",
+    ),
+    sample_every: float = typer.Option(
+        600.0,
+        "--sample-every",
+        min=0.0,
+        help=(
+            "Seconds of runtime per probe window (coverage stays a fixed "
+            "fraction of the file; 0 falls back to --sample-count)."
+        ),
+    ),
+    sample_count: int = typer.Option(
+        3,
+        "--sample-count",
+        min=1,
+        help="Probe windows, overriding --sample-every when set explicitly.",
     ),
     threads: int = typer.Option(
         0,
@@ -950,6 +992,21 @@ def watch_mode(
         "--crop-samples",
         min=1,
         help="cropdetect windows per movie (more samples can only shrink the crop).",
+    ),
+    sample_every: float = typer.Option(
+        600.0,
+        "--sample-every",
+        min=0.0,
+        help=(
+            "Seconds of runtime per probe window (coverage stays a fixed "
+            "fraction of the file; 0 falls back to --sample-count)."
+        ),
+    ),
+    sample_count: int = typer.Option(
+        3,
+        "--sample-count",
+        min=1,
+        help="Probe windows, overriding --sample-every when set explicitly.",
     ),
     poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
 ) -> None:

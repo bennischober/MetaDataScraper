@@ -18,6 +18,7 @@ scores and chosen CRFs are only comparable between similar libvmaf builds.
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -125,6 +126,10 @@ DEFAULT_CRF_RANGE = (14, 32)
 DEFAULT_HDR_CRF_RANGE = (10, 32)
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
+# probe density as a duration: one window per N seconds of runtime, so
+# coverage is a fixed fraction (sample_seconds / sample_every) instead of
+# shrinking as the movie gets longer. None keeps the count-based default.
+DEFAULT_SAMPLE_EVERY = 600.0
 
 # libvmaf v3 thread cap: values above ~8 crash the filter with EINVAL on
 # some builds (frame queue limit), so stay on the safe side
@@ -578,6 +583,38 @@ def _store_probe(connection: sqlite3.Connection | None, key: str, value: float) 
 
     _db.save_probe_score(connection, key, value)
     connection.close()
+
+
+def sample_count_for(
+    duration: float | None,
+    sample_every: float | None,
+    sample_count: int | None = None,
+) -> int:
+    """Derives the probe window count from the runtime and the density.
+
+    A count-based knob makes coverage inverse to runtime: the longer the movie,
+    the more scenes it has and the less of it gets probed. Deriving the count
+    from `sample_every` keeps the probed fraction fixed at
+    `sample_seconds / sample_every` regardless of length, which is the
+    "consistent experience across the file" property worth having.
+
+    An explicit `sample_count` wins when set, so a latency-sensitive caller
+    (watch mode) can still pin a fixed probe budget.
+
+    Args:
+        duration (float | None): The movie's runtime in seconds.
+        sample_every (float | None): Seconds of runtime per probe window
+            (None or 0 disables the density knob).
+        sample_count (int | None): An explicit count that overrides the density.
+
+    Returns:
+        int: The number of probe windows (at least 1).
+    """
+    if sample_count is not None and sample_count > 0:
+        return sample_count
+    if duration is None or duration <= 0 or not sample_every or sample_every <= 0:
+        return DEFAULT_SAMPLE_COUNT
+    return max(1, math.ceil(duration / sample_every))
 
 
 def sample_offsets(duration: float, count: int) -> list[float]:
@@ -1479,8 +1516,9 @@ def find_optimal_crf(
     handbrake: str,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
@@ -1526,7 +1564,12 @@ def find_optimal_crf(
         samples = [
             (s.resolve(), offset)
             for s, offset in extract_samples(
-                movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
+                movie,
+                workdir,
+                sample_count_for(probe_duration_seconds(movie), sample_every, sample_count),
+                sample_seconds,
+                cancel=cancel,
+                progress=progress,
             )
         ]
 
@@ -1575,8 +1618,9 @@ def find_optimal_crf_and_skip(
     handbrake: str,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
     crop: tuple[int, int, int, int] | None = None,
@@ -1623,7 +1667,12 @@ def find_optimal_crf_and_skip(
         samples = [
             (s.resolve(), offset)
             for s, offset in extract_samples(
-                movie, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
+                movie,
+                workdir,
+                sample_count_for(probe_duration_seconds(movie), sample_every, sample_count),
+                sample_seconds,
+                cancel=cancel,
+                progress=progress,
             )
         ]
 
@@ -1679,8 +1728,9 @@ def plan_quality(
     input_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
     encoder_preset: str = "slow",
@@ -1767,6 +1817,7 @@ def plan_quality(
         crf_range = DEFAULT_HDR_CRF_RANGE
 
     duration = probe_duration_seconds(input_file)
+    sample_count = sample_count_for(duration, sample_every, sample_count)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         return QualityResult(
             input=input_file,
@@ -2271,8 +2322,9 @@ def encode_with_quality(
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "x265",
     probe_encoder_preset: str = "medium",
     encoder_preset: str = "slow",
@@ -2360,6 +2412,7 @@ def encode_with_quality(
         crf_range = DEFAULT_HDR_CRF_RANGE
 
     duration = probe_duration_seconds(input_file)
+    sample_count = sample_count_for(duration, sample_every, sample_count)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         return QualityResult(
             input=input_file,

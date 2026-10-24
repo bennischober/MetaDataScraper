@@ -291,7 +291,7 @@ class TestPlanReuse(unittest.TestCase):
             remove_bars=False,
             crop=None,
             crf_range=overrides.pop("crf_range", (14, 32)),
-            sample_count=3,
+            sample_count=quality.sample_count_for(600.0, quality.DEFAULT_SAMPLE_EVERY),
             sample_seconds=10.0,
             hdr=overrides.pop("hdr", False),
             encoder=overrides.pop("encoder", "x265"),
@@ -749,6 +749,66 @@ class TestSubprocessTimeouts(unittest.TestCase):
             self.assertIn("-show_format", mocked.call_args.args[0])
         finally:
             movie.parent.rmdir()
+
+    def test_sample_count_for_derives_from_duration(self):
+        """The probe count follows the runtime at a fixed density.
+
+        A count-based knob makes coverage inverse to runtime: the longer the
+        movie, the less of it gets probed. Deriving the count from
+        sample_every keeps the probed fraction at sample_seconds /
+        sample_every regardless of length (issue #14).
+        """
+        # a 20-minute short: one window per 10 minutes => 2
+        self.assertEqual(quality.sample_count_for(1200.0, 600.0), 2)
+        # a 2-hour film => 12
+        self.assertEqual(quality.sample_count_for(7200.0, 600.0), 12)
+        # a 4-hour film => 24 (coverage stays the same fraction)
+        self.assertEqual(quality.sample_count_for(14400.0, 600.0), 24)
+
+    def test_sample_count_for_short_input_yields_one(self):
+        """An input shorter than the density still yields one window."""
+        self.assertEqual(quality.sample_count_for(300.0, 600.0), 1)
+        self.assertEqual(quality.sample_count_for(1.0, 600.0), 1)
+
+    def test_sample_count_for_explicit_count_overrides(self):
+        """An explicit sample_count wins over the density knob.
+
+        A latency-sensitive caller (watch mode) must still be able to pin a
+        fixed probe budget.
+        """
+        self.assertEqual(quality.sample_count_for(7200.0, 600.0, sample_count=3), 3)
+
+    def test_sample_count_for_disabled_density_uses_default(self):
+        """A disabled density falls back to the count-based default."""
+        self.assertEqual(quality.sample_count_for(7200.0, 0.0), quality.DEFAULT_SAMPLE_COUNT)
+        self.assertEqual(quality.sample_count_for(None, 600.0), quality.DEFAULT_SAMPLE_COUNT)
+
+    def test_plan_records_derived_sample_count(self):
+        """The plan records the DERIVED count, not the raw default.
+
+        The plan fingerprint keys on the sample count, so a plan recorded with
+        three windows must not be reused by a run whose density derives
+        twelve (issue #14).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(quality, "probe_duration_seconds", return_value=7200.0),
+                patch.object(quality, "source_height", return_value=2160),
+                patch.object(quality, "source_codec", return_value="h264"),
+                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(
+                    quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
+                ) as fake_extract,
+                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(quality, "probe_crf", return_value=95.0),
+            ):
+                result = quality.plan_quality(src, sample_every=600.0)
+        self.assertTrue(result.success)
+        self.assertEqual(result.sample_count, 12)
+        # the extraction was asked for the derived count
+        self.assertEqual(fake_extract.call_args.args[2], 12)
 
     def test_detect_crop_rect_defaults_to_ten_samples(self):
         """The crop detector samples ten windows by default.

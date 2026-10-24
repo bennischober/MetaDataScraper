@@ -143,7 +143,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         #   encode.py: the _encode_with_command non-streamed branch
         #   quality.py: the _run simple branch
         "encode.py": (378,),
-        "quality.py": (407,),
+        "quality.py": (412,),
     }
 
     def _run_calls(self, tree: ast.AST) -> list[ast.Call]:

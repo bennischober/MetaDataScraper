@@ -7,6 +7,17 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Added
 
+- **Probe density is duration-based (`sample_every`)**: `quality.sample_every`
+  (default 600s) and `--sample-every`/`--sample-count` derive the probe
+  window count from the runtime, so coverage is a fixed fraction of the file
+  (`sample_seconds / sample_every`) instead of shrinking as the movie gets
+  longer (issue #14). A count-based knob made coverage inverse to runtime:
+  the longer the movie, the more scenes it has and the less of it got probed.
+  `--sample-count` overrides the density when set explicitly, so a
+  latency-sensitive caller (watch mode) can still pin a fixed probe budget.
+  The derived count is resolved before the plan lookup, so it is recorded as
+  the plan's `sample_count` and a changed density misses the cache.
+
 - **Ten cropdetect windows per movie, configurable**: `ffmpeg.crop_sample_count`
   (default 10) and `--crop-samples N` raise the crop detector's coverage
   from three samples to ten (issue #17). With the bars common to every
