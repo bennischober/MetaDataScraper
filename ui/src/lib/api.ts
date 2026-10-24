@@ -15,11 +15,23 @@ export interface Job {
   finished_at?: string | null
 }
 
-/** Extract the movie folders a job operated on (multi-directory aware). */
+/** Extract the movie targets a job operated on (multi-directory aware).
+ * The payload form the UI submits is `path` = first target plus `paths`
+ * = the remaining targets, so both keys union — preferring `paths` dropped
+ * the first target of every multi-target batch (issue #100: the per-movie
+ * history filter showed that movie "no jobs"). */
 export function jobPaths(job: Job): string[] {
   const payload = job.payload as { paths?: string[]; path?: string }
-  if (payload.paths?.length) return payload.paths
-  return payload.path ? [payload.path] : []
+  const resolved: string[] = []
+  const seen = new Set<string>()
+  for (const value of [payload.path, ...(payload.paths ?? [])]) {
+    if (!value) continue
+    const key = value.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    resolved.push(value)
+  }
+  return resolved
 }
 
 /** One per-movie entry inside a job's result payload (encode `outcomes`,

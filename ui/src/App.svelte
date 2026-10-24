@@ -352,6 +352,10 @@
   // confirm time) and is the only place an encode with bars armed passes
   // through — movie page, bulk selection and ENCODE ALL all route here.
   let pendingBarsTargets = $state<string[] | null>(null)
+  // a remove_bars RETRY replays the STORED payload after the same confirmation
+  // ceremony (issue #100): the confirm button enqueues this verbatim instead of
+  // rebuilding the payload from the live form state
+  let pendingRetryPayload: Record<string, unknown> | null = null
   let barsConfirmEl: HTMLDivElement | null = $state(null)
   let barsTrigger: HTMLElement | null = null
   $effect(() => {
@@ -359,6 +363,7 @@
   })
   function closeBars() {
     pendingBarsTargets = null
+    pendingRetryPayload = null
     // the safe exit returns focus to wherever the encode was launched from
     barsTrigger?.focus()
     barsTrigger = null
@@ -492,13 +497,36 @@
     if (pendingKind !== null) return
     // a row of a removed kind is history only: it has no payload to replay
     if (job.kind === 'legacy') return
+    // replay the STORED payload verbatim (issue #100): re-deriving settings
+    // from the current form state would run the job with TODAY's knobs
+    // while the history row records the original run - the row and the
+    // execution would disagree. The payload IS the enqueue body.
     const payload = job.payload as Record<string, unknown>
-    const paths = jobPaths(job)
     if (payload.remove_bars === true) {
-      requestEncode(paths)
+      // irreversible work keeps its explicit per-run ceremony, but the
+      // confirmation carries the STORED payload, not a form rebuild
+      barsTrigger = document.activeElement as HTMLElement | null
+      pendingRetryPayload = payload
+      pendingBarsTargets = jobPaths(job)
       return
     }
-    await enqueue(job.kind, paths)
+    void replayJob(payload)
+  }
+
+  async function replayJob(payload: Record<string, unknown>) {
+    const kind = payload.kind as 'scan' | 'plan' | 'encode' | undefined
+    if (kind !== 'scan' && kind !== 'plan' && kind !== 'encode') return
+    if (pendingKind !== null) return
+    pendingKind = kind
+    persist()
+    try {
+      await api.enqueue({ ...payload, kind } as Parameters<typeof api.enqueue>[0])
+      await refresh()
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    } finally {
+      pendingKind = null
+    }
   }
 
   // per-movie actions (encode/plan a single title from its page)
@@ -787,7 +815,19 @@
     </div>
     <div class="bars-buttons">
       <button class="mono deny" onclick={closeBars}>KEEP BARS</button>
-      <button class="mono confirm" onclick={() => { const t = pendingBarsTargets!; pendingBarsTargets = null; enqueue('encode', t, true) }}>
+      <button class="mono confirm" onclick={() => {
+        if (pendingRetryPayload) {
+          // a retried remove_bars job replays its STORED payload (issue #100)
+          const stored = pendingRetryPayload
+          pendingRetryPayload = null
+          pendingBarsTargets = null
+          void replayJob(stored)
+          return
+        }
+        const t = pendingBarsTargets!
+        pendingBarsTargets = null
+        enqueue('encode', t, true)
+      }}>
         CROP {barsMovieFiles.length + barsTitlesInFolders} MOVIE{barsMovieFiles.length + barsTitlesInFolders === 1 ? '' : 'S'}
       </button>
     </div>
