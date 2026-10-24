@@ -275,11 +275,22 @@ browser are just two consumers of the same engine and database:
 - the configuration (`config.json`) is editable in the UI's settings dialog
 - jobs survive restarts; jobs interrupted by a restart are marked as failed
 
-The server binds to localhost by default — **there is no authentication**, so do not
-expose it to an untrusted network. Binding it to the LAN is a deliberate
-development-stage trade-off (see [TODO.md](TODO.md)); authentication is planned
-before this is recommended for an exposed deployment. Stop with Ctrl+C; the running
-job's state is recovered on the next start.
+The server binds to localhost by default. **Authentication is opt-in**, and binding to a
+non-loopback address without it is refused at startup: an open dashboard on a LAN is
+reachable by every device on that LAN, including guests' phones and any compromised
+IoT device. To expose it deliberately, set a token:
+
+```sh
+SHRINKRAY_TOKEN='a-long-random-secret' uv run shrinkray app --host 0.0.0.0
+```
+
+The token lives in the environment, never in `config.json` (which is a tracked file).
+With it set, every route requires `Authorization: Bearer <token>`; the dashboard asks
+for it once and keeps it in the browser. The SSE stream (`/api/events`) also accepts
+`?token=` because an `EventSource` cannot send a header. With no token set the
+loopback development flow is unchanged — no token, no prompt. TLS is deliberately
+left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
+the next start.
 
 ### `watch` — one-shot folder watcher
 

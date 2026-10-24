@@ -8,6 +8,7 @@ Run with `shrinkray app`.
 """
 
 import contextlib
+import hmac
 import json
 import os
 import os.path
@@ -35,7 +36,81 @@ from shrinkray.watch import watch
 
 app = FastAPI(title="ShrinkRay", version=__version__)
 
+# the shared-secret token's environment variable (issue #36). Never read from
+# config.json: that file is tracked, and a token in it would be committed.
+AUTH_TOKEN_ENV = "SHRINKRAY_TOKEN"
+
 _T = TypeVar("_T")
+
+
+def _configured_token() -> str | None:
+    """Returns the operator's bearer token, or None when auth is off.
+
+    Auth is opt-in: with no token set the dashboard is unauthenticated, which
+    is the loopback development flow. `run_app` refuses a non-loopback bind
+    without one, so "off" can never be a remotely reachable state.
+
+    Returns:
+        str | None: The token from $SHRINKRAY_TOKEN, or None.
+    """
+    token = os.environ.get(AUTH_TOKEN_ENV, "")
+    return token or None
+
+
+def _is_loopback(host: str) -> bool:
+    """Whether a bind address is reachable only from this machine.
+
+    Args:
+        host (str): The requested bind address.
+
+    Returns:
+        bool: True for a loopback address.
+    """
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.middleware("http")
+async def require_token(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Rejects an unauthenticated request when a token is configured.
+
+    A middleware rather than a per-route dependency: the point is that a NEW
+    route cannot be added unauthenticated by forgetting a decorator. The SSE
+    stream and the static UI are covered for the same reason.
+
+    The comparison is constant-time (`hmac.compare_digest`) so a wrong token
+    leaks nothing through timing, and the response never echoes the token.
+
+    Args:
+        request: The incoming request.
+        call_next: The next middleware/handler.
+
+    Returns:
+        The response, or a 401 when the token is missing or wrong.
+    """
+    token = _configured_token()
+    if token is None:
+        return await call_next(request)
+    presented = request.headers.get("authorization", "")
+    prefix = "Bearer "
+    if presented.startswith(prefix) and hmac.compare_digest(presented[len(prefix) :], token):
+        return await call_next(request)
+    # EventSource cannot set a request header, so the SSE stream passes the
+    # token as a query parameter instead. It is accepted only here: a token in
+    # a URL is logged by proxies, so every other route requires the header.
+    query_token = request.query_params.get("token")
+    if (
+        request.url.path == "/api/events"
+        and query_token is not None
+        and hmac.compare_digest(query_token, token)
+    ):
+        return await call_next(request)
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "missing or invalid bearer token"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @app.middleware("http")
@@ -1274,7 +1349,20 @@ def run_app(
         config_file (Path | None): The config.json path (None = next to
             the db, or $SHRINKRAY_CONFIG; the dashboard and the engine
             must read the same file, issue #58).
+
+    Raises:
+        ValueError: If the app is bound to a non-loopback address with no
+            $SHRINKRAY_TOKEN configured (issue #36). An open dashboard on a
+            LAN is reachable by every device on that LAN, so this is a
+            startup failure, not a warning.
     """
+    if not _is_loopback(host) and _configured_token() is None:
+        raise ValueError(
+            f"refusing to bind {host} without authentication: set "
+            f"${AUTH_TOKEN_ENV} to a secret token, or bind 127.0.0.1. "
+            "A published port with no auth is reachable by every device "
+            "on the network (issue #36)."
+        )
     global state
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)

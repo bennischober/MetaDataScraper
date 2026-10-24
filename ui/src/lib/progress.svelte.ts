@@ -10,6 +10,8 @@
  * poll, so stale entries are never read.
  */
 
+import { storedToken } from './api'
+
 export interface ProgressData {
   stage?: string
   detail?: string
@@ -38,10 +40,21 @@ export function eventsConnected(): boolean {
 // "stream disconnected" indicator); svelte-check does not flag it, this
 // comment exists so a future audit does not mistake it for a leftover.
 
+/** The SSE stream's token query parameter (issue #36).
+ *
+ * EventSource cannot set an Authorization header, so the token travels as a
+ * query parameter on this one route. The server accepts it only for
+ * /api/events. With no token stored the parameter is omitted entirely.
+ */
+function sseTokenParam(): string {
+  const token = storedToken()
+  return token ? `?token=${encodeURIComponent(token)}` : ''
+}
+
 /** Opens the SSE stream once (idempotent); reconnects are automatic. */
 export function connectEvents(): void {
   if (es !== null) return
-  es = new EventSource('/api/events')
+  es = new EventSource(`/api/events${sseTokenParam()}`)
   es.addEventListener('hello', (e) => {
     // the hello is authoritative: replace the whole map (it carries the
     // latest event of every currently running job — an empty map after a
