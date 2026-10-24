@@ -187,6 +187,51 @@ class TestLedger(unittest.TestCase):
             self.assertIn(expected, columns)
 
 
+class TestSwapGate(unittest.TestCase):
+    """Issue #130: the swap gate is the last code before a file enters the
+    library, so it re-checks size even though the engine already refused a grown
+    encode. A bug upstream must not be able to make the library bigger."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "movie.mkv"
+        self.source.write_bytes(b"ORIGINAL" * 100)
+        self.output = self.root / "enc" / "movie.mkv"
+        self.output.parent.mkdir()
+        self.connection = db.connect(self.root / "metadata.db")
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _swap(self) -> None:
+        from shrinkray.__main__ import _swap_into_place
+
+        _swap_into_place(self.connection, self.source, self.output)
+
+    def test_a_grown_output_is_refused(self) -> None:
+        self.output.write_bytes(b"BIGGER" * 200)
+        self._swap()
+        self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
+        self.assertFalse(replace.retained_path_for(self.source).exists())
+
+    def test_an_identical_output_is_refused(self) -> None:
+        """Equal size is not a shrink: nothing gained, a generation loss paid."""
+        self.output.write_bytes(self.source.read_bytes())
+        self._swap()
+        self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
+
+    def test_a_smaller_output_is_swapped(self) -> None:
+        """The regression guard: the gate must not block the normal case."""
+        self.output.write_bytes(b"new" * 10)
+        self._swap()
+        self.assertEqual(self.source.read_bytes(), b"new" * 10)
+        self.assertTrue(replace.retained_path_for(self.source).exists())
+        rows = db.list_retained(self.connection)
+        self.assertEqual(len(rows), 1)
+
+
 class TestNoSourceDeletion(unittest.TestCase):
     """The product rule: no code path in ShrinkRay deletes a source."""
 

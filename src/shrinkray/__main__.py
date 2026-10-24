@@ -550,6 +550,10 @@ def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Pat
     reported as unmeasured; it never invalidates an encode), so a gate that
     depends on it would silently skip every swap on a host without libvmaf.
 
+    Size IS a gate, and it is re-checked here even though the engine already
+    refused a grown encode: this is the last code before a file enters the
+    library, and a bug upstream must not be able to make the library bigger.
+
     A swap failure never loses the source: `replace.swap` renames the
     original back when the second rename fails, and recovery handles a crash.
 
@@ -562,6 +566,12 @@ def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Pat
 
     size_before = source.stat().st_size
     size_after = output.stat().st_size
+    if size_after >= size_before:
+        log_error(
+            f"Not replacing '{source.name}': the output is not smaller "
+            f"({size_before} -> {size_after} bytes)"
+        )
+        return
     try:
         staged = replace_module.stage(output, source)
         retained = replace_module.swap(source, staged)
@@ -724,11 +734,14 @@ def _record_encodes(
                             )
                         if result.success:
                             saved = result.saved_percent
-                            change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
+                            # a successful encode is always a shrink (the engine
+                            # refuses a grown output, issue #130), so this cannot
+                            # read as a gain; assert it rather than print a lie
+                            assert saved >= 0, f"success with saved={saved}%: {result.error}"
                             console.print(
                                 f"[green]Encoded '{movie.name}': "
                                 f"{result.input_size / (1024**3):.2f} GB -> "
-                                f"{result.output_size / (1024**3):.2f} GB ({change}) "
+                                f"{result.output_size / (1024**3):.2f} GB ({saved}% saved) "
                                 f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                             )
                             record_quality_results(connection, movie, result, config)
