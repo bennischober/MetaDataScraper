@@ -227,6 +227,11 @@ def app_command(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
+    config_file: Path = typer.Option(
+        None,
+        "--config",
+        help="Path of the config.json file (default: next to the db, or $SHRINKRAY_CONFIG).",
+    ),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
     port: int = typer.Option(8420, "--port", min=1, max=65535, help="Bind port."),
     root: list[Path] = typer.Option(
@@ -246,7 +251,7 @@ def app_command(
     # empty list = run_app computes its default (all drive roots); only an
     # explicit --root narrows the allowlist down
     roots = [Path(r) for r in root] or None
-    run_app(db_file, host=host, port=port, allowed_roots=roots)
+    run_app(db_file, host=host, port=port, allowed_roots=roots, config_file=config_file)
 
 
 def _totals(movies_by_category: dict) -> tuple:
@@ -302,9 +307,14 @@ def scan(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
+    config_file: Path = typer.Option(
+        None,
+        "--config",
+        help="Path of the config.json file (default: next to the db, or $SHRINKRAY_CONFIG).",
+    ),
 ) -> None:
     """Scans the movie folder and writes the metadata to a text file."""
-    config = load_config()
+    config = load_config(config_file=config_file)
     connection = db.connect(db_file)
     try:
         movies_by_category, movies, error_messages = scan_movies(
@@ -458,10 +468,15 @@ def encode(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
+    config_file: Path = typer.Option(
+        None,
+        "--config",
+        help="Path of the config.json file (default: next to the db, or $SHRINKRAY_CONFIG).",
+    ),
 ) -> None:
     """Re-encodes the found movies with HandBrake to reduce their file size."""
 
-    config = load_config()
+    config = load_config(config_file=config_file)
     connection = db.connect(db_file)
     try:
         # the output directory must never be a scan target (previous outputs
@@ -752,6 +767,11 @@ def plan(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
     ),
+    config_file: Path = typer.Option(
+        None,
+        "--config",
+        help="Path of the config.json file (default: next to the db, or $SHRINKRAY_CONFIG).",
+    ),
 ) -> None:
     """Probes the movies and predicts the encode outcome without encoding.
 
@@ -762,7 +782,7 @@ def plan(
     """
     from shrinkray.quality import plan_quality
 
-    config = load_config()
+    config = load_config(config_file=config_file)
     connection = db.connect(db_file)
     try:
         _, movies, _ = scan_movies(path, config, connection=connection)
@@ -1011,6 +1031,11 @@ def watch_mode(
         help="Probe windows, overriding --sample-every when set explicitly.",
     ),
     poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
+    config_file: Path = typer.Option(
+        None,
+        "--config",
+        help="Path of the config.json file (default: $SHRINKRAY_CONFIG or ./config.json).",
+    ),
 ) -> None:
     """Watches a folder and encodes newly arrived movies automatically.
 
@@ -1020,7 +1045,7 @@ def watch_mode(
     """
     from shrinkray.watch import watch
 
-    config = load_config()
+    config = load_config(config_file=config_file)
     try:
         watch(
             inbox,

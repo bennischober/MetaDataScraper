@@ -7,6 +7,7 @@ to the local HTTP API — same engine, same database, same guardrails.
 Run with `shrinkray app`.
 """
 
+import contextlib
 import json
 import os
 import os.path
@@ -14,6 +15,7 @@ import queue
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -191,6 +193,7 @@ class AppState:
             db_file (Path): The sqlite database file.
         """
         self.db_file = db_file
+        self.config_file: Path | None = None  # the app command's --config
         self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
         self.bus = ProgressBus()
@@ -356,7 +359,11 @@ def get_config() -> dict:
 
 
 def _config_path(s: AppState) -> Path:
-    """Resolves the config.json path for the app's database location.
+    """Resolves the config.json path for the resident app.
+
+    One location for dashboard and engine (issue #58): the resolution
+    order is the app's explicit config file, then $SHRINKRAY_CONFIG, then
+    the db directory (the operator's chosen user-data location).
 
     Args:
         s (AppState): The app state.
@@ -364,11 +371,21 @@ def _config_path(s: AppState) -> Path:
     Returns:
         Path: The config.json path.
     """
-    return s.db_file.parent / "config.json"
+    from shrinkray.config import resolve_config_path
+
+    return resolve_config_path(
+        config_file=s.config_file,
+        db_dir=s.db_file.parent,
+    )
 
 
 def _conf_to_dict(conf: Conf) -> dict:
     """Converts a Conf object into the config.json dict shape.
+
+    Built FROM THE SCHEMA MODEL (issue #61): every field the model has is
+    returned - including settings the hand-written dict had already drifted
+    past (handbrake.stall_minutes, the two encoder speed presets) - and the
+    canonical key names ('separator', not the deprecated 'seperator').
 
     Args:
         conf (Conf): The configuration object.
@@ -376,44 +393,60 @@ def _conf_to_dict(conf: Conf) -> dict:
     Returns:
         dict: The config.json-shaped dict.
     """
-    return {
-        "codec": {
-            "hdr": {
-                "color_space": conf.hdr_color_spaces,
-                "color_transfer": conf.hdr_color_transfers,
-            }
-        },
-        "file": {
-            "extensions": conf.extensions,
-            "output": {"seperator": conf.separator},
-        },
-        "ffmpeg": {
-            "black_bars": {
-                "MIN_WIDTH": conf.black_bar_min_width,
-                "MIN_HEIGHT": conf.black_bar_min_height,
-            },
-            "crop_sample_count": conf.crop_sample_count,
-        },
-        "quality": {
-            "sample_every": conf.sample_every,
-            "sample_count": conf.sample_count,
-            "sample_seconds": conf.sample_seconds,
-        },
-        "handbrake": {
-            "preset": conf.handbrake_preset,
-            "encoder": conf.handbrake_encoder,
-            "max_threads": conf.handbrake_max_threads,
-        },
-        "resources": {
-            "idle_priority": conf.idle_priority,
-        },
-        "eligibility": {
-            "min_source_height": conf.min_source_height,
-            "min_source_size_gb": conf.min_source_size_gb,
-            "candidate_codecs": conf.candidate_codecs,
-        },
-        "language": conf.language,
-    }
+    from shrinkray.config import (
+        BlackBarsSection,
+        CodecSection,
+        ConfigModel,
+        EligibilitySection,
+        FfmpegSection,
+        FileSection,
+        HandbrakeSection,
+        HdrSection,
+        OutputSection,
+        QualitySection,
+        ResourcesSection,
+    )
+
+    model = ConfigModel(
+        file=FileSection(
+            extensions=conf.extensions,
+            output=OutputSection(separator=conf.separator),
+        ),
+        ffmpeg=FfmpegSection(
+            black_bars=BlackBarsSection(
+                MIN_WIDTH=conf.black_bar_min_width,
+                MIN_HEIGHT=conf.black_bar_min_height,
+            ),
+            crop_sample_count=conf.crop_sample_count,
+        ),
+        handbrake=HandbrakeSection(
+            preset=conf.handbrake_preset,
+            encoder=conf.handbrake_encoder,
+            probe_encoder_preset=conf.handbrake_probe_encoder_preset,
+            encoder_preset=conf.handbrake_encoder_preset,
+            max_threads=conf.handbrake_max_threads,
+            stall_minutes=conf.handbrake_stall_minutes,
+        ),
+        quality=QualitySection(
+            sample_every=conf.sample_every,
+            sample_count=conf.sample_count,
+            sample_seconds=conf.sample_seconds,
+        ),
+        resources=ResourcesSection(idle_priority=conf.idle_priority),
+        codec=CodecSection(
+            hdr=HdrSection(
+                color_space=conf.hdr_color_spaces,
+                color_transfer=conf.hdr_color_transfers,
+            )
+        ),
+        eligibility=EligibilitySection(
+            min_source_height=conf.min_source_height,
+            min_source_size_gb=conf.min_source_size_gb,
+            candidate_codecs=conf.candidate_codecs,
+        ),
+        language=conf.language,
+    )
+    return model.model_dump()
 
 
 @app.get("/api/config")
@@ -430,8 +463,13 @@ def read_config() -> dict:
 def update_config(data: dict) -> dict:
     """Updates the configuration (writes config.json).
 
-    The config is validated by loading it through Conf after writing;
-    invalid configs are rejected with 400 and the file restored.
+    Validate first, write atomically (issue #60): the request body is
+    validated in memory (Conf) BEFORE any file is touched — a rejected
+    config never reaches the disk (previously a rejected write stayed on
+    disk and every later load_config() failed). The write itself is a
+    temp-file + os.replace pair: atomic on POSIX and Windows for a
+    same-volume rename, so a crash or a concurrent reader never sees a
+    half-written config.json.
 
     Args:
         data (dict): The configuration in config.json shape.
@@ -442,22 +480,35 @@ def update_config(data: dict) -> dict:
     s = get_state()
     config_path = _config_path(s)
 
-    backup = None
-    if config_path.is_file():
-        backup = config_path.read_text(encoding="utf-8")
+    # 1. validate in memory: no file is written until the config parses
+    import shrinkray.config as config_module
 
     try:
-        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        # validate: reset the cached config and load it fresh
-        import shrinkray.config as config_module
-
-        config_module._config = None
-        config_module.load_config(s.db_file.parent)
+        config_module.Conf(data)
     except Exception as e:
-        # restore the backup on failure
-        if backup is not None:
-            config_path.write_text(backup, encoding="utf-8")
         raise HTTPException(status_code=400, detail=f"invalid config: {e}") from e
+
+    # 2. write atomically: temp file in the same directory (same volume),
+    # fsync'd, then an atomic rename over the target; no backup/restore
+    # dance — a failure before the replace leaves the original untouched
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=config_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temp:
+            temp.write(json.dumps(data, indent=2))
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_name, config_path)
+    except Exception as e:
+        # best effort cleanup of the temp file; the original config.json
+        # was never touched (the replace either happened or did not)
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name)
+        raise HTTPException(status_code=500, detail=f"config write failed: {e}") from e
+
+    # 3. swap the in-memory singleton through the public reset (issue #58)
+    config_module.reset_config()
+    config_module.load_config(s.db_file.parent)
     return data
 
 
@@ -1210,6 +1261,7 @@ def run_app(
     host: str = "127.0.0.1",
     port: int = 8420,
     allowed_roots: list[Path] | None = None,
+    config_file: Path | None = None,
 ) -> None:
     """Boots the resident app (blocking; the server owns the process).
 
@@ -1219,10 +1271,14 @@ def run_app(
         port (int): The bind port.
         allowed_roots (list[Path] | None): Folders the API may operate on.
             Defaults to all available drive roots (localhost-only app).
+        config_file (Path | None): The config.json path (None = next to
+            the db, or $SHRINKRAY_CONFIG; the dashboard and the engine
+            must read the same file, issue #58).
     """
     global state
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
+    state.config_file = config_file
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
 

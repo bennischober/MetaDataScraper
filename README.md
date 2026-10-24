@@ -301,13 +301,35 @@ dashboard.
 
 ## Configuration
 
-Optional [config.json](config.json) (defaults are used when missing):
+Optional `config.json` (defaults are used when missing). **One location, one
+order** (issue #58) — the dashboard and the engine read the same file:
+
+1. `--config PATH` (every command; an explicit file wins over everything),
+2. `$SHRINKRAY_CONFIG` (the container/NAS mount point),
+3. next to the database file (`--db`'s directory — the directory the
+   operator already chose for user data; the app writes there too),
+4. `./config.json` (the working directory; with the default `--db` that is
+   the same as 3).
+
+The resolved path is logged at startup (`Using config ...`). There is no
+package-relative lookup: in an installed wheel that directory is not a
+user-writable location.
+
+**Every value is validated** against a schema (issue #61): an unknown key, a
+string where a boolean belongs, an out-of-range number — each is an **error
+that names the key** at load time, never a silently-applied default (a typo'd
+section used to load with all defaults and tell you nothing). An empty
+`file.extensions` list is rejected too: it would silently scan nothing. The
+old `file.output.seperator` spelling still loads with one deprecation warning;
+write `separator`.
+
+Example [config.json](config.json):
 
 ```jsonc
 {
     "file": {
         "extensions": [".mkv"],
-        "output": { "seperator": ";" }
+        "output": { "separator": ";" }
     },
     "ffmpeg": {
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }

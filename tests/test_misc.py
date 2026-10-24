@@ -128,6 +128,51 @@ class TestEncoderPresetConfig(unittest.TestCase):
         self.assertIn("Fast 1080p30", str(ctx.exception))
 
 
+class TestConfigSchema(unittest.TestCase):
+    """The config.json schema (issue #61): every mistake is an error that
+    names the key, never a silently-applied default."""
+
+    def test_string_bool_is_rejected(self):
+        # bool("false") == True was the old behavior: a string where a bool
+        # belongs silently flipped the setting
+        with self.assertRaises(Exception) as ctx:
+            config_helper.Conf({"resources": {"idle_priority": "false"}})
+        self.assertIn("idle_priority", str(ctx.exception))
+
+    def test_unknown_section_is_rejected(self):
+        # a typo'd section ('handbrak') silently used ALL defaults before
+        with self.assertRaises(Exception) as ctx:
+            config_helper.Conf({"handbrak": {"preset": "X"}})
+        self.assertIn("handbrak", str(ctx.exception))
+
+    def test_negative_thread_count_is_rejected(self):
+        with self.assertRaises(Exception) as ctx:
+            config_helper.Conf({"handbrake": {"max_threads": -4}})
+        self.assertIn("max_threads", str(ctx.exception))
+
+    def test_empty_extensions_is_rejected(self):
+        # decided: REJECT (an empty list would silently scan nothing);
+        # documented in the model and the README
+        with self.assertRaises(Exception) as ctx:
+            config_helper.Conf({"file": {"extensions": []}})
+        self.assertIn("extensions", str(ctx.exception))
+
+    def test_seperator_alias_loads_with_one_warning(self):
+        with mock.patch("shrinkray.config.log_warning") as warn:
+            conf = config_helper.Conf({"file": {"output": {"seperator": "|"}}})
+        self.assertEqual(conf.separator, "|")
+        self.assertEqual(warn.call_count, 1)
+        self.assertIn("seperator", warn.call_args.args[0])
+
+    def test_pydantic_is_a_declared_dependency(self):
+        # the direct import in app.py was only satisfied transitively via
+        # FastAPI (issue #61)
+        pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("pydantic", pyproject)
+
+
 class TestSubprocessTimeouts(unittest.TestCase):
     """AGENTS.md: every subprocess call sets a timeout (issue #62). Enforced
     by AST, not re-audited: a new subprocess.run without timeout= fails the
