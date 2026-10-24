@@ -219,7 +219,8 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 |---|---|
 | `--quality` | VMAF-driven CRF search per movie (see above) |
 | `--target-vmaf N` | quality floor for quality mode (default: `95`) |
-| `--encoder-preset NAME` | quality mode's encoder speed preset (`medium` default; changing it invalidates stored plans) |
+| `--probe-encoder-preset NAME` | the PROBES' encoder speed preset (`medium` default; a measurement setting — changing it invalidates stored plans) |
+| `--encoder-preset NAME` | the FINAL encode's speed preset (`slow` default; an output setting — the probes run `--probe-encoder-preset`) |
 | `--remove-bars` | detect and crop stable baked-in black bars (irreversible, opt-in) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
@@ -312,10 +313,11 @@ Optional [config.json](config.json) (defaults are used when missing):
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }
     },
     "handbrake": {
-        "preset": "Fast 1080p30",   // fixed-mode HandBrake preset NAME
+        "preset": "Fast 1080p30",        // fixed-mode HandBrake preset NAME
         "encoder": "x265",
-        "encoder_preset": "medium", // quality mode's encoder SPEED preset
-        "max_threads": 0            // per-encode thread cap (0 = all cores)
+        "probe_encoder_preset": "medium", // quality mode: the PROBES' speed preset
+        "encoder_preset": "slow",         // quality mode: the FINAL encode's preset
+        "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "resources": {
         "idle_priority": true       // encodes run below normal priority
@@ -325,13 +327,29 @@ Optional [config.json](config.json) (defaults are used when missing):
 }
 ```
 
-Two keys named "preset" with different meanings — the distinction:
+Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is the **fixed-mode** HandBrake preset *name* (a full
-quality/speed/content bundle, e.g. `Fast 1080p30`). `handbrake.encoder_preset`
-is **quality mode's** encoder *speed* preset — the x264/x265 ladder
-(`ultrafast`…`placebo`) that sets how hard every probe and the final encode
-work; it changes encode time (and nothing about measured quality) and a change
-invalidates stored plans, which are then re-probed. Values outside the encoder's
+quality/speed/content bundle, e.g. `Fast 1080p30`). The other two are
+**quality mode's** encoder *speed* presets — the x264/x265 ladder
+(`ultrafast`…`placebo`). **`probe_encoder_preset` is a measurement
+setting**: the CRF search's throwaway probe encodes run at it (default
+`medium` — cheap, and representative of what the final encode will look
+like). **`encoder_preset` is an output setting**: the final encode — the
+artifact that gets kept — runs at it (default `slow`).
+
+**The measured-at-medium / encoded-at-slow trade-off is deliberate** (issue
+#22): the probe predicts the final encode, and preset shifts the CRF→VMAF
+curve, so a probe at a different preset measures a slightly different curve
+than the final encode runs — the chosen CRF can miss the target a little in
+either direction. That is accepted so the search stays cheap; if a drift
+investigation ever shows it matters on real titles, the fallback is to probe
+at the final preset and pay the time. The plan's size estimate comes from a
+probe-preset encode, so it describes a `medium`-preset file, not the
+`slow`-preset file that gets written. Both presets are recorded on every
+encode row (`encoder_preset`, `probe_encoder_preset`) so the provenance
+page shows which number produced which measurement. A change to the PROBE
+preset invalidates stored plans (they are re-probed); a change to the FINAL
+preset does not (a plan is a probe result). Values outside the encoder's
 vocabulary are rejected at load, never passed to HandBrake.
 
 **Resource politeness** (why the defaults are what they are): encodes and

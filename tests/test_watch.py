@@ -357,8 +357,46 @@ class TestWatch(unittest.TestCase):
             os.utime(movie, (old, old))
 
             with mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality):
-                watch_mod.watch(inbox, out, once=True, db_file=Path(tmp) / "test.db")
+                watch_mod.watch(
+                    inbox,
+                    out,
+                    once=True,
+                    db_file=Path(tmp) / "test.db",
+                    probe_encoder_preset="faster",
+                    encoder_preset="slower",
+                )
             self.assertEqual(seen, [Path(tmp) / "test.db"])
+
+    def test_presets_reach_encode_with_quality(self):
+        """Both presets reach the engine from watch() (issue #22: the probe
+        preset is a measurement setting, the final preset an output one)."""
+        from shrinkray import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            movie = inbox / "movie.mkv"
+            movie.write_bytes(b"movie")
+            seen: list = []
+
+            def fake_quality(m, o, **kwargs):
+                seen.append((kwargs.get("probe_encoder_preset"), kwargs.get("encoder_preset")))
+                return quality.QualityResult(input=m, output=o, success=True)
+
+            old = time.time() - 7200
+            os.utime(movie, (old, old))
+
+            with mock.patch("shrinkray.watch.encode_with_quality", side_effect=fake_quality):
+                watch_mod.watch(
+                    inbox,
+                    out,
+                    once=True,
+                    probe_encoder_preset="faster",
+                    encoder_preset="slower",
+                )
+            self.assertEqual(seen, [("faster", "slower")])
 
 
 class TestAdaptivePoll(unittest.TestCase):

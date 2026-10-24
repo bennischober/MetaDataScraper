@@ -16,7 +16,11 @@ from rich.progress import Progress
 from rich.table import Table
 
 from shrinkray import db
-from shrinkray.config import DEFAULT_ENCODER_PRESET, load_config
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_PROBE_ENCODER_PRESET,
+    load_config,
+)
 from shrinkray.encode import cap_threads
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
@@ -381,13 +385,23 @@ def encode(
             "(a plan normally lets the encode skip probing)."
         ),
     ),
+    probe_encoder_preset: str = typer.Option(
+        DEFAULT_PROBE_ENCODER_PRESET,
+        "--probe-encoder-preset",
+        help=(
+            "Quality mode: encoder speed preset for the PROBE encodes "
+            "(a measurement setting; x264/x265 ladder). The final encode "
+            "runs --encoder-preset. Changing it invalidates stored plans "
+            "(they are re-probed)."
+        ),
+    ),
     encoder_preset: str = typer.Option(
         DEFAULT_ENCODER_PRESET,
         "--encoder-preset",
         help=(
-            "Quality mode: encoder speed preset for the CRF search and the "
-            "final encode (x264/x265 ladder, e.g. medium/slow). Changing it "
-            "invalidates stored plans (they are re-probed)."
+            "Quality mode: encoder speed preset for the FINAL encode "
+            "(an output setting; x264/x265 ladder, e.g. slow). The probes "
+            "run --probe-encoder-preset."
         ),
     ),
     workers: int = typer.Option(
@@ -436,6 +450,7 @@ def encode(
             threads,
             db_file,
             replan,
+            probe_encoder_preset,
             encoder_preset,
         )
     finally:
@@ -489,6 +504,7 @@ def _record_encodes(
     threads: int | None,
     db_file: Path | None,
     replan: bool = False,
+    probe_encoder_preset: str = DEFAULT_PROBE_ENCODER_PRESET,
     encoder_preset: str = DEFAULT_ENCODER_PRESET,
 ) -> None:
     """Runs the encoding and records the results in the database.
@@ -507,7 +523,8 @@ def _record_encodes(
         workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
         replan (bool): Ignore stored plans and re-probe (quality mode).
-        encoder_preset (str): Quality mode's encoder speed preset.
+        probe_encoder_preset (str): The PROBE's speed preset (measurement).
+        encoder_preset (str): The FINAL encode's speed preset (output).
     """
     from shrinkray.encode import encode_movies
     from shrinkray.quality import encode_with_quality
@@ -565,6 +582,7 @@ def _record_encodes(
                             progress=quality_progress,
                             verify=verify,
                             force_reprobe=replan,
+                            probe_encoder_preset=probe_encoder_preset,
                             encoder_preset=encoder_preset,
                             min_source_height=config.min_source_height,
                             min_source_size_gb=config.min_source_size_gb,
@@ -653,10 +671,21 @@ def plan(
         min=0,
         help="Per-encode thread cap for the probes (0 = all cores).",
     ),
+    probe_encoder_preset: str = typer.Option(
+        DEFAULT_PROBE_ENCODER_PRESET,
+        "--probe-encoder-preset",
+        help=(
+            "Encoder speed preset for the probes (a measurement setting; "
+            "x264/x265 ladder). The plan's fingerprint keys on it."
+        ),
+    ),
     encoder_preset: str = typer.Option(
         DEFAULT_ENCODER_PRESET,
         "--encoder-preset",
-        help="Encoder speed preset for the probes (x264/x265 ladder).",
+        help=(
+            "The planned FINAL encode's speed preset (an output setting; "
+            "plan never encodes - recorded for provenance only)."
+        ),
     ),
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
@@ -701,6 +730,7 @@ def plan(
                     remove_bars=remove_bars,
                     db_file=db_file,
                     encoder_threads=threads_cap,
+                    probe_encoder_preset=probe_encoder_preset,
                     encoder_preset=encoder_preset,
                 )
             except (RuntimeError, FileNotFoundError) as e:
@@ -915,6 +945,7 @@ def watch_mode(
             target_vmaf=target_vmaf,
             remove_bars=remove_bars,
             encoder=config.handbrake_encoder,
+            probe_encoder_preset=config.handbrake_probe_encoder_preset,
             encoder_preset=config.handbrake_encoder_preset,
             poll_interval=float(poll),
             max_threads=cap_threads(config.handbrake_max_threads),

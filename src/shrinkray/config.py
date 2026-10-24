@@ -14,7 +14,12 @@ DEFAULT_LANGUAGE = "en"
 DEFAULT_MAX_THREADS = 0  # 0 = use all cores
 DEFAULT_IDLE_PRIORITY = True
 # quality mode's encoder speed preset (x264/x265 ladder; see #21 for AV1)
-DEFAULT_ENCODER_PRESET = "medium"
+# quality mode's encoder speed presets (x264/x265 ladder; see #21 for AV1).
+# TWO presets since #22: the PROBE preset is a measurement setting (the CRF
+# search's throwaway encodes), the FINAL preset is an output setting (the kept
+# artifact). They are settable - and defaulted - separately on purpose.
+DEFAULT_PROBE_ENCODER_PRESET = "medium"
+DEFAULT_ENCODER_PRESET = "slow"
 # the speed-preset vocabulary of the x264/x265 encoders (HandBrake passes the
 # value through to --encoder-preset; anything else is rejected at load, never
 # misparsed by HandBrake)
@@ -30,6 +35,22 @@ ENCODER_PRESETS = (
     "veryslow",
     "placebo",
 )
+# per-encoder preset vocabularies and defaults (issue #22: the issue's numeric
+# defaults 5/3 are SVT-AV1 vocabulary; x265 takes names). The SVT-AV1 entry is
+# the shape #21 will activate; no encoder selects it yet.
+ENCODER_PRESET_VOCABULARIES: dict[str, tuple[str, ...]] = {
+    "x264": ENCODER_PRESETS,
+    "x265": ENCODER_PRESETS,
+    "x265_10bit": ENCODER_PRESETS,
+    "svt_av1": tuple(str(n) for n in range(-1, 11)),
+}
+ENCODER_PRESET_DEFAULTS: dict[str, tuple[str, str]] = {
+    # encoder => (probe preset, final preset)
+    "x264": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
+    "x265": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
+    "x265_10bit": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
+    "svt_av1": ("5", "3"),
+}
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
 # eligibility: sources below this height are never re-encoded (0 = gate off).
@@ -83,19 +104,33 @@ class Conf:
         handbrake: dict[str, Any] = data.get("handbrake") or {}
         self.handbrake_preset: str = handbrake.get("preset", "Fast 1080p30")
         self.handbrake_encoder: str = handbrake.get("encoder", "x265")
-        # quality mode's encoder SPEED preset (x264/x265 ladder; the SVT-AV1
-        # numeric vocabulary replaces it when #21 lands). Distinct from
-        # handbrake.preset above: that one is the FIXED-mode HandBrake preset
-        # NAME (e.g. 'Fast 1080p30'); this one is the per-encode speed of the
-        # quality search's CRF runs — two keys named 'preset' with different
-        # meanings is a footgun, so the distinction is stated here (issue #31)
+        # quality mode's TWO encoder speed presets (issue #22): the probe
+        # preset drives the CRF search's throwaway measurement encodes, the
+        # final preset drives the kept artifact - measurement at 'medium',
+        # artifact at 'slow' by default. The probe is a PREDICTION of the
+        # final encode: preset shifts the CRF-to-VMAF curve, so a probe at a
+        # different preset than the final encode measures a different curve
+        # - a deliberate trade-off (documented in the README), not a bug.
+        # Distinct from handbrake.preset above: that one is the FIXED-mode
+        # HandBrake preset NAME (e.g. 'Fast 1080p30'); these are per-encode
+        # speed presets of the quality search. Validated against the active
+        # encoder's vocabulary (invalid values are a load-time error, never
+        # passed to HandBrake - the SVT-AV1 numeric vocabulary applies when
+        # #21 lands).
+        self.handbrake_probe_encoder_preset: str = handbrake.get(
+            "probe_encoder_preset", DEFAULT_PROBE_ENCODER_PRESET
+        )
         self.handbrake_encoder_preset: str = handbrake.get("encoder_preset", DEFAULT_ENCODER_PRESET)
-        if self.handbrake_encoder_preset not in ENCODER_PRESETS:
-            raise ValueError(
-                f"handbrake.encoder_preset: '{self.handbrake_encoder_preset}' is not a "
-                f"valid speed preset for encoder '{self.handbrake_encoder}' "
-                f"(valid: {', '.join(ENCODER_PRESETS)})"
-            )
+        for key, value in (
+            ("probe_encoder_preset", self.handbrake_probe_encoder_preset),
+            ("encoder_preset", self.handbrake_encoder_preset),
+        ):
+            if value not in ENCODER_PRESETS:
+                raise ValueError(
+                    f"handbrake.{key}: '{value}' is not a "
+                    f"valid speed preset for encoder '{self.handbrake_encoder}' "
+                    f"(valid: {', '.join(ENCODER_PRESETS)})"
+                )
         # thread cap for the encoder (0 = use all cores); keeps cores free
         # for a media server running next to the encode on a small machine
         self.handbrake_max_threads: int = int(handbrake.get("max_threads", DEFAULT_MAX_THREADS))

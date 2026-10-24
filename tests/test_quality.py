@@ -366,6 +366,65 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(row["crf_source"], "plan")
         self.assertEqual(row["plan_created_at"], result.plan_created_at)
 
+    def test_probe_and_final_presets_differ_in_one_run(self):
+        """Issue #22's core acceptance: in ONE run the probe encodes receive
+        the probe preset and the final encode receives the final preset —
+        measurement and output are two separate settings."""
+        from shrinkray.encode import EncodeResult
+
+        movie = self._movie()
+        built: list[tuple[str, str]] = []  # (preset, phase)
+
+        def fake_build(binary, input_file, output_file, crf, encoder, preset, **kwargs):
+            built.append((preset, "final"))
+            return ["hb", "--quality", str(crf), "--encoder-preset", preset]
+
+        with (
+            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch.object(
+                quality,
+                "_source_snapshot",
+                return_value={
+                    "width": None,
+                    "height": None,
+                    "codec": None,
+                    "duration": None,
+                    "bitrate": None,
+                },
+            ),
+            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(quality, "_probe_movie", return_value=(21, 95.5, [], None)),
+            patch.object(quality, "build_encode_command", side_effect=fake_build),
+            patch.object(
+                quality,
+                "_encode_with_command",
+                side_effect=lambda i, o, c, **kw: (
+                    o.write_bytes(b"y" * (i.stat().st_size // 2)),
+                    EncodeResult(
+                        input=i,
+                        output=o,
+                        success=True,
+                        input_size=i.stat().st_size,
+                        output_size=o.stat().st_size,
+                    ),
+                )[1],
+            ),
+        ):
+            result = quality.encode_with_quality(
+                movie,
+                Path(self.tmp.name) / "out.mkv",
+                db_file=self.db_file,
+                probe_encoder_preset="medium",
+                encoder_preset="slow",
+            )
+        self.assertEqual(built, [("slow", "final")])  # final built ONCE at 'slow'
+        # both presets land on the result (provenance: which number produced
+        # which measurement)
+        self.assertEqual(result.probe_encoder_preset, "medium")
+        self.assertEqual(result.encoder_preset, "slow")
+
     def test_fingerprint_mismatch_runs_probe_path(self):
         movie = self._movie()
         self._store_plan(movie, chosen_crf=21)
@@ -373,10 +432,27 @@ class TestPlanReuse(unittest.TestCase):
             patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
             patch.object(quality, "_tool_versions", return_value="hb 1.0"),
         ):
-            result, _ = self._encode(movie, encoder_preset="slow")
+            # the plan fingerprint keys on the PROBE preset (issue #22): the
+            # stored plan was probed at 'medium'; probing at 'veryslow' is a
+            # mismatch => the plan is ignored and everything is measured
+            result, _ = self._encode(movie, probe_encoder_preset="veryslow")
         fake_probe.assert_called_once()
         self.assertEqual(result.chosen_crf, 20)
         self.assertEqual(result.crf_source, "probe")
+
+    def test_final_preset_change_reuses_plan(self):
+        """Issue #22's cache decision: a stored plan is a probe result —
+        changing the FINAL preset does not invalidate it (the CRF decision
+        depends on the probe preset only)."""
+        movie = self._movie()
+        self._store_plan(movie, chosen_crf=21)
+        with (
+            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+        ):
+            result, _ = self._encode(movie, encoder_preset="veryslow")
+        fake_probe.assert_not_called()
+        self.assertEqual(result.crf_source, "plan")
 
     def test_changed_file_invalidates_plan(self):
         movie = self._movie()
@@ -464,6 +540,14 @@ class TestPlanReuse(unittest.TestCase):
 
 
 class TestProbeCache(unittest.TestCase):
+    def test_probe_command_carries_probe_preset(self):
+        """The probe encode's --encoder-preset is the PROBE preset (a
+        measurement setting), not the final encode's (issue #22)."""
+        _score, encodes = self._probe(probe_encoder_preset="veryslow")
+        self.assertEqual(len(encodes), 1)
+        command = encodes[0]
+        self.assertEqual(command[command.index("--encoder-preset") + 1], "veryslow")
+
     """The probe-encode cache (issue #24): per-sample measurements are
     content-addressed, so a re-run with the same inputs reuses them and a
     changed target VMAF reuses the probes it already measured."""
@@ -501,7 +585,7 @@ class TestProbeCache(unittest.TestCase):
             "movie": self.movie,
             "sample_seconds": 10.0,
             "encoder": "x265",
-            "encoder_preset": "medium",
+            "probe_encoder_preset": "medium",
             "db_file": self.db_file,
         }
         with (
@@ -560,7 +644,7 @@ class TestProbeCache(unittest.TestCase):
         self._probe()
         _score, encodes = self._probe(encoder="x265_10bit")
         self.assertEqual(len(encodes), 1)  # different encoder => new key
-        _score2, encodes2 = self._probe(encoder_preset="slow")
+        _score2, encodes2 = self._probe(probe_encoder_preset="slow")
         self.assertEqual(len(encodes2), 1)  # different preset => new key
 
     def test_force_reprobe_bypasses_cache(self):
@@ -602,7 +686,7 @@ class TestProbeCache(unittest.TestCase):
             "movie": self.movie,
             "sample_seconds": 10.0,
             "encoder": "x265",
-            "encoder_preset": "medium",
+            "probe_encoder_preset": "medium",
             "db_file": self.db_file,
         }
         with (
