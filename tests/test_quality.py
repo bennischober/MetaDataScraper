@@ -1183,7 +1183,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
@@ -1216,7 +1216,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(

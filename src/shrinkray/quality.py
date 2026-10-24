@@ -30,7 +30,6 @@ from shrinkray.encode import (
     MIN_ENCODE_SECONDS,
     _encode_with_command,
     find_handbrake,
-    probe_duration_seconds,
 )
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
@@ -123,6 +122,9 @@ from shrinkray.engine.search import (
     sample_count_for as sample_count_for,
 )
 from shrinkray.logger import log, log_error
+from shrinkray.tools.ffprobe import (
+    probe_duration_seconds as probe_duration_seconds,
+)
 from shrinkray.tools.handbrake import (
     build_encode_command as build_encode_command,
 )
@@ -391,7 +393,7 @@ def _source_snapshot(movie: Path) -> dict:
     Returns:
         dict: width/height/codec/duration/bitrate (None where unknown).
     """
-    from shrinkray.encode import probe_duration_seconds
+    from shrinkray.tools.ffprobe import probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     width = height = None

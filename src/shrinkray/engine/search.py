@@ -21,7 +21,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.encode import probe_duration_seconds  # transitional (phase 5)
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -31,6 +30,7 @@ from shrinkray.engine.samples import (
     extract_samples,
 )
 from shrinkray.logger import log
+from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import build_encode_command
 from shrinkray.tools.process import Cancelled, _run
 from shrinkray.tools.vmaf import _tool_versions, measure_vmaf

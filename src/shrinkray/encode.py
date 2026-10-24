@@ -14,7 +14,9 @@ from rich.progress import Progress
 
 from shrinkray import resources
 from shrinkray.logger import log, log_error
-from shrinkray.media import FFPROBE_TIMEOUT
+from shrinkray.tools.ffprobe import (
+    probe_duration_seconds as probe_duration_seconds,
+)
 from shrinkray.tools.handbrake import (
     HANDBRAKE_BINARY as HANDBRAKE_BINARY,
 )
@@ -157,49 +159,6 @@ class EncodeResult:
         if self.input_size <= 0 or self.output_size <= 0:
             return 0.0
         return round((1 - self.output_size / self.input_size) * 100, 2)
-
-
-def probe_duration_seconds(path: Path) -> float | None:
-    """Reads the duration of a media file via ffprobe.
-
-    Args:
-        path (Path): The media file.
-
-    Returns:
-        float | None: The duration in seconds, or None if it could not be
-            determined (e.g. missing ffprobe, truncated/unfinalized file).
-    """
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                str(path),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        # OSError: ffprobe not installed (e.g. CI). TimeoutExpired: the file
-        # sits behind a mount that went stale (NFS/SMB that went away) and
-        # ffprobe blocks in the kernel — without a timeout the calling
-        # thread would hang forever and the watch loop/job worker would
-        # stall silently (issue #62). Duration unknown => caller skips.
-        log(f"ffprobe could not read '{path}' within {FFPROBE_TIMEOUT}s: {e}")
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if duration <= 0:
-        return None
-    return duration
 
 
 # files shorter than this are not treated as encodable movies (e.g. probe

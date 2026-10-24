@@ -14,8 +14,52 @@ from pathlib import Path
 from typing import Any, cast
 
 from shrinkray.config import Conf, load_config
+from shrinkray.logger import log
 
 FFPROBE_TIMEOUT = 60  # seconds
+
+
+def probe_duration_seconds(path: Path) -> float | None:
+    """Reads the duration of a media file via ffprobe.
+
+    Args:
+        path (Path): The media file.
+
+    Returns:
+        float | None: The duration in seconds, or None if it could not be
+            determined (e.g. missing ffprobe, truncated/unfinalized file).
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=FFPROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        # OSError: ffprobe not installed (e.g. CI). TimeoutExpired: the file
+        # sits behind a mount that went stale (NFS/SMB that went away) and
+        # ffprobe blocks in the kernel — without a timeout the calling
+        # thread would hang forever and the watch loop/job worker would
+        # stall silently (issue #62). Duration unknown => caller skips.
+        log(f"ffprobe could not read '{path}' within {FFPROBE_TIMEOUT}s: {e}")
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if duration <= 0:
+        return None
+    return duration
 
 
 def run_ffprobe(path: Path) -> dict:

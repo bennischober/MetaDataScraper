@@ -1044,10 +1044,10 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie.write_bytes(b"x")
             with (
                 patch(
-                    "shrinkray.encode.subprocess.run",
+                    "shrinkray.tools.ffprobe.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
                 ),
-                patch("shrinkray.encode.log") as logged,
+                patch("shrinkray.tools.ffprobe.log") as logged,
             ):
                 self.assertIsNone(encode.probe_duration_seconds(movie))
             self.assertTrue(logged.called)
