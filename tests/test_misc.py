@@ -187,7 +187,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         # hours-long healthy encodes:
         #   encode.py: the _encode_with_command non-streamed branch
         #   quality.py: the _run simple branch
-        "encode.py": (381,),
+        "encode.py": (362,),
         "quality.py": (440,),
     }
 
