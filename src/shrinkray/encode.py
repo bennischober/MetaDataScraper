@@ -15,6 +15,15 @@ from rich.progress import Progress
 from shrinkray import resources
 from shrinkray.logger import log, log_error
 from shrinkray.media import FFPROBE_TIMEOUT
+from shrinkray.tools.handbrake import (
+    HANDBRAKE_BINARY as HANDBRAKE_BINARY,
+)
+from shrinkray.tools.handbrake import (
+    build_command as build_command,
+)
+from shrinkray.tools.handbrake import (
+    find_handbrake as find_handbrake,
+)
 from shrinkray.tools.process import (
     DEFAULT_STALL_MINUTES as DEFAULT_STALL_MINUTES,
 )
@@ -24,8 +33,6 @@ from shrinkray.tools.process import (
 from shrinkray.tools.process import (
     stall_timeout_seconds as stall_timeout_seconds,
 )
-
-HANDBRAKE_BINARY = "HandBrakeCLI"
 
 # the engine's live-progress callback: stage detail and counters, never persisted
 ProgressCallback = Callable[[dict], None]
@@ -152,26 +159,6 @@ class EncodeResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
-def find_handbrake() -> str | None:
-    """Finds the HandBrakeCLI binary on this system.
-
-    Returns:
-        str | None: The path to the binary, or None if it was not found.
-    """
-    binary = shutil.which(HANDBRAKE_BINARY)
-    if binary:
-        return binary
-
-    # common windows install locations
-    for path in (
-        r"C:\Program Files\HandBrake\HandBrakeCLI.exe",
-        r"C:\Program Files (x86)\HandBrake\HandBrakeCLI.exe",
-    ):
-        if Path(path).is_file():
-            return path
-    return None
-
-
 def probe_duration_seconds(path: Path) -> float | None:
     """Reads the duration of a media file via ffprobe.
 
@@ -248,55 +235,6 @@ def durations_match(input_file: Path, output_file: Path) -> bool:
     # tolerate frame rounding; 1% or 2s, whichever is larger
     tolerance = max(2.0, source * 0.01)
     return abs(source - encoded) <= tolerance
-
-
-def build_command(
-    binary: str,
-    input_file: Path,
-    output_file: Path,
-    preset: str,
-    encoder: str,
-    encoder_threads: int | None = None,
-) -> list[str]:
-    """Builds the HandBrakeCLI command for re-encoding a file.
-
-    Args:
-        binary (str): Path to the HandBrakeCLI binary.
-        input_file (Path): The file to re-encode.
-        output_file (Path): The target file.
-        preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (str): The video encoder, e.g. 'svt_av1'.
-        encoder_threads (int | None): Thread limit for the encoder
-            (for parallel encoding across multiple movies). None = no limit.
-
-    Returns:
-        list[str]: The command as argument list.
-    """
-    command = [
-        binary,
-        "--input",
-        str(input_file),
-        "--output",
-        str(output_file),
-        "--preset",
-        preset,
-        "--encoder",
-        encoder,
-        # keep all audio and subtitle tracks, copy audio => no quality loss
-        "--all-audio",
-        "--all-subtitles",
-        "--aencoder",
-        "copy",
-        "--optimize",  # web optimized => mp4/mkv file can start streaming
-    ]
-    if encoder_threads is not None:
-        # HandBrakeCLI has no thread flag, and SVT-AV1 has no `threads`
-        # option: --encopts pairs go to svt_av1_enc_parse_parameter, which
-        # would silently ignore `threads=N` (issue #21). SVT-AV1's `pin`
-        # restricts execution to the first N cores, which is what the cap
-        # means here.
-        command += ["--encopts", f"pin={encoder_threads}"]
-    return command
 
 
 def _encode_with_command(

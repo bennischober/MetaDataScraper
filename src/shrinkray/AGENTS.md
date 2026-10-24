@@ -14,7 +14,7 @@ Root AGENTS.md covers the product rules and the gate; this file is the module ma
 | HTTP + dashboard | `app.py` (1311 L) | FastAPI, 16 routes incl. `/api/events` SSE, `/api/reveal`, static UI |
 | Config schema and defaults | `config.py` (423 L) | pydantic `ConfigModel`, `Conf` flat facade, `resolve_config_path` |
 | sqlite schema, migrations, queries | `db.py` (1082 L) | `SCHEMA_VERSION = 13`, `_migrate` |
-| HandBrake invocation, stall watchdog, disk floor | `encode.py` (1029 L) | `_encode_with_command`, `find_handbrake`, `durations_match` |
+| HandBrake runner, stall watchdog, disk floor | `encode.py` (now ~975 L) | `_encode_with_command`, `durations_match`; command builders live in `tools/handbrake.py` (#97 phase 2) |
 | VMAF measure, crop detect, sampling, CRF search, plan cache | `quality.py` (2821 L) | `plan_quality`, `encode_with_quality`, `bisect_crf`, `SkipEncode` |
 | One-encoder-per-output-dir lock | `encode_lock.py` (156 L) | `guard_encodes` context manager; 6 h stale window |
 | Job queue, worker thread, live progress | `jobs.py` (989 L) | `JobQueue` (persisted), `ProgressBus` (in-memory, bounded) |
