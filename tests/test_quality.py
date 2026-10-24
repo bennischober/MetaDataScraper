@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray import db, encode, quality, service
+from shrinkray.engine import search as engine_search
 
 
 class TestQuality(unittest.TestCase):
@@ -346,7 +347,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie)
         with (
             patch.object(quality, "_probe_movie") as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, fake_encode = self._encode(movie)
         fake_probe.assert_not_called()  # zero probe encodes
@@ -397,7 +398,7 @@ class TestPlanReuse(unittest.TestCase):
                 },
             ),
             patch.object(quality, "find_handbrake", return_value="hb"),
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
             patch.object(quality, "_probe_movie", return_value=(21, 95.5, [], None)),
             patch.object(quality, "build_encode_command", side_effect=fake_build),
             patch.object(
@@ -433,7 +434,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, chosen_crf=21)
         with (
             patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             # the plan fingerprint keys on the PROBE preset (issue #22): the
             # stored plan was probed at 'medium'; probing at 'veryslow' is a
@@ -451,7 +452,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, chosen_crf=21)
         with (
             patch.object(quality, "_probe_movie") as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie, encoder_preset="9")
         fake_probe.assert_not_called()
@@ -463,7 +464,7 @@ class TestPlanReuse(unittest.TestCase):
         movie.write_bytes(b"x" * 64)  # size change => fingerprint mismatch
         with (
             patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
         fake_probe.assert_called_once()
@@ -488,7 +489,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie)
         with (
             patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie, force_reprobe=True)
         fake_probe.assert_called_once()
@@ -499,7 +500,7 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         with (
             patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
         fake_probe.assert_called_once()
@@ -533,7 +534,7 @@ class TestPlanReuse(unittest.TestCase):
         with (
             patch.object(quality, "is_hdr_file", return_value=True),
             patch.object(quality, "_probe_movie") as fake_probe,
-            patch.object(quality, "_tool_versions", return_value="hb 1.0"),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
         fake_probe.assert_not_called()  # the plan replaces probing
@@ -682,9 +683,9 @@ class TestProbeCache(unittest.TestCase):
             "db_file": self.db_file,
         }
         with (
-            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
-            patch.object(quality, "_run", side_effect=fake_run),
-            patch.object(quality, "measure_vmaf", return_value=95.5),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", return_value=95.5),
         ):
             score = quality.probe_crf(**{**defaults, **kwargs})
         return score, encodes
@@ -705,9 +706,9 @@ class TestProbeCache(unittest.TestCase):
 
         samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
         with (
-            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
-            patch.object(quality, "_run", side_effect=fake_run),
-            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
             score = quality.probe_crf(
                 samples,
@@ -739,9 +740,9 @@ class TestProbeCache(unittest.TestCase):
 
         samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
         with (
-            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
-            patch.object(quality, "_run", side_effect=fake_run),
-            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
             score = quality.probe_crf(
                 samples,
@@ -770,9 +771,9 @@ class TestProbeCache(unittest.TestCase):
 
         samples = [(Path(f"s{i}.mkv"), float(i)) for i in range(3)]
         with (
-            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
-            patch.object(quality, "_run", side_effect=fake_run),
-            patch.object(quality, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
             score = quality.probe_crf(
                 samples,
@@ -940,8 +941,8 @@ class TestProbeCache(unittest.TestCase):
             "db_file": self.db_file,
         }
         with (
-            patch.object(quality, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
-            patch.object(quality, "_run", side_effect=fake_run),
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
         ):
             factor = quality.estimate_size_factor(**{**defaults, **kwargs})
         return factor, encodes
@@ -991,8 +992,8 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             return factors[crf]
 
         with (
-            patch.object(quality, "estimate_size_factor", side_effect=fake_estimate),
-            patch.object(quality, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "estimate_size_factor", side_effect=fake_estimate),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
         ):
             result = quality.find_optimal_crf_and_skip(
                 self.movie,
@@ -1028,8 +1029,8 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         shrink the file, nothing in the range can, so the bisect is wasted work.
         """
         with (
-            patch.object(quality, "estimate_size_factor", return_value=1.3),
-            patch.object(quality, "find_optimal_crf") as fake_search,
+            patch.object(engine_search, "estimate_size_factor", return_value=1.3),
+            patch.object(engine_search, "find_optimal_crf") as fake_search,
         ):
             result = quality.find_optimal_crf_and_skip(
                 self.movie,
@@ -1154,7 +1155,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake_extract,
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src, sample_every=600.0)
         self.assertTrue(result.success)
@@ -1324,7 +1327,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "find_handbrake", return_value="hb"),
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1394,7 +1399,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "find_handbrake", return_value="hb"),
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src, remove_bars=True)
         self.assertTrue(result.success)
@@ -1440,7 +1447,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "find_handbrake", return_value="hb"),
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1485,7 +1494,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "find_handbrake", return_value="hb"),
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1506,7 +1517,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "find_handbrake", return_value="hb"),
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 result = quality.plan_quality(src, min_source_height=1080)
         self.assertTrue(result.success)

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray import quality
+from shrinkray.engine import search as engine_search
 
 
 class TestProbeProgress(unittest.TestCase):
@@ -49,8 +50,9 @@ class TestProbeProgress(unittest.TestCase):
         event with the measured VMAF."""
         events: list[dict] = []
         with (
-            patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(quality, "probe_crf", side_effect=lambda *a, **k: 95.0),
+            patch.object(engine_search, "probe_crf", side_effect=lambda *a, **k: 95.0),
         ):
             chosen, _achieved, probes = quality.find_optimal_crf(
                 Path("movie.mkv"),
@@ -82,10 +84,10 @@ class TestProbeProgress(unittest.TestCase):
 
             with (
                 patch.object(
-                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                    engine_search, "build_encode_command", return_value=["hb", "-o", str(encoded)]
                 ),
-                patch.object(quality, "_run", side_effect=fake_run),
-                patch.object(quality, "measure_vmaf", return_value=None),
+                patch.object(engine_search, "_run", side_effect=fake_run),
+                patch.object(engine_search, "measure_vmaf", return_value=None),
             ):
                 factor = quality.estimate_size_factor(
                     [(sample, 10.0)],
@@ -120,7 +122,9 @@ class TestProbeProgress(unittest.TestCase):
                     quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake,
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
                 quality.plan_quality(src)
         self.assertEqual(fake.call_count, 1)
@@ -141,6 +145,7 @@ class TestProbeProgress(unittest.TestCase):
                 ) as fake_search,
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             ):
                 result = quality.plan_quality(src, progress=events.append)
         self.assertTrue(result.success)
@@ -202,6 +207,7 @@ class TestProbeProgress(unittest.TestCase):
             ) as fake_search,
             patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+            patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             tempfile.TemporaryDirectory() as tmp,
         ):
             src = Path(tmp) / "in.mkv"
@@ -224,10 +230,10 @@ class TestProbeProgress(unittest.TestCase):
 
             with (
                 patch.object(
-                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                    engine_search, "build_encode_command", return_value=["hb", "-o", str(encoded)]
                 ),
-                patch.object(quality, "_run", side_effect=fake_run),
-                patch.object(quality, "measure_vmaf") as fake_measure,
+                patch.object(engine_search, "_run", side_effect=fake_run),
+                patch.object(engine_search, "measure_vmaf") as fake_measure,
             ):
                 factor = quality.estimate_size_factor(
                     [(sample, 10.0)], Path(tmp), "hb", 32, sample, 10.0, "x265", "medium"
@@ -250,9 +256,9 @@ class TestProbeProgress(unittest.TestCase):
 
             with (
                 patch.object(
-                    quality, "build_encode_command", return_value=["hb", "-o", str(encoded)]
+                    engine_search, "build_encode_command", return_value=["hb", "-o", str(encoded)]
                 ),
-                patch.object(quality, "_run", side_effect=fake_run),
+                patch.object(engine_search, "_run", side_effect=fake_run),
                 patch.object(quality, "detect_vmaf_style", side_effect=RuntimeError("no libvmaf")),
             ):
                 factor = quality.estimate_size_factor(
