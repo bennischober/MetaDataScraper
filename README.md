@@ -301,7 +301,21 @@ dashboard.
 
 ## Configuration
 
-Optional [config.json](config.json) (defaults are used when missing):
+Optional `config.json` (defaults are used when missing). **One location, one
+order** (issue #58) — the dashboard and the engine read the same file:
+
+1. `--config PATH` (every command; an explicit file wins over everything),
+2. `$SHRINKRAY_CONFIG` (the container/NAS mount point),
+3. next to the database file (`--db`'s directory — the directory the
+   operator already chose for user data; the app writes there too),
+4. `./config.json` (the working directory; with the default `--db` that is
+   the same as 3).
+
+The resolved path is logged at startup (`Using config ...`). There is no
+package-relative lookup: in an installed wheel that directory is not a
+user-writable location.
+
+Example [config.json](config.json):
 
 ```jsonc
 {

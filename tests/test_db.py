@@ -588,6 +588,75 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_config_saved_via_api_is_the_engine_config(self):
+        """Issue #58: ONE location. A config saved with PUT /api/config is
+        what load_config() returns in a fresh process state for the same
+        --db (before the fix the dashboard wrote next to the db while the
+        engine read the package root - the setting silently stopped
+        applying after a restart)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.app as app_module
+        import shrinkray.config as config_module
+        from shrinkray.app import AppState
+        from shrinkray.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            body = client.get("/api/config").json()
+            body["handbrake"]["max_threads"] = 3
+            self.assertEqual(client.put("/api/config", json=body).status_code, 200)
+            # fresh process state: the engine's first load_config() call
+            config_module.reset_config()
+            conf = config_module.load_config(app_module.state.db_file.parent)
+            self.assertEqual(conf.handbrake_max_threads, 3)
+            # and the resolved path IS the dashboard's file (next to the db)
+            self.assertEqual(
+                config_module.config_file_used,
+                app_module.state.db_file.parent / "config.json",
+            )
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+            config_module.reset_config()
+
+    def test_explicit_config_wins_over_db_dir(self):
+        """Issue #58's resolution order: an explicit --config file beats the
+        db-directory default, and $SHRINKRAY_CONFIG beats the db dir too
+        (the container mount point)."""
+        import os
+
+        from shrinkray.config import resolve_config_path
+
+        explicit = Path(self.tmp.name) / "explicit.json"
+        db_dir = Path(self.tmp.name) / "data"
+        db_dir.mkdir()
+        self.assertEqual(resolve_config_path(config_file=explicit, db_dir=db_dir), explicit)
+        old = os.environ.get("SHRINKRAY_CONFIG")
+        os.environ["SHRINKRAY_CONFIG"] = str(Path(self.tmp.name) / "env.json")
+        try:
+            self.assertEqual(
+                resolve_config_path(db_dir=db_dir),
+                Path(self.tmp.name) / "env.json",
+            )
+        finally:
+            if old is None:
+                os.environ.pop("SHRINKRAY_CONFIG", None)
+            else:
+                os.environ["SHRINKRAY_CONFIG"] = old
+        # and with nothing set, the db dir is the operator's chosen location
+        self.assertEqual(resolve_config_path(db_dir=db_dir), db_dir / "config.json")
+
+    def test_no_package_relative_config_lookup(self):
+        """Issue #58: config resolution must not depend on the package's
+        install location (in a wheel, the dir above site-packages is not a
+        user-writable location)."""
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "shrinkray" / "config.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("__file__", source)
+
     def test_snapshot_endpoint(self):
         """One request returns status + jobs + library (ETag-aware), and an
         unchanged library comes back as null while the rest stays fresh."""

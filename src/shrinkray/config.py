@@ -1,9 +1,10 @@
 # this module loads the config.json file and provides the settings to the other modules => provides default values
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from shrinkray.logger import log_warning
+from shrinkray.logger import log, log_warning
 
 # fallback values if the config file is missing or a value is not set
 DEFAULT_EXTENSIONS = [".mkv"]
@@ -220,32 +221,102 @@ class Conf:
 
 _config: Conf | None = None
 
+# the config file's resolved path (set by the last load; surfaced for logs
+# and the dashboard's "which file is in effect" display)
+config_file_used: Path | None = None
 
-def load_config(root: str | Path | None = None) -> Conf:
-    """Loads the config.json file (once) and returns the settings.
+CONFIG_ENV_VAR = "SHRINKRAY_CONFIG"
 
-    If the config file does not exist, default values are used.
+DEFAULT_CONFIG_FILENAME = "config.json"
+
+
+def resolve_config_path(
+    config_file: str | Path | None = None,
+    root: str | Path | None = None,
+    db_dir: str | Path | None = None,
+) -> Path:
+    """Resolves which config.json is in effect (issue #58).
+
+    One location, decided once per process, in this order:
+
+    1. an explicit config FILE path (the CLI's --config option),
+    2. an explicit root DIRECTORY (tests, the app's db-dir convention),
+    3. the SHRINKRAY_CONFIG environment variable (the container/NAS
+       mount point),
+    4. db_dir/config.json - the directory the operator already chose for
+       user data,
+    5. ./config.json (the working directory; the default --db lives there
+       too, so a repo-root run reads the repo's config.json).
+
+    Package-relative lookup is gone deliberately: in an installed wheel the
+    directory above site-packages is not a user-writable location, and the
+    dashboard and the engine must agree on one file.
 
     Args:
-        root (str | Path | None): Root path of the project.
-            Defaults to the project root (parent of the src directory).
+        config_file (str | Path | None): Explicit config FILE path.
+        root (str | Path | None): Explicit directory holding config.json.
+        db_dir (str | Path | None): The database file's directory (the
+            operator's chosen user-data location).
+
+    Returns:
+        Path: The config file path in effect.
+    """
+    if config_file is not None:
+        return Path(config_file)
+    if root is not None:
+        return Path(root) / DEFAULT_CONFIG_FILENAME
+    env = os.environ.get(CONFIG_ENV_VAR)
+    if env:
+        return Path(env)
+    if db_dir is not None:
+        return Path(db_dir) / DEFAULT_CONFIG_FILENAME
+    return Path(DEFAULT_CONFIG_FILENAME)
+
+
+def reset_config() -> None:
+    """Drops the cached config so the next load_config() reads the file.
+
+    The public way for the dashboard's PUT /api/config to swap the
+    in-memory singleton (assigning config._config from outside the module
+    reached into private state; issue #58).
+    """
+    global _config
+    _config = None
+
+
+def load_config(
+    root: str | Path | None = None,
+    config_file: str | Path | None = None,
+) -> Conf:
+    """Loads the config.json file (once) and returns the settings.
+
+    If the config file does not exist, default values are used. The file's
+    location follows resolve_config_path; the resolved path is logged once
+    at load so a user can see which file is in effect.
+
+    Args:
+        root (str | Path | None): Explicit directory holding config.json
+            (the app passes its db directory; tests pass temp dirs).
+        config_file (str | Path | None): Explicit config FILE path (the
+            CLI's --config option; wins over everything else).
 
     Returns:
         Conf: The config settings.
     """
-    global _config
+    global _config, config_file_used
     if _config is not None:
         return _config
 
-    path = Path(root) if root else Path(__file__).parent.parent.parent
-    path = path / "config.json"
+    path = resolve_config_path(config_file=config_file, root=root)
 
     data: dict[str, Any] = {}
     if path.is_file():
         with open(path, encoding="utf-8") as config:
             data = json.load(config)
+        log(f"Using config {path}")
     else:
         log_warning(f"Config file not found at '{path}', using default values!")
+    config_file_used = path
 
     _config = Conf(data)
     # the resource policy rides along: every entry point loads the config

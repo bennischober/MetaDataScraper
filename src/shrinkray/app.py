@@ -191,6 +191,7 @@ class AppState:
             db_file (Path): The sqlite database file.
         """
         self.db_file = db_file
+        self.config_file: Path | None = None  # the app command's --config
         self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
         self.bus = ProgressBus()
@@ -356,7 +357,11 @@ def get_config() -> dict:
 
 
 def _config_path(s: AppState) -> Path:
-    """Resolves the config.json path for the app's database location.
+    """Resolves the config.json path for the resident app.
+
+    One location for dashboard and engine (issue #58): the resolution
+    order is the app's explicit config file, then $SHRINKRAY_CONFIG, then
+    the db directory (the operator's chosen user-data location).
 
     Args:
         s (AppState): The app state.
@@ -364,7 +369,12 @@ def _config_path(s: AppState) -> Path:
     Returns:
         Path: The config.json path.
     """
-    return s.db_file.parent / "config.json"
+    from shrinkray.config import resolve_config_path
+
+    return resolve_config_path(
+        config_file=s.config_file,
+        db_dir=s.db_file.parent,
+    )
 
 
 def _conf_to_dict(conf: Conf) -> dict:
@@ -448,10 +458,12 @@ def update_config(data: dict) -> dict:
 
     try:
         config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        # validate: reset the cached config and load it fresh
+        # validate: reset the cached config and load it fresh (the public
+        # reset function - reaching into config._config from here reached
+        # into private module state, issue #58)
         import shrinkray.config as config_module
 
-        config_module._config = None
+        config_module.reset_config()
         config_module.load_config(s.db_file.parent)
     except Exception as e:
         # restore the backup on failure
@@ -1210,6 +1222,7 @@ def run_app(
     host: str = "127.0.0.1",
     port: int = 8420,
     allowed_roots: list[Path] | None = None,
+    config_file: Path | None = None,
 ) -> None:
     """Boots the resident app (blocking; the server owns the process).
 
@@ -1219,10 +1232,14 @@ def run_app(
         port (int): The bind port.
         allowed_roots (list[Path] | None): Folders the API may operate on.
             Defaults to all available drive roots (localhost-only app).
+        config_file (Path | None): The config.json path (None = next to
+            the db, or $SHRINKRAY_CONFIG; the dashboard and the engine
+            must read the same file, issue #58).
     """
     global state
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
+    state.config_file = config_file
     state.worker.start()
     log(f"ShrinkRay app listening on http://{host}:{port}")
 
