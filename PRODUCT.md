@@ -116,9 +116,9 @@ ShrinkRay answers two questions per file:
    perceptual quality (VMAF-driven CRF search), and when the answer is no it leaves
    the file alone and records the verdict so the work is never repeated.
 2. **Does this file carry baked-in black bars?** That is, does the frame's aspect
-   ratio differ from the aspect ratio of its actual content? Asked only when the
-   operator opts in (`--remove-bars`). Stable bars found are cropped away during the
-   re-encode.
+   ratio differ from the aspect ratio of its actual content? Bars are detected for every file
+   that is going to be re-encoded and cropped away during that encode — a re-encode always
+   produces a clean file, never one with the padding still baked in.
 
 Before either question is asked, a file must be worth touching at all:
 
@@ -126,11 +126,24 @@ Before either question is asked, a file must be worth touching at all:
   worth the work.
 - **Minimum codec: H.264.** Sources in an older codec are not re-encoded.
 
-Among eligible files, the source codec decides what triggers a re-encode. An H.264
-source is a candidate on size alone (and has its bars removed too when opted in). An
-HEVC or AV1 source is already efficient, so size alone never triggers a re-encode; it
-becomes a candidate only when it has black bars to remove, and a modern-codec file
-without bars is left untouched.
+Among eligible files, **the CRF search always runs** — and a re-encode happens only when
+that search shows the file would actually get smaller. That one rule replaces the older
+"codec decides what triggers an encode" framing, which was wrong twice: it read as *never
+re-encode a modern codec without bars*, and it implied a re-encode might happen *in order
+to* remove bars. Neither is true.
+
+Bars are not a gate at all. Every file that is re-encoded has its bars detected and removed
+as part of that encode, because the encoder is already re-encoding every frame — leaving the bars
+in would bake the same wasted area into a smaller file, which is worse than the source. There is
+no flag to keep them, and no file is skipped for lacking them.
+
+The one hard case, a film whose aspect ratio changes, is solved by cropping only the bars
+**common to every sampled frame**: a 1.78:1 sequence reaching the frame edge vetoes the crop for
+the 2.40:1 sequences too. A missed crop costs a little space; a wrong crop costs picture.
+
+There is exactly **one reason to re-encode**: the file gets smaller. Never to remove bars,
+never because a codec is old. [docs/encode-decision.md](docs/encode-decision.md) is the
+authoritative walk-through of every gate, in order.
 
 There is exactly **one way to re-encode**: a VMAF-driven CRF search against a required
 quality floor (**VMAF 96 by default**), then one full encode at the CRF it found. The
@@ -225,12 +238,14 @@ to its quality** and whether its **frame matches its content**.
   files, and encodes that would not shrink are skipped and remembered.
 - **Eligibility limits**: files below 1080p or in a codec older than H.264 are
   never re-encoded.
-- **Source-codec gate**: H.264 sources are candidates on size alone. HEVC and AV1
-  sources are candidates only when they have black bars to remove; without bars,
-  they are not re-encoded.
-- **Black-bar removal** (`--remove-bars`): stable baked-in bars are cropped;
-  opt-in, and irreversible in the sense that the crop cannot be undone from the
-  output alone.
+- **Source-codec gate**: the CRF search runs on every eligible file. H.264 is the
+  floor; MPEG-2/VC-1 and older are never re-encoded. Size alone decides whether a
+  re-encode happens, for every codec.
+- **Black-bar removal is part of every re-encode**, not an option. Bars are detected for
+  any file that will be encoded and removed during that encode, so a re-encoded file is
+  always clean. There is no flag to keep them, and no file is skipped for lacking them.
+  The one hard case, a changing aspect ratio, is handled by cropping only the bars common
+  to every sampled frame. The crop is irreversible, which is why that rule is the safe one.
 - **Swap-in-place with a retained original**: a verified output takes the original's
   path; the original is *renamed aside*, never deleted. Replaced originals are listed
   in the UI for the operator to delete manually. Nothing in ShrinkRay ever deletes a

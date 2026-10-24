@@ -507,9 +507,13 @@ The target behaviour, per file:
   again from that fresh scan.
 - **Eligibility.** Files below 1080p or in a codec older than H.264 are never
   re-encoded.
-- **Codec routing.** H.264 sources are candidates on size alone. HEVC and AV1 sources
-  are already efficient: they are candidates only when they have black bars to
-  remove (`--remove-bars`), and are left untouched otherwise.
+- **Codec routing.** The CRF search runs on every eligible file; a re-encode happens
+  only when the file would actually get smaller. H.264 and newer are eligible; MPEG-2/VC-1
+  and older never are.
+- **Bar removal is part of every re-encode**, not an option: any file that is encoded has
+  its bars detected and removed, so a re-encoded file is always clean. There is no flag to
+  keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is
+  handled by cropping only the bars common to every sampled frame.
 - **One encode mode.** Every re-encode, bar removal included, is a VMAF-driven CRF
   search against a required quality floor (VMAF 96 by default) followed by one full
   encode. There is no fixed-preset encode.

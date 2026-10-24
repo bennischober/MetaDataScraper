@@ -43,8 +43,18 @@ are target behaviour, not yet implemented — check the code before assuming one
 - **In place, retaining the original.** A verified output takes the source's path; the
   original is renamed aside and kept. No code path deletes a source file.
 - Files below 1080p or in a codec older than H.264 are never re-encoded.
-- H.264 sources are candidates on size alone; HEVC and AV1 sources only when they
-  have black bars to remove.
+- **The CRF search always runs on an eligible file; a re-encode happens only when the
+  file would get smaller.** The search finds a CRF, not an encode — it is allowed, and
+  expected, to end in "do not encode". Size is the only permission. Never add a path that
+  re-encodes to remove bars, and never treat "has bars" as a precondition for probing.
+- **Bar removal is part of every re-encode, not an option.** Any file that is encoded has
+  its bars detected and removed, so a re-encoded file is always clean. Do not add a flag to
+  keep them, do not skip a file for lacking them, and do not add a "crop-only" path. The
+  changing-aspect-ratio case is handled by cropping only the bars common to every sampled
+  frame. `docs/encode-decision.md` is the authoritative walk-through of every gate.
+- **Codec age is the only codec gate.** H.264 and newer are eligible; MPEG-2/VC-1 and
+  older are never re-encoded. AV1 is the output format — whether an AV1 source is probed is
+  an open question recorded in `docs/encode-decision.md`.
 - There is exactly one encode mode: a VMAF-driven CRF search against a required
   VMAF (96 by default), then one full encode. Never add a fixed-preset or otherwise
   unmeasured encode path.
