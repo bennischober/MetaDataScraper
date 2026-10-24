@@ -11,8 +11,7 @@ body:
         deduplicate, acquire, play or serve media — that belongs to the tooling
         that already assembled your collection. Requests whose usefulness
         depends on knowing what a file is *called* or *which* file it is are
-        out of scope. (The duplicates view in the current tree predates this
-        boundary and is being removed — see issue #37.)
+        out of scope.
 
         Also read [PRODUCT.md](https://github.com/bennischober/ShrinkRay/blob/main/PRODUCT.md):
         the output target is AV1-only, quality mode is VMAF-driven, and there is

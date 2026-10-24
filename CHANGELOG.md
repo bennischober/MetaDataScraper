@@ -7,6 +7,16 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Removed
 
+- **Duplicate detection and the only destructive route**: `dedupe.py`, the
+  `/api/duplicates` read route, `/api/duplicates/delete`, the Duplicates page,
+  the `dedupe` job kind, and the `send2trash`/`rapidfuzz` dependencies are
+  gone (issue #37). Deduplication is library management, which PRODUCT.md puts
+  outside this tool's scope, and the delete route was the one code path in
+  ShrinkRay that could remove a file from the library. A `metadata.db` that
+  still holds `dedupe` rows keeps them as history: they read back as a generic
+  `legacy` job, and a `queued` one is retired as failed at startup with the
+  reason recorded instead of being executed.
+
 - **Jellyfin integration**: the opt-in library-refresh notification after
   encode batches is gone (issue #43). ShrinkRay changes a file's bytes;
   telling another application about it is that application's job — and the

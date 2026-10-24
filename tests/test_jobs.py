@@ -263,26 +263,37 @@ class TestJobs(unittest.TestCase):
         # the job's recorded outcomes carry the movie through (not empty)
         self.assertEqual(result["outcomes"][0]["movie"], "Some Movie_t00.mkv")
 
-    def test_dedupe_job_execution(self):
-        """A dedupe job analyzes the library and records its summary."""
-        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.DEDUPE, payload={}))
-        self.assertIsNotNone(job.id)
-        result = jobs.execute_dedupe(job, self.connection, threading.Event())
-        self.assertEqual(result["groups"], 0)
-        self.assertEqual(result["wasted_bytes"], 0)
-        # two same-title same-duration files form one group
+    def test_legacy_job_kind_reads_as_legacy(self):
+        """A stored row of a removed kind does not crash the history.
+
+        Removing a JobKind member must not make existing databases
+        unreadable (issue #37): a user's jobs table keeps 'dedupe' rows
+        written by an older build.
+        """
         self.connection.execute(
-            "INSERT INTO files (path, mtime, size, name, category, duration_raw)"
-            " VALUES ('D:/a/x.mkv', 1.0, 100, 'movie', 'Cat', 60.0)"
-        )
-        self.connection.execute(
-            "INSERT INTO files (path, mtime, size, name, category, duration_raw)"
-            " VALUES ('D:/b/x.mkv', 1.0, 100, 'movie', 'Cat', 60.0)"
+            "INSERT INTO jobs (kind, payload, state) VALUES ('dedupe', '{}', 'done')"
         )
         self.connection.commit()
-        result = jobs.execute_dedupe(job, self.connection, threading.Event())
-        self.assertEqual(result["groups"], 1)
-        self.assertEqual(result["wasted_bytes"], 100)
+        listed = self.queue.all_jobs()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0].kind, jobs.JobKind.LEGACY)
+        self.assertEqual(listed[0].kind.value, "legacy")
+
+    def test_queued_legacy_job_is_retired_not_executed(self):
+        """A queued row of a removed kind fails at startup instead of hanging.
+
+        The worker loads queued rows when it boots; an unknown kind must
+        not raise there (which would stop the app from starting) and must
+        not be executed either.
+        """
+        self.connection.execute(
+            "INSERT INTO jobs (kind, payload, state) VALUES ('dedupe', '{}', 'queued')"
+        )
+        self.connection.commit()
+        fresh = jobs.JobQueue(self.connection)
+        self.assertEqual(fresh.all_jobs()[0].state, jobs.JobState.FAILED)
+        self.assertIn("removed in this version", fresh.all_jobs()[0].error or "")
+        self.assertIsNone(fresh.take_next())
 
     def test_enqueue_and_persist(self):
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": "D:/Movies"}))

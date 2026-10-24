@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import ENCODER_PRESETS, Conf, load_config
-from shrinkray.dedupe import find_duplicates
 from shrinkray.encode import cap_threads
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
@@ -337,57 +336,6 @@ def ui_asset(asset_path: str) -> Response:
     )
 
 
-@app.get("/api/duplicates")
-def duplicates() -> list[dict]:
-    """Returns duplicate groups across the whole scanned library.
-
-    Grouping: byte-identical files (content hash) and same-title files
-    (normalized name + duration tolerance). Read-only — resolving a group
-    is a manual, explicit user action. The rows are snapshotted under the
-    lock; the matching itself runs outside it (the fuzzy pass is O(n²) and
-    must not block the worker).
-
-    Returns:
-        list[dict]: The duplicate groups, best candidate first.
-    """
-    import sqlite3
-
-    s = get_state()
-
-    def snapshot(c: sqlite3.Connection) -> list[sqlite3.Row]:
-        return c.execute(
-            """
-            SELECT path, name, category, size, duration_raw, codec, hash, width, height
-            FROM files
-            WHERE missing_scans = 0
-            ORDER BY size DESC
-            """
-        ).fetchall()
-
-    rows = s.with_lock(snapshot)
-
-    # match outside the lock, on a private connection to the same file
-    private = sqlite3.connect(s.db_file, check_same_thread=False)
-    private.row_factory = sqlite3.Row
-    try:
-        private.executescript(
-            """
-            CREATE TEMP TABLE files (
-                path TEXT PRIMARY KEY, name TEXT, category TEXT, size INTEGER,
-                duration_raw REAL, codec TEXT, hash TEXT, width INTEGER, height INTEGER
-            )
-            """
-        )
-        private.executemany(
-            "INSERT INTO temp.files VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [tuple(r) for r in rows],
-        )
-        groups = find_duplicates(private)
-    finally:
-        private.close()
-    return [g.to_dict() for g in groups]
-
-
 def get_config() -> dict:
     """Returns the current configuration (as stored in config.json).
 
@@ -570,18 +518,14 @@ def create_job(request: JobRequest) -> dict:
         dict: The created job.
     """
     s = get_state()
-    # dedupe needs no paths (it analyzes the whole library)
-    if request.kind != JobKind.DEDUPE:
-        if not request.path:
-            raise HTTPException(status_code=400, detail="path is required for this job kind")
-        path = validate_path(request.path, "path")
-        if not path.exists():
-            raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
+    if not request.path:
+        raise HTTPException(status_code=400, detail="path is required for this job kind")
+    path = validate_path(request.path, "path")
+    if not path.exists():
+        raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
 
     # multi-directory: merge the primary path with any additional paths
-    all_paths = []
-    if request.kind != JobKind.DEDUPE:
-        all_paths = [path]
+    all_paths = [path]
     for extra in request.paths or []:
         extra_path = validate_path(extra, "paths")
         if not extra_path.exists():
@@ -596,9 +540,7 @@ def create_job(request: JobRequest) -> dict:
             unique_paths.append(p)
 
     payload: dict = {"paths": [str(p) for p in unique_paths]}
-    if request.kind == JobKind.DEDUPE:
-        payload = {}
-    elif request.kind == JobKind.ENCODE:
+    if request.kind == JobKind.ENCODE:
         if not request.output_dir:
             raise HTTPException(status_code=400, detail="encode requires output_dir")
         payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))
@@ -1119,55 +1061,6 @@ def reveal(request: RevealRequest) -> dict:
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"could not open folder: {e}") from e
     return {"revealed": folder}
-
-
-@app.post("/api/duplicates/delete")
-def duplicates_delete(request: RevealRequest) -> dict:
-    """Moves a duplicate file to the OS trash (recycle bin).
-
-    This is the product's first destructive endpoint, deliberately scoped
-    and deliberately reversible: the file goes to the recycle bin (never
-    permanent deletion), the path must pass the same allowlist as every
-    endpoint, and the database record is intentionally NOT removed here —
-    the next scan flags the row as missing and the soft-missing grace
-    period (MISSING_GRACE) handles history retention.
-
-    Args:
-        request (RevealRequest): The file to move to the trash.
-
-    Returns:
-        dict: The acknowledged path.
-    """
-    from send2trash import TrashPermissionError, send2trash
-
-    path = validate_path(request.path, "path")
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"file not found: {path}")
-    try:
-        send2trash(str(path))
-    except TrashPermissionError as e:
-        raise HTTPException(status_code=500, detail=f"permission denied: {e}") from e
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"could not move to trash: {e}") from e
-    # retire the database row immediately (the same soft-missing state a
-    # scan sets): the UI shows the MISSING badge at once and the duplicates
-    # view drops the file without waiting for the next scan. History is
-    # retained; a restored file recovers automatically on the next scan.
-    s = get_state()
-    s.with_lock(
-        lambda c: c.execute(
-            """
-            UPDATE files
-            SET missing_scans = 1,
-                missing_since = datetime('now')
-            WHERE path = ?
-              AND missing_scans = 0
-            """,
-            (str(path),),
-        )
-    )
-    log(f"Moved duplicate to trash: {path}")
-    return {"deleted": str(path), "to": "trash"}
 
 
 @app.get("/report")

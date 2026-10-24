@@ -54,12 +54,17 @@ class JobState(str, Enum):
 
 
 class JobKind(str, Enum):
-    """The kinds of work a job can represent."""
+    """The kinds of work a job can represent.
+
+    LEGACY marks a stored row whose kind this version no longer knows (the
+    duplicate analysis, removed with issue #37). Such a row is history only:
+    it is rendered as a generic finished job and never executed or enqueued.
+    """
 
     SCAN = "scan"
     PLAN = "plan"
     ENCODE = "encode"
-    DEDUPE = "dedupe"
+    LEGACY = "legacy"
 
 
 @dataclass
@@ -107,15 +112,24 @@ class Job:
 def _row_to_job(row: sqlite3.Row) -> Job:
     """Builds a Job from a database row.
 
+    A row whose kind this version no longer knows is not an error: a user's
+    database keeps rows written by an older build (the duplicate analysis,
+    removed with issue #37), and reading the history must not crash. Those
+    rows become LEGACY and are never executed.
+
     Args:
         row (sqlite3.Row): The jobs table row.
 
     Returns:
         Job: The reconstructed job.
     """
+    try:
+        kind = JobKind(row["kind"])
+    except ValueError:
+        kind = JobKind.LEGACY
     return Job(
         id=int(row["id"]),
-        kind=JobKind(row["kind"]),
+        kind=kind,
         payload=json.loads(row["payload"]),
         state=JobState(row["state"]),
         result=json.loads(row["result"]) if row["result"] else None,
@@ -237,12 +251,33 @@ class JobQueue:
         self._load_pending()
 
     def _load_pending(self) -> None:
-        """Loads queued jobs from the database (after a restart)."""
+        """Loads queued jobs from the database (after a restart).
+
+        A queued row of a kind this version no longer knows (the duplicate
+        analysis, removed with issue #37) is retired as failed instead of
+        being executed: the operator sees why it never ran rather than a
+        queue that silently cannot drain.
+        """
         rows = self._connection.execute(
             "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
         ).fetchall()
+        pending: list[Job] = []
+        retired = 0
+        for row in rows:
+            job = _row_to_job(row)
+            if job.kind is JobKind.LEGACY:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
+                    "WHERE id = ?",
+                    (JobState.FAILED.value, "job kind removed in this version", job.id),
+                )
+                retired += 1
+            else:
+                pending.append(job)
+        if retired:
+            self._connection.commit()
         with self._lock:
-            self._pending = [_row_to_job(row) for row in rows]
+            self._pending = pending
 
     def enqueue(self, job: Job) -> Job:
         """Adds a job to the queue and persists it.
@@ -844,44 +879,6 @@ def execute_encode(
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 
-def execute_dedupe(
-    job: Job,
-    connection: sqlite3.Connection,
-    cancel: threading.Event,
-    progress: ProgressCallback | None = None,
-) -> dict:
-    """Executes a duplicate-analysis job.
-
-    Args:
-        job (Job): The job (payload: none required).
-        connection (sqlite3.Connection): The database connection.
-        cancel (threading.Event): Cooperative cancellation signal.
-        progress (callable | None): Callback progress(dict) for live updates.
-
-    Returns:
-        dict: The duplicate-analysis summary.
-    """
-    from shrinkray.dedupe import find_duplicates
-
-    if progress:
-        progress(
-            {"stage": "dedupe", "detail": "matching titles and hashes", "done": 0, "total": None}
-        )
-    # rows flagged missing (deleted/vanished files) do not occupy groups
-    missing_paths = {
-        row["path"] for row in connection.execute("SELECT path FROM files WHERE missing_scans > 0")
-    }
-    groups = [
-        g for g in find_duplicates(connection) if not any(f.path in missing_paths for f in g.files)
-    ]
-    return {
-        "groups": len(groups),
-        "wasted_bytes": sum(g.wasted_bytes for g in groups),
-        "cancelled": cancel.is_set(),
-        "excluded_missing": len(missing_paths),
-    }
-
-
 class JobWorker:
     """The background worker executing jobs from the queue, one at a time.
 
@@ -952,8 +949,6 @@ class JobWorker:
                 result = execute_plan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.ENCODE:
                 result = execute_encode(job, self.connection, cancel, progress=progress)
-            elif job.kind == JobKind.DEDUPE:
-                result = execute_dedupe(job, self.connection, cancel, progress=progress)
             else:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return

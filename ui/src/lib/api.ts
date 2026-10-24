@@ -1,7 +1,7 @@
 /** Typed client for the resident app's API. */
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type JobKind = 'scan' | 'plan' | 'encode' | 'dedupe'
+export type JobKind = 'scan' | 'plan' | 'encode' | 'legacy'
 
 export interface Job {
   id: number | null
@@ -37,7 +37,7 @@ export interface JobOutcome {
 }
 
 /** The movie's own entry in a job's per-movie result list (null when the
- * job didn't touch this movie individually — scans, dedupe). */
+ * job didn't touch this movie individually — scans, legacy rows). */
 export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
   if (job.kind !== 'encode' && job.kind !== 'plan') return null
   const r = job.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
@@ -311,12 +311,6 @@ export const api = {
     request<{ cancelled: number }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   reveal: (path: string) =>
     request<{ revealed: string }>('/api/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
-  /** Moves a duplicate to the OS recycle bin (recoverable, backend-confirmed). */
-  deleteToTrash: (path: string) =>
-    request<{ deleted: string; to: string }>('/api/duplicates/delete', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    }),
   watch: (action: 'start' | 'stop', inbox?: string, output_dir?: string) =>
     request<{ watcher: string }>(`/api/watch/${action}`, {
       method: 'POST',

@@ -779,65 +779,6 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
-    def test_duplicates_delete_to_trash(self):
-        """The delete endpoint moves the file to the OS trash: allowlist
-        (403) and missing file (404) are enforced, success is recoverable
-        (the file lands in the trash, not the void)."""
-
-        from fastapi.testclient import TestClient
-
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            victim = root / "duplicate.mkv"
-            victim.write_bytes(b"duplicate data")
-
-            app_module.state = AppState(root / "test.db")
-            app_module.allow_roots([root])
-            # the file was scanned before: a db row exists for it
-            app_module.state.with_lock(
-                lambda c: c.execute(
-                    "INSERT INTO files (path, mtime, size, name, category)"
-                    " VALUES (?, 1.0, 15, 'duplicate', 'Cat')",
-                    (str(victim),),
-                )
-            )
-            try:
-                client = TestClient(fast_app)
-                # outside the allowlist => rejected before any file work (a
-                # real path outside the allowed root, not a drive-letter
-                # literal, so the rejection is containment on every platform)
-                response = client.post("/api/duplicates/delete", json={"path": str(root.parent)})
-                self.assertEqual(response.status_code, 403)
-                self.assertTrue(victim.is_file())
-                # inside the allowlist but not a file => 404
-                response = client.post(
-                    "/api/duplicates/delete", json={"path": str(root / "ghost.mkv")}
-                )
-                self.assertEqual(response.status_code, 404)
-                # success: the file is gone from its folder
-                response = client.post("/api/duplicates/delete", json={"path": str(victim)})
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json()["to"], "trash")
-                self.assertFalse(victim.is_file())
-                # the row is retired at once: MISSING state without waiting
-                # for the next scan (history retained, not hard-deleted)
-                row = app_module.state.with_lock(
-                    lambda c: c.execute(
-                        "SELECT missing_scans, missing_since FROM files WHERE path = ?",
-                        (str(victim),),
-                    ).fetchone()
-                )
-                self.assertEqual(row["missing_scans"], 1)
-                self.assertIsNotNone(row["missing_since"])
-            finally:
-                app_module._allowed_roots = []
-                app_module.state.shutdown()
-                app_module.state = None
-
     def test_add_skip_and_recognition(self):
         file_id = db.upsert_file(self.connection, self._record("b.mkv"))
         db.add_skip(self.connection, file_id, "no size gain")

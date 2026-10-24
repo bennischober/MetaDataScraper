@@ -14,8 +14,6 @@
     targetVmaf,
     savedTotalGb,
     measuredCount,
-    duplicates,
-    duplicateWastedGb,
     missingMovies,
     runningJobs,
     failedJobs,
@@ -34,8 +32,6 @@
     targetVmaf: number
     savedTotalGb: number
     measuredCount: number
-    duplicates: number
-    duplicateWastedGb: number
     missingMovies: Movie[]
     runningJobs: Job[]
     failedJobs: Job[]
@@ -46,7 +42,7 @@
      * switches and never writes what it reads */
     sparkSamples?: number[]
     ondismiss: (id: number | null) => void
-    ongoto: (page: 'overview' | 'library' | 'duplicates' | 'jobs' | 'config') => void
+    ongoto: (page: 'overview' | 'library' | 'jobs' | 'config') => void
     onopenmovie: (movie: Movie) => void
     oncancel?: (id: number | null) => void
     cancelling?: boolean
@@ -325,11 +321,6 @@
       <span class="legend">RECLAIMED</span>
       <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
       <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB library</span>
-    </button>
-    <button class="stat" onclick={() => ongoto('duplicates')}>
-      <span class="legend">DUPLICATES</span>
-      <span class="stat-v mono" class:warn={duplicates > 0}>{duplicates}</span>
-      <span class="stat-sub mono dim">{duplicateWastedGb.toFixed(2)} GB wasted</span>
     </button>
     {#if reclaimable}
       <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode">

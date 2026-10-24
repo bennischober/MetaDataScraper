@@ -3,18 +3,16 @@
   import { api, fmtGb, jobPaths, type Movie, type Status, type Job } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
-  import DuplicatesPage from './lib/pages/DuplicatesPage.svelte'
   import JobsPage from './lib/pages/JobsPage.svelte'
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
   import { connectEvents, progressFor } from './lib/progress.svelte'
 
-  type Page = 'overview' | 'library' | 'duplicates' | 'jobs' | 'config'
+  type Page = 'overview' | 'library' | 'jobs' | 'config'
 
   let status: Status | null = $state(null)
   let movies: Movie[] = $state([])
   let history: Job[] = $state([])
-  let duplicates: DuplicateGroup[] = $state([])
   let error = $state<string | null>(null)
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
@@ -30,7 +28,7 @@
   })
 
   // ── routing: hash-based, so reload/bookmark keeps the position ──
-  const PAGES: Page[] = ['overview', 'library', 'duplicates', 'jobs', 'config']
+  const PAGES: Page[] = ['overview', 'library', 'jobs', 'config']
   function pageFromHash(): Page {
     const h = location.hash.replace(/^#\/?/, '')
     return (PAGES as string[]).includes(h) ? (h as Page) : 'overview'
@@ -113,7 +111,7 @@
     const t = e.target as HTMLElement
     if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return
     if (e.metaKey || e.ctrlKey || e.altKey) return
-    const map: Record<string, Page> = { '1': 'overview', '2': 'library', '3': 'duplicates', '4': 'jobs', '5': 'config' }
+    const map: Record<string, Page> = { '1': 'overview', '2': 'library', '3': 'jobs', '4': 'config' }
     if (map[e.key]) {
       goto(map[e.key])
     } else if (e.key === '/') {
@@ -122,23 +120,6 @@
       queueMicrotask(() => document.querySelector<HTMLInputElement>('.search')?.focus())
     }
   }
-
-  interface DuplicateFile {
-    path: string
-    name: string
-    category: string
-    size: number
-    duration: number | null
-    codec: string | null
-    hash: string | null
-    resolution: [number, number] | null
-  }
-  interface DuplicateGroup {
-    reason: string
-    files: DuplicateFile[]
-    wasted_bytes: number
-  }
-  const duplicateWasted = $derived(duplicates.reduce((sum, g) => sum + g.wasted_bytes, 0))
 
   // ── job parameters (persisted defaults; bars never persist) ──
   let scanPaths = $state<string[]>(
@@ -248,20 +229,11 @@
     pollTimer = setTimeout(poll, hidden ? 10000 : interval)
   }
 
-  async function refreshDuplicates() {
-    try {
-      const r = await fetch('/api/duplicates')
-      if (r.ok) duplicates = await r.json()
-    } catch {
-      /* auxiliary; library reads stay live */
-    }
-  }
-
   // pending: global click-guard + per-kind queue guard (no job spam: a kind
   // already queued/running disables its enqueue buttons)
-  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'dedupe' | 'cancel' | null>(null)
+  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'cancel' | null>(null)
   const kindQueued = $derived(
-    (kind: 'scan' | 'plan' | 'encode' | 'dedupe') =>
+    (kind: 'scan' | 'plan' | 'encode') =>
       history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
   )
 
@@ -403,7 +375,7 @@
 
 
   async function enqueue(
-    kind: 'scan' | 'plan' | 'encode' | 'dedupe',
+    kind: 'scan' | 'plan' | 'encode',
     paths?: string[],
     confirmed = false
   ) {
@@ -415,7 +387,7 @@
       return
     }
     const targets = paths ?? scanPaths
-    if (kind !== 'dedupe' && targets.length === 0) {
+    if (targets.length === 0) {
       notice = paths ? 'select at least one movie' : 'at least one movie folder is required'
       return
     }
@@ -428,20 +400,16 @@
     persist()
     pendingBarsTargets = null
     try {
-      if (kind === 'dedupe') {
-        await api.enqueue({ kind })
-      } else {
-        await api.enqueue({
-          kind,
-          path: targets[0],
-          paths: targets.slice(1),
-          output_dir: kind === 'encode' ? outputDir || undefined : undefined,
-          quality: kind !== 'scan',
-          target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
-          remove_bars: removeBars,
-          workers: kind === 'scan' ? workers : null,
-        })
-      }
+      await api.enqueue({
+        kind,
+        path: targets[0],
+        paths: targets.slice(1),
+        output_dir: kind === 'encode' ? outputDir || undefined : undefined,
+        quality: kind !== 'scan',
+        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
+        remove_bars: removeBars,
+        workers: kind === 'scan' ? workers : null,
+      })
       await refresh()
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
@@ -482,10 +450,8 @@
   // whole-library run); remove_bars routes through the ceremony
   async function retryJob(job: Job) {
     if (pendingKind !== null) return
-    if (job.kind === 'dedupe') {
-      await enqueue('dedupe')
-      return
-    }
+    // a row of a removed kind is history only: it has no payload to replay
+    if (job.kind === 'legacy') return
     const payload = job.payload as Record<string, unknown>
     const paths = jobPaths(job)
     if (payload.remove_bars === true) {
@@ -549,7 +515,6 @@
   onMount(() => {
     poll()
     connectEvents()
-    refreshDuplicates()
     return () => {
       if (pollTimer !== null) clearTimeout(pollTimer)
     }
@@ -585,10 +550,6 @@
       <button class="rail-item" class:active={page === 'library'} onclick={() => goto('library')}>
         <span class="rail-label">Library</span>
         <span class="rail-badge mono">{movies.length}</span>
-      </button>
-      <button class="rail-item" class:active={page === 'duplicates'} onclick={() => { goto('duplicates'); refreshDuplicates() }}>
-        <span class="rail-label">Duplicates</span>
-        {#if duplicates.length > 0}<span class="rail-badge warn mono">{duplicates.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
@@ -650,8 +611,6 @@
           {targetVmaf}
           {savedTotalGb}
           {measuredCount}
-          duplicates={duplicates.length}
-          duplicateWastedGb={duplicateWasted / 1024 ** 3}
           {missingMovies}
           {runningJobs}
           {failedJobs}
@@ -699,20 +658,6 @@
             selectedPaths = next
           }}
           onclear={() => (selectedPaths = new Set())}
-        />
-      </div>
-      <div class="pages" class:hidden={page !== 'duplicates'}>
-        <DuplicatesPage
-          {duplicates}
-          analyzing={kindQueued('dedupe')}
-          pending={pendingKind !== null}
-          onanalyze={() => enqueue('dedupe')}
-          onrefresh={refreshDuplicates}
-          onopenmovie={(file) => {
-            // the duplicate's file record → its library movie (path-keyed)
-            const movie = movies.find((m) => m.path === file.path)
-            if (movie) openDetail(movie, 'library')
-          }}
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>

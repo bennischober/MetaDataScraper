@@ -58,19 +58,6 @@
     return parts.join(' · ')
   }
 
-  /** One-line summary of a finished dedupe run (the raw JSON stays in
-   * the detail view; this is the headline). */
-  const dedupeNote = (job: Job) => {
-    if (job.state !== 'done' || job.kind !== 'dedupe') return ''
-    const r = job.result as { groups?: number; wasted_bytes?: number; excluded_missing?: number } | null
-    if (!r) return ''
-    const parts: string[] = []
-    if (r.groups != null) parts.push(`${r.groups} group${r.groups === 1 ? '' : 's'}`)
-    if (r.wasted_bytes != null) parts.push(`${fmtGb(r.wasted_bytes)} wasted`)
-    if (r.excluded_missing) parts.push(`${r.excluded_missing} retired file${r.excluded_missing === 1 ? '' : 's'} ignored`)
-    return parts.join(' · ')
-  }
-
   /** A DONE job whose per-movie outcomes failed is not a clean done: the
    * lifecycle completed, but the work did not. The row says so in red and
    * offers RETRY — a green DONE must never hide failed work. The helper
@@ -99,12 +86,12 @@
   // (round-5 H7) — two selects, the same pattern as the library toolbar.
   // Filter state persists per session (library sort persists; the jobs
   // filters resetting on F5 was the round-6 granularity inconsistency)
-  type KindFilter = 'all' | 'scan' | 'plan' | 'encode' | 'dedupe'
+  type KindFilter = 'all' | 'scan' | 'plan' | 'encode' | 'legacy'
   type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
   const storedKind = sessionStorage.getItem('ms.jobsKind')
   const storedState = sessionStorage.getItem('ms.jobsState')
   let kindFilter = $state<KindFilter>(
-    ['all', 'scan', 'plan', 'encode', 'dedupe'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
+    ['all', 'scan', 'plan', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
   )
   let stateFilter = $state<StateFilter>(
     ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
@@ -140,7 +127,7 @@
           <option value="scan">scan</option>
           <option value="plan">plan</option>
           <option value="encode">encode</option>
-          <option value="dedupe">dedupe</option>
+          <option value="legacy">legacy</option>
         </select>
         <select class="mono" bind:value={stateFilter} aria-label="Filter by state">
           <option value="all">all states</option>
@@ -210,8 +197,6 @@
             </div>
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
-          {:else if job.state === 'done' && dedupeNote(job)}
-            <div class="mono dim note">{dedupeNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
             {@const note = failedOutcomeNote(job)}
             <div class="mono error">

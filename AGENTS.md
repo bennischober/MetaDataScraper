@@ -146,7 +146,7 @@ existing video collection" and nothing more specific.
 - **Tests live in `tests/` as plain `unittest`** classes run by pytest,
   one file per source module (`test_encode.py`, `test_quality.py`,
   `test_watch.py`, `test_db.py`, `test_report.py`, `test_cli.py`,
-  `test_jobs.py`, `test_dedupe.py`, `test_resources.py`,
+  `test_jobs.py`, `test_resources.py`,
   `test_media.py`, `test_misc.py`). Opt-in smoke tests against the real
   binaries live in `tests/test_smoke.py` — skipped unless
   `SHRINKRAY_SMOKE=1` is set AND ffmpeg/HandBrakeCLI are on PATH (they
