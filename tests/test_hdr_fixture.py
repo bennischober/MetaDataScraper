@@ -31,8 +31,8 @@ from subprocess import run as run_subprocess
 from unittest import skipUnless
 
 from shrinkray import config as config_helper
-from shrinkray import media as read_media
 from shrinkray.quality import DEFAULT_ENCODER, encoder_for
+from shrinkray.tools import ffprobe as read_media
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CLIP = FIXTURES / "hdr10_gradient_320x180_2s.mp4"
