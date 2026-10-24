@@ -17,6 +17,18 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Fixed
 
+- **Probe samples were re-encoded with lossy libx264**: sample extraction
+  now stream-copies the source (`-c:v copy`, keyframe-aligned, timestamps
+  normalised with `-avoid_negative_ts make_zero`) instead of running a CRF 12
+  x264 pass (issue #16). The samples are both the VMAF reference and the
+  probe encode's input, so the re-encode biased every measurement: it smoothed
+  grain and fine detail, which made the probe source easier than the real one
+  and pushed the chosen CRF too high. The copy also keeps the source's bit
+  depth, colour tags and HDR side data, which the x264 pass dropped. If a
+  container cannot hold the source codec the extraction falls back to a
+  lossless `ffv1` re-extract and logs that it did, rather than silently
+  encoding lossily.
+
 - **A batch encode's live progress was silently dropped**: `encode_movies`
   rebound its `progress` parameter with its own rich progress bar, so a resident
   app job never streamed a percent for a fixed-preset batch. The caller's

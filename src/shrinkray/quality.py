@@ -40,7 +40,7 @@ from shrinkray.encode import (
     probe_duration_seconds,
     stall_timeout_seconds,
 )
-from shrinkray.logger import log, log_error
+from shrinkray.logger import log, log_error, log_warning
 from shrinkray.media import FFPROBE_TIMEOUT
 from shrinkray.telemetry import save_failure
 
@@ -594,7 +594,24 @@ def extract_samples(
     cancel: threading.Event | None = None,
     progress: ProgressCallback | None = None,
 ) -> list[tuple[Path, float]]:
-    """Extracts short near-lossless sample clips for probing.
+    """Extracts sample clips for probing by stream-copying the source.
+
+    The samples are the VMAF *reference* and the probe encode's input, so a
+    re-encode here would bias both sides of every measurement: a lossy pass
+    smooths grain and fine detail, making the probe source easier than the real
+    one and the chosen CRF too high. A stream copy keeps the reference
+    pristine, and it is I/O-bound rather than CPU-bound.
+
+    `-ss` before `-i` with `-c:v copy` starts the clip at the keyframe at or
+    before the offset, so the clip is slightly longer than `seconds`. Both the
+    probe encode and the VMAF reference read the same file, so the comparison
+    stays frame-aligned; `-avoid_negative_ts make_zero` normalises the
+    timestamps open-GOP sources otherwise carry into the clip.
+
+    If the container cannot hold the source codec the copy fails and the clip is
+    re-extracted losslessly (ffv1), which keeps the reference pristine but
+    costs a decode + encode; that fallback is logged so the operator knows the
+    extraction was expensive.
 
     Args:
         movie (Path): The source movie file.
@@ -665,16 +682,45 @@ def extract_samples(
                 "-map",
                 "0:v:0",
                 "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "12",
+                "copy",
+                "-avoid_negative_ts",
+                "make_zero",
                 "-an",
                 str(sample),
             ],
             cancel=cancel,
         )
+        if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
+            # the container cannot hold the source codec: re-extract losslessly
+            # so the reference stays pristine, and say so - this path costs a
+            # full decode and encode instead of a copy
+            log_warning(
+                f"Sample extraction could not stream-copy '{movie.name}' "
+                f"at {offset:.0f}s; re-extracting losslessly (slower)."
+            )
+            code, err = _run(
+                [
+                    FFMPEG_BINARY,
+                    "-y",
+                    "-v",
+                    "error",
+                    "-ss",
+                    f"{offset:.3f}",
+                    "-t",
+                    f"{seconds:.3f}",
+                    "-i",
+                    str(movie),
+                    "-map",
+                    "0:v:0",
+                    "-c:v",
+                    "ffv1",
+                    "-avoid_negative_ts",
+                    "make_zero",
+                    "-an",
+                    str(sample),
+                ],
+                cancel=cancel,
+            )
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
         samples.append((sample, offset))

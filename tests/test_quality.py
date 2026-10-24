@@ -665,6 +665,70 @@ class TestSubprocessTimeouts(unittest.TestCase):
         finally:
             movie.parent.rmdir()
 
+    def test_extract_samples_stream_copies_the_source(self):
+        """Samples are stream-copied, never re-encoded.
+
+        The samples are the VMAF reference and the probe encode's input, so a
+        lossy extraction biases every measurement: the probe source becomes
+        easier than the real one and the chosen CRF lands too high. A copy also
+        keeps the source's bit depth and HDR side data, which an x264 pass drops.
+        """
+        commands: list[list[str]] = []
+
+        def fake_run(command, cancel=None):
+            commands.append(command)
+            Path(command[-1]).write_bytes(b"x" * 8)
+            return 0, ""
+
+        with (
+            patch(
+                "shrinkray.quality.subprocess.run",
+                return_value=type(
+                    "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
+                )(),
+            ),
+            patch("shrinkray.quality._run", side_effect=fake_run),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            quality.extract_samples(Path("movie.mkv"), Path(tmp), 2, 10.0)
+        self.assertEqual(len(commands), 2)
+        for command in commands:
+            self.assertIn("-c:v", command)
+            self.assertEqual(command[command.index("-c:v") + 1], "copy")
+            for lossy in ("libx264", "libx265", "-crf", "-preset"):
+                self.assertNotIn(lossy, command)
+
+    def test_extract_samples_falls_back_when_copy_fails(self):
+        """A container that cannot hold the source codec re-extracts losslessly.
+
+        The fallback must stay pristine (ffv1), never a lossy re-encode, and
+        must say so in the log because it costs a decode and encode.
+        """
+        commands: list[list[str]] = []
+
+        def fake_run(command, cancel=None):
+            commands.append(command)
+            if command[command.index("-c:v") + 1] == "copy":
+                return 1, "codec not supported in container"
+            Path(command[-1]).write_bytes(b"x" * 8)
+            return 0, ""
+
+        with (
+            patch(
+                "shrinkray.quality.subprocess.run",
+                return_value=type(
+                    "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
+                )(),
+            ),
+            patch("shrinkray.quality._run", side_effect=fake_run),
+            patch("shrinkray.quality.log_warning") as warned,
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            samples = quality.extract_samples(Path("movie.mkv"), Path(tmp), 1, 10.0)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(commands[1][commands[1].index("-c:v") + 1], "ffv1")
+        self.assertTrue(warned.called)
+
     def test_extract_samples_timeout_raises_documented_error(self):
         import subprocess
 
