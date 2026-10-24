@@ -521,21 +521,35 @@ class JobQueue:
 
 
 def payload_paths(payload: dict) -> list[Path]:
-    """Resolves the job payload's movie folders (multi-directory aware).
+    """Resolves the job payload's movie targets (multi-directory aware).
 
-    Supports the current 'paths' list form and the legacy single 'path'
-    string form.
+    The payload form the UI submits is ``path`` = first target plus
+    ``paths`` = the remaining targets, so the resolver returns the UNION of
+    both keys, deduplicated - not one preferred over the other (issue #100:
+    preferring ``paths`` dropped the first target of every multi-target
+    batch, so plan/encode skipped folder one and the per-movie history
+    filter showed it "no jobs"). The legacy single-``path`` form is the
+    degenerate case of the same shape.
 
     Args:
         payload (dict): The job payload.
 
     Returns:
-        list[Path]: The movie folders.
+        list[Path]: The movie targets, first-submission order preserved.
     """
-    paths = payload.get("paths")
-    if paths:
-        return [Path(p) for p in paths]
-    return [Path(payload["path"])]
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for key in ("path", "paths"):
+        value = payload.get(key)
+        if not value:
+            continue
+        candidates = value if isinstance(value, list) else [value]
+        for item in candidates:
+            path = Path(item)
+            if path not in seen:
+                seen.add(path)
+                resolved.append(path)
+    return resolved
 
 
 def resolve_movies(

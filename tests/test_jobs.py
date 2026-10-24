@@ -673,5 +673,35 @@ class TestApiPathValidation(unittest.TestCase):
             app_module.state = None
 
 
+class TestPayloadPaths(unittest.TestCase):
+    """payload_paths resolves a job's movie targets (issue #100 regression:
+    the payload form the UI submits is path=<first target>,
+    paths=<remaining targets>; a resolver that prefers 'paths' and drops
+    'path' silently skips the FIRST target of every multi-target batch —
+    in resolve_movies that meant plan/encode never saw folder one)."""
+
+    def test_paths_and_path_are_unioned(self):
+        resolved = jobs.payload_paths({"path": "/m/a", "paths": ["/m/b", "/m/c"]})
+        self.assertEqual(sorted(resolved), [Path("/m/a"), Path("/m/b"), Path("/m/c")])
+
+    def test_path_only_payload(self):
+        resolved = jobs.payload_paths({"path": "/m/a"})
+        self.assertEqual(resolved, [Path("/m/a")])
+
+    def test_paths_only_payload(self):
+        resolved = jobs.payload_paths({"paths": ["/m/b", "/m/c"]})
+        self.assertEqual(resolved, [Path("/m/b"), Path("/m/c")])
+
+    def test_empty_paths_falls_back_to_path(self):
+        resolved = jobs.payload_paths({"path": "/m/a", "paths": []})
+        self.assertEqual(resolved, [Path("/m/a")])
+
+    def test_duplicate_targets_are_deduplicated(self):
+        # a UI retry or double-submit can produce the same folder in both
+        # keys; resolving it twice would scan/encode it twice
+        resolved = jobs.payload_paths({"path": "/m/a", "paths": ["/m/a"]})
+        self.assertEqual(resolved, [Path("/m/a")])
+
+
 if __name__ == "__main__":
     unittest.main()
