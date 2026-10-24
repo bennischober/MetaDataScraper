@@ -7,6 +7,7 @@
     jobPaths,
     storeToken,
     type Movie,
+    type RetainedFile,
     type Status,
     type Job,
   } from './lib/api'
@@ -14,13 +15,15 @@
   import LibraryPage from './lib/pages/LibraryPage.svelte'
   import JobsPage from './lib/pages/JobsPage.svelte'
   import ConfigPage from './lib/pages/ConfigPage.svelte'
+  import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
   import { connectEvents, progressFor } from './lib/progress.svelte'
 
-  type Page = 'overview' | 'library' | 'jobs' | 'config'
+  type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
 
   let status: Status | null = $state(null)
   let movies: Movie[] = $state([])
+  let retainedFiles: RetainedFile[] = $state([])
   let history: Job[] = $state([])
   let error = $state<string | null>(null)
   /** The server requires a bearer token and none is stored (issue #36):
@@ -41,7 +44,7 @@
   })
 
   // ── routing: hash-based, so reload/bookmark keeps the position ──
-  const PAGES: Page[] = ['overview', 'library', 'jobs', 'config']
+  const PAGES: Page[] = ['overview', 'library', 'jobs', 'retained', 'config']
   function pageFromHash(): Page {
     const h = location.hash.replace(/^#\/?/, '')
     return (PAGES as string[]).includes(h) ? (h as Page) : 'overview'
@@ -221,6 +224,15 @@
     tokenInput = ''
     needsToken = false
     void refresh()
+  }
+
+  /** Loads the retention ledger (issue #35). */
+  async function loadRetained() {
+    try {
+      retainedFiles = await api.retained()
+    } catch (e) {
+      if (isAuthFailure(e)) needsToken = true
+    }
   }
 
   // deep-link restore: a reload on #/movie re-opens the detail as soon as
@@ -543,6 +555,7 @@
   onMount(() => {
     poll()
     connectEvents()
+    void loadRetained()
     return () => {
       if (pollTimer !== null) clearTimeout(pollTimer)
     }
@@ -582,6 +595,12 @@
       <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
         {#if runningJobs.length > 0}<span class="rail-badge warn mono">{runningJobs.length}</span>{/if}
+      </button>
+      <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
+        <span class="rail-label">Retained</span>
+        {#if retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
+          {retainedFiles.filter((f) => f.present).length}
+        </span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'config'} onclick={() => goto('config')}>
         <span class="rail-label">Config</span>
@@ -709,6 +728,9 @@
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
         <JobsPage {history} oncancel={cancelJob} onretry={retryJob} onopenMovie={(p) => openDetailFromJobs(p)} />
+      </div>
+      <div class="pages" class:hidden={page !== 'retained'}>
+        <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
         <ConfigPage

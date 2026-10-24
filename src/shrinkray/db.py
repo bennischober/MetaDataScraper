@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -105,6 +105,19 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id);
 
 CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
+
+CREATE TABLE IF NOT EXISTS retained (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+    source_path TEXT NOT NULL,
+    retained_path TEXT NOT NULL,
+    encode_id INTEGER REFERENCES encodes(id) ON DELETE SET NULL,
+    size_before INTEGER NOT NULL,
+    size_after INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_retained_file ON retained(file_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -275,6 +288,25 @@ MIGRATIONS = {
         # decision, so it must not be reused as if it were a mean one.
         # Existing rows default to 'min', which is what they measured.
         "ALTER TABLE plans ADD COLUMN vmaf_statistic TEXT NOT NULL DEFAULT 'min'",
+    ],
+    14: [
+        # the retention ledger (issue #35): a source is never deleted, so a
+        # swapped original is renamed aside and recorded here. The row is what
+        # the operator reads to reclaim space manually; ShrinkRay itself never
+        # deletes the retained file.
+        """
+        CREATE TABLE IF NOT EXISTS retained (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+            source_path TEXT NOT NULL,
+            retained_path TEXT NOT NULL,
+            encode_id INTEGER REFERENCES encodes(id) ON DELETE SET NULL,
+            size_before INTEGER NOT NULL,
+            size_after INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_retained_file ON retained(file_id)",
     ],
 }
 
@@ -1007,6 +1039,57 @@ def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[s
         "SELECT * FROM encodes WHERE file_id = ? ORDER BY id DESC",
         (file_id,),
     ).fetchall()
+
+
+def add_retained(
+    connection: sqlite3.Connection,
+    source_path: Path,
+    retained_path: Path,
+    encode_id: int | None,
+    size_before: int,
+    size_after: int,
+) -> int:
+    """Records a swapped original in the retention ledger (issue #35).
+
+    A source is never deleted: a swapped original is renamed aside and this
+    row is what the operator reads to reclaim the space. ShrinkRay itself
+    never removes the retained file.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        source_path (Path): The path that now holds the new file.
+        retained_path (Path): Where the original was moved.
+        encode_id (int | None): The encode that superseded it.
+        size_before (int): The original's size in bytes.
+        size_after (int): The new file's size in bytes.
+
+    Returns:
+        int: The new ledger row's id.
+    """
+    row = connection.execute("SELECT id FROM files WHERE path = ?", (str(source_path),)).fetchone()
+    file_id = row["id"] if row is not None else None
+    cursor = connection.execute(
+        """
+        INSERT INTO retained (
+            file_id, source_path, retained_path, encode_id, size_before, size_after
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (file_id, str(source_path), str(retained_path), encode_id, size_before, size_after),
+    )
+    connection.commit()
+    return int(cursor.lastrowid or 0)
+
+
+def list_retained(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Returns every retained original, newest first.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+
+    Returns:
+        list[sqlite3.Row]: The ledger rows.
+    """
+    return connection.execute("SELECT * FROM retained ORDER BY id DESC").fetchall()
 
 
 def prune_missing(
