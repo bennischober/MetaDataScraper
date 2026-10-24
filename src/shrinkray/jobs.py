@@ -576,7 +576,7 @@ def resolve_movies(
     Returns:
         list[Path]: The movie files.
     """
-    from shrinkray.scanner import scan_movies
+    from shrinkray.engine.scan import scan_movies
 
     movies: list[Path] = []
     for path in payload_paths(payload):
@@ -621,7 +621,7 @@ def execute_scan(
         dict: The scan summary.
     """
     from shrinkray.config import load_config
-    from shrinkray.scanner import scan_movies
+    from shrinkray.engine.scan import scan_movies
 
     payload = job.payload
     if cancel.is_set():
