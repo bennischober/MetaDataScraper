@@ -12,7 +12,7 @@ class TestResources(unittest.TestCase):
 
     def test_spawn_kwargs_respects_kill_switch(self):
         """idle_priority=False disables the polite spawn kwargs."""
-        from shrinkray import resources
+        from shrinkray.tools import process as resources
 
         with mock.patch.object(resources, "_IDLE_PRIORITY", True):
             kwargs = resources.spawn_kwargs()
@@ -27,7 +27,7 @@ class TestResources(unittest.TestCase):
         """Cancellable children spawn in their own session on POSIX (the
         process group IS the tree, so terminate_tree can killpg it); on
         Windows taskkill /T walks the tree, so nothing is needed."""
-        from shrinkray import resources
+        from shrinkray.tools import process as resources
 
         kwargs = resources.session_kwargs()
         if os.name == "nt":
@@ -37,7 +37,7 @@ class TestResources(unittest.TestCase):
 
     def test_rss_mib_sane(self):
         """The RSS is a plausible number (10 MiB .. 4 GiB) or None."""
-        from shrinkray.resources import rss_mib
+        from shrinkray.tools.process import rss_mib
 
         rss = rss_mib()
         if rss is not None:
@@ -46,7 +46,7 @@ class TestResources(unittest.TestCase):
 
     def test_config_applies_resource_policy(self):
         """load_config honors resources.idle_priority (and resets cleanly)."""
-        from shrinkray import resources
+        from shrinkray.tools import process as resources
 
         old = config_helper._config
         old_priority = resources._IDLE_PRIORITY

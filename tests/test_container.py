@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from shrinkray import resources
+from shrinkray.tools import process as resources
 
 REPO = Path(__file__).resolve().parent.parent
 
